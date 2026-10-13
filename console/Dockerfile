@@ -18,6 +18,10 @@ WORKDIR /app
 # Copy workspace configuration
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
 
+# The vite/rollup configs import ../../workspace-aliases.mjs (and tsc needs
+# its .d.mts). Without them `pnpm build` fails inside the image.
+COPY workspace-aliases.mjs workspace-aliases.d.mts ./
+
 # Copy all project sources
 COPY apps/ apps/
 COPY workspaces/ workspaces/

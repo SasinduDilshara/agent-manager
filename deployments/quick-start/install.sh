@@ -90,6 +90,18 @@ log_error() {
     echo -e "${RED}✗${NC} $1"
 }
 
+# Output of the third-party helm installs below (was /dev/null, so failures
+# had no details). CI uploads this file with the pod logs.
+HELM_LOG="${HELM_LOG:-${TMPDIR:-/tmp}/amp-install-helm.log}"
+: > "${HELM_LOG}"
+
+# Prints the tail of HELM_LOG after a failed helm install.
+show_helm_log() {
+    echo "--- last 40 lines of ${HELM_LOG} ---"
+    tail -n 40 "${HELM_LOG}" 2>/dev/null || true
+    echo "---"
+}
+
 log_step() {
     echo ""
     echo -e "${NC}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -778,10 +790,11 @@ if helm upgrade --install external-secrets oci://ghcr.io/external-secrets/charts
     --create-namespace \
     --version 1.3.2 \
     --set installCRDs=true \
-    --timeout 180s &>/dev/null; then
+    --timeout 180s >>"${HELM_LOG}" 2>&1; then
     log_success "External Secret Operator installed successfully"
 else
     log_error "Failed to install External Secret Operator"
+    show_helm_log
     exit 1
 fi
 
@@ -801,10 +814,11 @@ if helm upgrade --install kgateway-crds oci://cr.kgateway.dev/kgateway-dev/chart
     --namespace openchoreo-control-plane \
     --create-namespace \
     --version v2.2.1 \
-    --timeout 180s &>/dev/null; then
+    --timeout 180s >>"${HELM_LOG}" 2>&1; then
     log_success "kgateway CRDs installed successfully"
 else
     log_error "Failed to install kgateway CRDs"
+    show_helm_log
     exit 1
 fi
 
@@ -816,10 +830,11 @@ if helm upgrade --install kgateway oci://cr.kgateway.dev/kgateway-dev/charts/kga
     --create-namespace \
     --version v2.2.1 \
     --set controller.extraEnv.KGW_ENABLE_GATEWAY_API_EXPERIMENTAL_FEATURES=true \
-    --timeout 180s &>/dev/null; then
+    --timeout 180s >>"${HELM_LOG}" 2>&1; then
     log_success "kgateway installed successfully"
 else
     log_error "Failed to install kgateway"
+    show_helm_log
     exit 1
 fi
 
@@ -837,10 +852,11 @@ if helm upgrade --install openbao oci://ghcr.io/openbao/charts/openbao \
     --create-namespace \
     --version 0.25.6 \
     --values "${DEPLOYMENTS_DIR}/single-cluster/values-openbao.yaml" \
-    --timeout 180s &>/dev/null; then
+    --timeout 180s >>"${HELM_LOG}" 2>&1; then
     log_success "OpenBao installed successfully"
 else
     log_error "Failed to install OpenBao"
+    show_helm_log
     exit 1
 fi
 

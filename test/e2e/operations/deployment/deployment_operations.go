@@ -72,20 +72,37 @@ func WaitForDeployed(client *framework.AMPClient, params *WaitForDeploymentParam
 
 	path := fmt.Sprintf("/api/v1/orgs/%s/projects/%s/agents/%s/deployments",
 		params.OrgName, params.ProjectName, params.AgentName)
+	scope := fmt.Sprintf("org=%s project=%s agent=%s env=%s",
+		params.OrgName, params.ProjectName, params.AgentName, params.Environment)
 
+	// On timeout, add the last API status and the agent pod's state to the
+	// report: "in-progress" means the pod is not ready, and only the pod shows why.
+	var lastDiag string
+	framework.AttachOnFailure("deployment: last poll result", func() string { return lastDiag })
+	framework.AttachNamespaceStateOnFailure("deployment: agent runtime namespace state",
+		"dp-", params.ProjectName, params.Environment)
+
+	attempt := 0
 	Eventually(func(g Gomega) {
+		attempt++
 		resp, err := client.Get(path)
 		g.Expect(err).NotTo(HaveOccurred(), "get deployments request failed")
 		defer resp.Body.Close()
 
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			lastDiag = fmt.Sprintf("%s | attempt %d | deployments returned %d (non-retryable)", scope, attempt, resp.StatusCode)
 			StopTrying(fmt.Sprintf("deployments check returned %d", resp.StatusCode)).Now()
 		}
 		deploymentsMap := framework.ExpectStatusAndDecode[map[string]framework.DeploymentDetailsResponse](g, resp, http.StatusOK)
 
 		dep, exists := deploymentsMap[params.Environment]
+		if !exists {
+			lastDiag = fmt.Sprintf("%s | attempt %d | environment not present in deployments response (%d env(s))", scope, attempt, len(deploymentsMap))
+		}
 		g.Expect(exists).To(BeTrue(), "environment %q not found in deployments", params.Environment)
 
+		lastDiag = fmt.Sprintf("%s | attempt %d | status=%s lastDeployed=%s",
+			scope, attempt, dep.Status, dep.LastDeployed.Format(time.RFC3339))
 		ginkgo.GinkgoWriter.Printf("Deployment status: %s, lastDeployed: %s\n", dep.Status, dep.LastDeployed.Format(time.RFC3339))
 
 		// Fail fast on a terminal failure status rather than polling until timeout.

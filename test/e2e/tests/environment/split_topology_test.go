@@ -50,6 +50,10 @@ var _ = Describe("Environment management: split gateway topology", Label("enviro
 		scriptParams.EnvName = envName
 		scriptParams.DisplayName = "E2E Split Env " + suffix
 		scriptParams.Topology = "split"
+		// Split mode installs Thunder plus two gateways, each with its own
+		// readiness wait; that takes longer than runScript's 6-minute default
+		// (the script was killed mid-run in CI). Removal needs the same budget.
+		scriptParams.Timeout = 12 * time.Minute
 	})
 
 	AfterAll(func() {

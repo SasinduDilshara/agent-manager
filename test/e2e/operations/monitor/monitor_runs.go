@@ -163,6 +163,9 @@ func WaitForMonitorRun(client *framework.AMPClient, params *WaitForMonitorRunPar
 
 	var lastDiag string
 	framework.AttachOnFailure("monitor-run: last poll result", func() string { return lastDiag })
+	// A run stuck in "running"/"pending" is an evaluation job that never
+	// finished; on timeout, add its namespace (workflows-<env>) state to the report.
+	framework.AttachNamespaceStateOnFailure("monitor-run: evaluation workload namespaces", "workflows-")
 
 	var completedRun framework.MonitorRunResponse
 	attempt := 0

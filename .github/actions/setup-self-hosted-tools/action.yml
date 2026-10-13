@@ -1,0 +1,37 @@
+name: Setup self-hosted runner tools
+description: >
+  Idempotently provisions the CLI tooling a job needs on the long-lived
+  self-hosted runner VM, which — unlike the GitHub-hosted images — starts with
+  none of it installed. Base packages (curl, jq, git, lsof, openssl, tar,
+  unzip, acl) are always ensured; everything else is opt-in via `tools`.
+
+  Safe and cheap to call from every job: each tool is skipped when it is
+  already present at the pinned version, so only the first run on a fresh VM
+  actually downloads anything.
+
+inputs:
+  tools:
+    description: >
+      Comma-separated list of extra components to ensure. Supported values:
+      docker (engine + buildx plugin + socket access), k3d, yq, kubectl, helm,
+      gh, sysctl (raise vm.max_map_count and fs.inotify.* for k3s/OpenSearch).
+      Leave empty for base packages only.
+    required: false
+    default: ''
+  bin-dir:
+    description: >
+      Directory the pinned single-file binaries are installed into and which is
+      prepended to PATH for later steps. Defaults to a per-user location so no
+      step needs root to run them.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Install runner tooling
+      shell: bash
+      env:
+        TOOLS: ${{ inputs.tools }}
+        TOOL_BIN_DIR: ${{ inputs.bin-dir }}
+      run: bash "${GITHUB_ACTION_PATH}/install-tools.sh"
