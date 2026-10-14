@@ -1,0 +1,47 @@
+name: Preflight for k3d-based jobs
+description: >
+  Verifies a runner can actually host the k3d-based AMP stack before anything
+  expensive is attempted: the Docker daemon is reachable, container ports it
+  publishes land on *this* runner's loopback (the Docker-in-Docker trap from
+  PR #1233, where k3d creates the cluster and then every kubectl call hangs),
+  and the host ports the k3d config publishes are free. Also reports vCPU,
+  memory and disk, warning when the host is below what the full platform needs.
+
+inputs:
+  required-ports:
+    description: >
+      Space-separated host ports that must be unbound. Defaults to the set
+      deployments/quick-start/k3d-config.yaml publishes.
+    required: false
+    default: '6550 8080 8443 10082 11080 11082 11085 19080 19443'
+  min-cpus:
+    description: vCPU count below which the job warns (does not fail).
+    required: false
+    default: '4'
+  min-memory-gb:
+    description: Total RAM in GiB below which the job warns (does not fail).
+    required: false
+    default: '16'
+  min-disk-gb:
+    description: Free space on / in GiB below which the job warns (does not fail).
+    required: false
+    default: '60'
+  enforce-capacity:
+    description: >
+      When 'true', a host below any min-* threshold fails the step instead of
+      warning. Use it for self-hosted runners.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Preflight checks
+      shell: bash
+      env:
+        REQUIRED_PORTS: ${{ inputs.required-ports }}
+        MIN_CPUS: ${{ inputs.min-cpus }}
+        MIN_MEM_GB: ${{ inputs.min-memory-gb }}
+        MIN_DISK_GB: ${{ inputs.min-disk-gb }}
+        ENFORCE_CAPACITY: ${{ inputs.enforce-capacity }}
+      run: bash "${GITHUB_ACTION_PATH}/preflight.sh"

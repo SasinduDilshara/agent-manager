@@ -55,8 +55,7 @@ if [ -f "$CHART_DIR/Chart.lock" ]; then
 
   if [ "$MISSING" = "true" ]; then
     echo "Downloading missing dependencies..."
-    helm repo add bitnami https://charts.bitnami.com/bitnami --force-update
-    helm repo update
+    # Dependencies use OCI repositories (Chart.yaml); no `helm repo add` needed.
     helm dependency update "$CHART_DIR"
   else
     echo "All chart dependencies are already present, skipping download"
