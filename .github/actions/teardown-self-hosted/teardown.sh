@@ -67,17 +67,30 @@ fi
 echo "::group::Teardown — containers, volumes, networks"
 
 # --- containers ------------------------------------------------------------
-# Force-remove everything left over. The one container that must survive is
-# this job's own, in the case where the runner itself is containerised against
-# the same daemon — identify it from the 64-hex container id that appears in
-# our mountinfo (absent when the runner is an ordinary host process, in which
-# case nothing is excluded).
-self_cid="$(grep -o -m1 -E '[0-9a-f]{64}' /proc/self/mountinfo 2>/dev/null | head -1)"
-if [ -n "${self_cid}" ]; then
-  log "Runner appears containerised (${self_cid:0:12}); it is excluded from the sweep"
+# Force-remove everything left over. If the runner itself runs in a container
+# on the same daemon, that container must survive. Its id is taken only from
+# /proc/self/cgroup (cgroup v1 "/docker/<id>" or v2 "docker-<id>.scope") and
+# must exist in `docker ps`. If the runner looks containerised but the id
+# cannot be confirmed, the container sweep is skipped rather than guessing.
+containerised=false
+[ -f /.dockerenv ] && containerised=true
+self_cid="$(grep -oE '(/docker/|docker-)[0-9a-f]{64}' /proc/self/cgroup 2>/dev/null \
+  | grep -oE '[0-9a-f]{64}' | head -1)"
+[ -n "${self_cid}" ] && containerised=true
+if [ -n "${self_cid}" ] && ! docker ps -aq --no-trunc 2>/dev/null | grep -qx "${self_cid}"; then
+  self_cid=""
 fi
 
-leftover="$(docker ps -aq --no-trunc 2>/dev/null)"
+skip_containers=false
+if [ "${containerised}" = "true" ] && [ -z "${self_cid}" ]; then
+  skip_containers=true
+  warn "Runner looks containerised but its container id could not be confirmed; skipping the container sweep."
+elif [ -n "${self_cid}" ]; then
+  log "Runner is containerised (${self_cid:0:12}); it is excluded from the sweep"
+fi
+
+leftover=""
+[ "${skip_containers}" = "false" ] && leftover="$(docker ps -aq --no-trunc 2>/dev/null)"
 if [ -n "${leftover}" ]; then
   for cid in ${leftover}; do
     [ -n "${self_cid}" ] && [ "${cid}" = "${self_cid}" ] && continue
@@ -112,13 +125,24 @@ if [ "${PRUNE_IMAGES}" = "true" ]; then
   # -a (not just dangling) is deliberate: the nightly's whole point is that the
   # next run installs from scratch, and the dated 0.0.0-dev-* tags would
   # otherwise accumulate a new full image set on disk every single night.
-  docker system prune -af --volumes >/dev/null 2>&1 || true
-  ok "Pruned all unused images, volumes and networks"
+  # `docker system prune` also removes stopped containers, so use it only when
+  # no container has to be kept.
+  if [ -z "${KEEP_CONTAINERS}" ] && [ "${skip_containers}" = "false" ]; then
+    docker system prune -af --volumes >/dev/null 2>&1 || true
+    ok "Pruned all unused images, volumes and networks"
+  else
+    docker image prune -af >/dev/null 2>&1 || true
+    docker volume prune -f >/dev/null 2>&1 || true
+    docker network prune -f >/dev/null 2>&1 || true
+    ok "Pruned unused images, volumes and networks (containers kept)"
+  fi
 else
-  docker container prune -f >/dev/null 2>&1 || true
+  if [ -z "${KEEP_CONTAINERS}" ] && [ "${skip_containers}" = "false" ]; then
+    docker container prune -f >/dev/null 2>&1 || true
+  fi
   docker volume prune -f >/dev/null 2>&1 || true
   docker network prune -f >/dev/null 2>&1 || true
-  ok "Pruned stopped containers, unused volumes and networks (image cache kept)"
+  ok "Pruned unused volumes and networks (image cache kept)"
 fi
 
 echo "::endgroup::"

@@ -632,11 +632,11 @@ jobs:
           exclude-tags: ${{ needs.compute-version.outputs.dev-version }}
           delete-untagged: false
 
-  # Posts after every run: 🔴 with the failed stage if build, package or e2e
-  # was not green, 🟢 one-liner otherwise. Quiet only on a manual cancel.
+  # Posts after every run: 🔴 with the earliest failed stage, 🟢 one-liner
+  # otherwise. Quiet only on a manual cancel.
   notify-google-chat:
     name: Notify Google Chat
-    needs: [compute-version, build-images, package-charts, e2e, publish-dev-tag]
+    needs: [compute-version, load-config, build-images, package-charts, e2e, publish-dev-tag]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -647,12 +647,14 @@ jobs:
           DEV_VERSION: ${{ needs.compute-version.outputs.dev-version }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           TEST_SUMMARY: ${{ needs.e2e.outputs.summary }}
+          VERSION_RESULT: ${{ needs.compute-version.result }}
+          CONFIG_RESULT: ${{ needs.load-config.result }}
           BUILD_RESULT: ${{ needs.build-images.result }}
           PACKAGE_RESULT: ${{ needs.package-charts.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
           TAG_RESULT: ${{ needs.publish-dev-tag.result }}
         run: |
-          STAGES="build=${BUILD_RESULT} package=${PACKAGE_RESULT} e2e=${E2E_RESULT} tag=${TAG_RESULT}"
+          STAGES="version=${VERSION_RESULT} config=${CONFIG_RESULT} build=${BUILD_RESULT} package=${PACKAGE_RESULT} e2e=${E2E_RESULT} tag=${TAG_RESULT}"
           echo "Stages: ${STAGES}"
           if [ -z "${GCHAT_WEBHOOK_URL}" ]; then
             echo "::warning::GCHAT_WEBHOOK_URL secret is not set; skipping Chat notification."
@@ -661,11 +663,16 @@ jobs:
           if [ "${BUILD_RESULT}" = "success" ] && [ "${PACKAGE_RESULT}" = "success" ] && [ "${E2E_RESULT}" = "success" ]; then
             HEADLINE="*🟢 Nightly passed* — \`${DEV_VERSION}\`"
           else
-            # Name the earliest stage that failed.
+            # Name the earliest stage(s) that failed. If compute-version or
+            # load-config fails, everything after is only "skipped".
             FAILED_STAGE="e2e"
             [ "${PACKAGE_RESULT}" != "success" ] && FAILED_STAGE="package"
             [ "${BUILD_RESULT}" != "success" ] && FAILED_STAGE="build"
-            HEADLINE="*🔴 Nightly failed at ${FAILED_STAGE}* — \`${DEV_VERSION}\`"
+            SETUP_FAILED=""
+            case "${VERSION_RESULT}" in failure|cancelled) SETUP_FAILED="compute-version" ;; esac
+            case "${CONFIG_RESULT}" in failure|cancelled) SETUP_FAILED="${SETUP_FAILED:+${SETUP_FAILED} and }load-config" ;; esac
+            [ -n "${SETUP_FAILED}" ] && FAILED_STAGE="${SETUP_FAILED}"
+            HEADLINE="*🔴 Nightly failed at ${FAILED_STAGE}* — \`${DEV_VERSION:-unknown version}\`"
           fi
           SUMMARY_LINE="${TEST_SUMMARY:-no test summary available}"
           # Build the JSON with jq so the summary text is safely escaped.
