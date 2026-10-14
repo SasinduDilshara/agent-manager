@@ -147,13 +147,11 @@ install_docker() {
     [ -n "${SUDO}" ] || die "Docker is installed but not reachable as $(id -un), and there is no passwordless sudo to fix it. Run once on the VM: usermod -aG docker $(id -un) && systemctl restart docker, then restart the runner service."
     ${SUDO} usermod -aG docker "$(id -un)" || true
     have setfacl && ${SUDO} setfacl -m "u:$(id -un):rw" /var/run/docker.sock 2>/dev/null || true
-    if ! docker info >/dev/null 2>&1; then
-      warn "Falling back to chmod 0666 on /var/run/docker.sock. Acceptable on a dedicated CI VM, but it grants every local user root-equivalent access through Docker."
-      ${SUDO} chmod 0666 /var/run/docker.sock || true
-    fi
+    # No chmod 0666 fallback: that would give every local user root-equivalent
+    # access to Docker. If the steps above did not work, fail with the fix.
   fi
 
-  docker info >/dev/null 2>&1 || die "Docker is installed but 'docker info' still fails. Check 'systemctl status docker' on the runner VM."
+  docker info >/dev/null 2>&1 || die "Docker is installed but not reachable as $(id -un). Check 'systemctl status docker', then on the VM run once: sudo usermod -aG docker $(id -un) && sudo systemctl restart docker, and restart the runner service."
   ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '?') reachable as $(id -un)"
 
   # build-images pushes a multi-arch manifest, which needs the buildx plugin.
