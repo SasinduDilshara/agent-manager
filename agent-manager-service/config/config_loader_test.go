@@ -701,7 +701,11 @@ func TestLoadEnvs_ObserverConfig(t *testing.T) {
 }
 
 func TestValidateAuditConfig(t *testing.T) {
-	valid := AuditConfig{Enabled: true, BufferSize: 4096, BatchSize: 200, FlushIntervalMs: 1000}
+	valid := AuditConfig{
+		Enabled: true, BufferSize: 4096, BatchSize: 200, FlushIntervalMs: 1000,
+		GatewayIngest: GatewayAuditIngestConfig{MaxBodyBytes: 4 << 20, ResolverCacheTTLSeconds: 60},
+		Reader:        AuditReaderConfig{ExportMaxRecords: 500000, ExportSettleSeconds: 60},
+	}
 
 	tests := []struct {
 		name        string
@@ -738,6 +742,50 @@ func TestValidateAuditConfig(t *testing.T) {
 			name:       "each malformed value is reported separately",
 			mutate:     func(c *AuditConfig) { c.BufferSize = 0; c.BatchSize = 0; c.FlushIntervalMs = 0 },
 			wantErrors: 3,
+		},
+		{
+			name: "the OpenChoreo sink, ingest and reader together are valid",
+			mutate: func(c *AuditConfig) {
+				c.OpenChoreoSinkEnabled = true
+				c.GatewayIngest.Enabled = true
+				c.Reader.ObserverURL = "http://observer:8080"
+				c.Reader.TokenURL = "http://thunder/oauth2/token"
+				c.Reader.ClientID = "amp-audit-reader-client"
+				c.Reader.ClientSecret = "s3cret"
+			},
+			wantErrors: 0,
+		},
+		{
+			// Accepting gateway records with no sink to write them to would
+			// acknowledge records to the gateway that are then lost.
+			name:        "gateway ingest without the OpenChoreo sink is rejected",
+			mutate:      func(c *AuditConfig) { c.GatewayIngest.Enabled = true },
+			wantErrors:  1,
+			errContains: "AUDIT_OPENCHOREO_SINK_ENABLED",
+		},
+		{
+			name:        "the OpenChoreo sink needs the audit trail on",
+			mutate:      func(c *AuditConfig) { c.Enabled = false; c.OpenChoreoSinkEnabled = true },
+			wantErrors:  1,
+			errContains: "AUDIT_ENABLED",
+		},
+		{
+			name:        "a reader with no identity is rejected at startup",
+			mutate:      func(c *AuditConfig) { c.Reader.ObserverURL = "http://observer:8080"; c.Reader.TokenURL = "t" },
+			wantErrors:  2,
+			errContains: "AUDIT_READER_CLIENT_ID",
+		},
+		{
+			name:        "non-positive ingest body limit is rejected",
+			mutate:      func(c *AuditConfig) { c.GatewayIngest.MaxBodyBytes = 0 },
+			wantErrors:  1,
+			errContains: "AUDIT_GATEWAY_INGEST_MAX_BODY_BYTES",
+		},
+		{
+			name:        "non-positive export limit is rejected",
+			mutate:      func(c *AuditConfig) { c.Reader.ExportMaxRecords = 0 },
+			wantErrors:  1,
+			errContains: "AUDIT_EXPORT_MAX_RECORDS",
 		},
 	}
 

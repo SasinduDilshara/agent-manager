@@ -193,6 +193,21 @@ export function isObserverConfigured(): boolean {
   return !!observerBaseUrl;
 }
 
+let auditTrailEnabled = false;
+
+/**
+ * Set by the runtime-config bootstrap from GET /api/v1/config. The service
+ * decides whether its audit trail can be read; the console has no flag of its
+ * own, and anything but an explicit true leaves the Audit Logs page off.
+ */
+export function setAuditTrailEnabled(enabled: boolean | undefined): void {
+  auditTrailEnabled = enabled === true;
+}
+
+export function isAuditTrailEnabled(): boolean {
+  return auditTrailEnabled;
+}
+
 /**
  * Same as httpGET but calls the observer service directly using the
  * observer base URL discovered at runtime via GET /api/v1/config.

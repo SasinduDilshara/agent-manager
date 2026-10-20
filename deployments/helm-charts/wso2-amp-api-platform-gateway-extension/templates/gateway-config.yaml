@@ -93,6 +93,66 @@ data:
         {{- $_ := set $policyConfigs "mcpauth_v1" $mcpauth }}
         policy_configurations:
           {{- $policyConfigs | toYaml | nindent 10 }}
+        {{- $audit := .Values.apiGateway.audit }}
+        {{- $tl := .Values.apiGateway.trafficLog }}
+        {{- if or $audit.enabled $tl.enabled }}
+        # Shared capture pipeline feeding both the analytics publisher (audit) and
+        # traffic logging. Headers and bodies are captured only when the traffic
+        # log asks for them. The audit feed never needs either, but whatever is
+        # captured also travels in its records, unmasked.
+        collector:
+          request_headers: {{ and $tl.enabled $tl.requestHeaders }}
+          response_headers: {{ and $tl.enabled $tl.responseHeaders }}
+          request_body: {{ and $tl.enabled $tl.requestBody }}
+          response_body: {{ and $tl.enabled $tl.responseBody }}
+          {{- with $audit.ignorePathPrefixes }}
+          ignore_path_prefixes:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- if $audit.enabled }}
+        # Agent audit feed: one OTLP log record per request, posted to Agent
+        # Manager's audit ingest. Memory-queued and best effort; drops are
+        # counted by the policy engine's analytics drop metric.
+        analytics:
+          enabled: true
+          enabled_publishers:
+            - otel
+          publishers:
+            otel:
+              endpoint: {{ include "wso2-amp-gateway-extension.auditEndpoint" . | quote }}
+              service_name: "wso2-api-platform-gateway"
+              headers:
+                api-key: {{ printf "{{ env \"%s\" }}" (include "wso2-amp-gateway-extension.auditTokenEnvName" .) | quote }}
+              {{- if and .Values.apiGateway.controlPlane.tls.enabled .Values.apiGateway.controlPlane.tls.insecureSkipVerify }}
+              tls:
+                insecure_skip_verify: true
+              {{- end }}
+              {{- if not .Values.apiGateway.controlPlane.tls.enabled }}
+              allow_insecure_transport: true
+              {{- end }}
+              batch_size: {{ $audit.batchSize }}
+              flush_interval: {{ $audit.flushInterval | quote }}
+              queue_capacity: {{ $audit.queueCapacity }}
+              on_queue_full: "drop_new"
+        {{- end }}
+        {{- if $tl.enabled }}
+        # Local traffic log: one JSON line per request, written inside the
+        # gateway-runtime pod for an operator to read (kubectl exec).
+        traffic_logging:
+          enabled: true
+          outputs:
+            - file
+          request_headers: {{ $tl.requestHeaders }}
+          response_headers: {{ $tl.responseHeaders }}
+          request_body: {{ $tl.requestBody }}
+          response_body: {{ $tl.responseBody }}
+          masked_headers:
+            {{- toYaml $tl.maskedHeaders | nindent 12 }}
+          file:
+            path: {{ $tl.path | quote }}
+            max_size_mb: {{ $tl.maxSizeMB }}
+        {{- end }}
 
       controller:
         controlPlane:
@@ -149,18 +209,18 @@ data:
             capabilities:
               drop:
                 - ALL
-          {{- if .Values.apiGateway.config.systemExtraEnv }}
+          {{- with (include "wso2-amp-gateway-extension.extraEnv" .) }}
           extraEnv:
-            {{- .Values.apiGateway.config.systemExtraEnv | toYaml | nindent 12 }}
+            {{- . | nindent 12 }}
           {{- end }}
 
       gatewayRuntime:
         deployment:
           podLabels:
             openchoreo.dev/system-component: gateway-runtime
-          {{- if .Values.apiGateway.config.systemExtraEnv }}
+          {{- with (include "wso2-amp-gateway-extension.extraEnv" .) }}
           extraEnv:
-            {{- .Values.apiGateway.config.systemExtraEnv | toYaml | nindent 12 }}
+            {{- . | nindent 12 }}
           {{- end }}
         service:
           type: ClusterIP

@@ -1313,7 +1313,9 @@
                 "amp:agent-identity:read",
                 "amp:agent-identity:create",
                 "amp:agent-identity:update",
-                "amp:agent-identity:delete"
+                "amp:agent-identity:delete",
+                "amp:audit-log:read",
+                "amp:audit-log:export"
               ],
               "description": "Full list of AMP OAuth2 scopes that interactive clients are allowed to request. Thunder only grants scopes that appear in an app's registered scope list, so all permission scopes must be declared here for role-based access to work. Exception: am-mcp's allowance is this catalog MINUS observabilityScopes (filtered in 59-am-mcp-client.yaml) \u2014 those scopes are owned exclusively by the observer MCP client (amObsMcpClient below).",
               "items": {
@@ -1779,6 +1781,74 @@
               },
               "required": [],
               "title": "amObserverClient",
+              "type": "object"
+            },
+            "ampAuditReaderClient": {
+              "additionalProperties": true,
+              "description": "AMP Audit Reader Client configuration (dedicated outbound identity for agent-manager-service's audit-trail reads from the OpenChoreo observer). Its authority comes only from an OpenChoreo ClusterAuthzRoleBinding (amp-audit-reader-binding in wso2-amp-platform-resources-extension) granting auditlogs:view; it has no AMP scopes. WARNING: clientSecret is a LOCAL-DEVELOPMENT-ONLY placeholder; override it in production. NOTE: pre-install bootstrap job only.",
+              "properties": {
+                "clientId": {
+                  "default": "amp-audit-reader-client",
+                  "description": "OAuth 2.0 client ID",
+                  "title": "clientId",
+                  "type": "string"
+                },
+                "clientSecret": {
+                  "default": "amp-audit-reader-client-secret",
+                  "description": "OAuth 2.0 client secret",
+                  "title": "clientSecret",
+                  "type": "string"
+                },
+                "name": {
+                  "default": "AMP Audit Reader Client",
+                  "description": "Internal name of the OAuth application",
+                  "title": "name",
+                  "type": "string"
+                },
+                "description": {
+                  "default": "Dedicated client for agent-manager-service to read the audit trail from the OpenChoreo observer",
+                  "description": "Description of the OAuth application",
+                  "title": "description",
+                  "type": "string"
+                },
+                "grantTypes": {
+                  "default": [
+                    "client_credentials"
+                  ],
+                  "description": "OAuth 2.0 grant types the client may use",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "grantTypes",
+                  "type": "array"
+                },
+                "tokenEndpointAuthMethod": {
+                  "default": "client_secret_basic",
+                  "description": "Authentication method the client uses at the token endpoint",
+                  "title": "tokenEndpointAuthMethod",
+                  "type": "string"
+                },
+                "pkceRequired": {
+                  "default": false,
+                  "description": "Require PKCE on the authorization code flow",
+                  "title": "pkceRequired",
+                  "type": "boolean"
+                },
+                "publicClient": {
+                  "default": false,
+                  "description": "Treat as a public client, which authenticates without a secret",
+                  "title": "publicClient",
+                  "type": "boolean"
+                },
+                "accessTokenValidityPeriod": {
+                  "default": 3600,
+                  "description": "Access token lifetime in seconds",
+                  "title": "accessTokenValidityPeriod",
+                  "type": "integer"
+                }
+              },
+              "required": [],
+              "title": "ampAuditReaderClient",
               "type": "object"
             },
             "amCliClient": {

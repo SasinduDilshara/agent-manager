@@ -17,7 +17,7 @@ set -euo pipefail
 # Configuration
 CLUSTER_NAME="amp-local"
 CLUSTER_CONTEXT="k3d-${CLUSTER_NAME}"
-OPENCHOREO_VERSION="1.2.0"
+OPENCHOREO_VERSION="1.3.1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 K3D_CONFIG="${K3D_CONFIG:-${SCRIPT_DIR}/k3d-config.yaml}"
 
@@ -53,9 +53,11 @@ GATEWAY_ENCRYPTION_SECRET_NAME="gateway-encryption-keys"
 GATEWAY_ENCRYPTION_SECRET_KEY="default-aesgcm256-v1.bin"
 
 # OpenChoreo community module versions compatible with OpenChoreo ${OPENCHOREO_VERSION}
-OBSERVABILITY_LOGS_OPENSEARCH_VERSION="0.5.3"
+# (the set upstream pins for the release). Logs 0.6.0 is the first release with
+# audit-log routing, the audit index template and the adapter's audit endpoints.
+OBSERVABILITY_LOGS_OPENSEARCH_VERSION="0.6.0"
 OBSERVABILITY_TRACING_OPENSEARCH_VERSION="0.6.0"
-OBSERVABILITY_METRICS_PROMETHEUS_VERSION="0.6.1"
+OBSERVABILITY_METRICS_PROMETHEUS_VERSION="0.7.1"
 
 # Source AMP installation helpers
 source "${SCRIPT_DIR}/install-helpers.sh"
@@ -288,7 +290,7 @@ helm_install_idempotent() {
         --namespace "${namespace}" \
         --create-namespace \
         --timeout "${timeout}s" \
-        "${extra_args[@]}"; then
+        ${extra_args[@]+"${extra_args[@]}"}; then
         log_success "${release_name} installed successfully"
         return 0
     else
@@ -698,6 +700,12 @@ else
     kubectl get nodes
 fi
 
+# A wrapper that sources this script can act on the cluster before anything is
+# installed on it — install-local-build.sh loads locally built images here.
+if declare -F amp_after_cluster_ready >/dev/null 2>&1; then
+    amp_after_cluster_ready
+fi
+
 # ============================================================================
 # Step 3: Apply CoreDNS Custom Configuration
 # ============================================================================
@@ -915,7 +923,7 @@ else
         --timeout "${TIMEOUT_CONTROL_PLANE}s" \
         --version "${OPENCHOREO_VERSION}" \
         --values "${DEPLOYMENTS_DIR}/single-cluster/values-cp.yaml" \
-        "${CP_HELM_ARGS[@]}" 2>&1); then
+        ${CP_HELM_ARGS[@]+"${CP_HELM_ARGS[@]}"} 2>&1); then
         echo "$CP_INSTALL_OUTPUT"
         if echo "$CP_INSTALL_OUTPUT" | grep -q "no endpoints available for service \"controller-manager-webhook-service\""; then
             log_warning "Control Plane webhook was not ready. Waiting for deployments and retrying once..."
@@ -927,7 +935,7 @@ else
                 --timeout "${TIMEOUT_CONTROL_PLANE}s" \
                 --version "${OPENCHOREO_VERSION}" \
                 --values "${DEPLOYMENTS_DIR}/single-cluster/values-cp.yaml" \
-                "${CP_HELM_ARGS[@]}" || { log_error "Failed to install openchoreo-control-plane after retry"; exit 1; }
+                ${CP_HELM_ARGS[@]+"${CP_HELM_ARGS[@]}"} || { log_error "Failed to install openchoreo-control-plane after retry"; exit 1; }
         else
             log_error "Failed to install openchoreo-control-plane"
             exit 1
@@ -1322,16 +1330,34 @@ else
     log_error "Failed to install observability-logs-opensearch (non-fatal)"
 fi
 
-# Enable log collection with fluent-bit
-log_info "Enabling log collection with fluent-bit..."
+# Enable log collection with fluent-bit, and route audit records to their own
+# index (audit-logs-*, 365-day retention). Fluent Bit takes an audit record only
+# from a container on the producers allowlist, matched on the kubelet's log file
+# name, so a workload cannot write into the trail by printing an audit-shaped
+# line. Setting the list replaces the chart's default, so OpenChoreo's own two
+# producers are restated alongside Agent Manager.
+# fluentBitCustomizations.clusterInstance is required by the logs module (0.6.0+)
+# whenever fluent-bit is on: it stamps every record with the source cluster.
+log_info "Enabling log collection and audit-log routing with fluent-bit..."
 if helm upgrade observability-logs-opensearch \
     oci://ghcr.io/openchoreo/helm-charts/observability-logs-opensearch \
     --namespace openchoreo-observability-plane \
     --version "${OBSERVABILITY_LOGS_OPENSEARCH_VERSION}" \
     --reuse-values \
     --set fluent-bit.enabled=true \
+    --set "fluentBitCustomizations.clusterInstance=${CLUSTER_NAME}" \
+    --set auditLogs.enabled=true \
+    --set "auditLogs.producers[0].producer=openchoreo-api" \
+    --set "auditLogs.producers[0].namespace=openchoreo-control-plane" \
+    --set "auditLogs.producers[0].container=api-server" \
+    --set "auditLogs.producers[1].producer=observer" \
+    --set "auditLogs.producers[1].namespace=openchoreo-observability-plane" \
+    --set "auditLogs.producers[1].container=observer" \
+    --set "auditLogs.producers[2].producer=agent-manager-service" \
+    --set "auditLogs.producers[2].namespace=${AMP_NS}" \
+    --set "auditLogs.producers[2].container=agent-manager-service" \
     --timeout 10m; then
-    log_success "Log collection enabled with fluent-bit"
+    log_success "Log collection and audit-log routing enabled with fluent-bit"
 else
     log_error "Failed to enable log collection (non-fatal)"
 fi

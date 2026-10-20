@@ -44,7 +44,7 @@ const ampScopes = "amp:agent-identity:create amp:agent-identity:delete amp:agent
 	"amp:agent-kind:create amp:agent-kind:delete amp:agent-kind:read amp:agent-kind:update " +
 	"amp:agent:api-key-manage amp:agent:build amp:agent:create amp:agent:delete " +
 	"amp:agent:env-non-production amp:agent:env-production amp:agent:read amp:agent:rollback amp:agent:suspend " +
-	"amp:agent:token-manage amp:agent:update amp:catalog:read amp:data-plane:read " +
+	"amp:agent:token-manage amp:agent:update amp:audit-log:export amp:audit-log:read amp:catalog:read amp:data-plane:read " +
 	"amp:deployment-pipeline:create amp:deployment-pipeline:delete amp:deployment-pipeline:read amp:deployment-pipeline:update " +
 	"amp:environment:create amp:environment:delete amp:environment:read amp:environment:update " +
 	"amp:evaluator:create amp:evaluator:delete amp:evaluator:read amp:evaluator:update " +

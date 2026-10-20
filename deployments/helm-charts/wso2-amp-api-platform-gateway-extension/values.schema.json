@@ -434,6 +434,121 @@
           "required": [],
           "title": "config",
           "type": "object"
+        },
+        "audit": {
+          "additionalProperties": false,
+          "description": "Agent audit feed: the gateway's OTel analytics publisher sends one record per request to Agent Manager's audit ingest, authenticated with this gateway's registration token. Best effort: memory-queued, new records dropped (and counted) when the queue is full.",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Send audit records to Agent Manager.",
+              "title": "enabled",
+              "type": "boolean"
+            },
+            "endpoint": {
+              "default": "",
+              "description": "Full OTLP/HTTP logs URL of the ingest. Empty derives <scheme>://<controlPlane.host>/api/internal/v1/audit/gateway-events.",
+              "title": "endpoint",
+              "type": "string"
+            },
+            "queueCapacity": {
+              "default": 10000,
+              "description": "Records held in memory while the ingest is slow or unreachable.",
+              "minimum": 1,
+              "title": "queueCapacity",
+              "type": "integer"
+            },
+            "batchSize": {
+              "default": 100,
+              "description": "Records per export request.",
+              "minimum": 1,
+              "title": "batchSize",
+              "type": "integer"
+            },
+            "flushInterval": {
+              "default": "5s",
+              "description": "Longest a record waits for a batch to fill (Go duration).",
+              "pattern": "^[0-9]+(ms|s|m)$",
+              "title": "flushInterval",
+              "type": "string"
+            },
+            "ignorePathPrefixes": {
+              "default": [
+                "/otel"
+              ],
+              "description": "Request path prefixes that produce no audit record and no traffic-log line. /otel is the agent trace-export route.",
+              "items": {
+                "type": "string"
+              },
+              "title": "ignorePathPrefixes",
+              "type": "array"
+            }
+          },
+          "required": [],
+          "title": "audit",
+          "type": "object"
+        },
+        "trafficLog": {
+          "additionalProperties": false,
+          "description": "Local traffic log: one JSON line per request written to a file inside the gateway-runtime pod. Independent of audit.",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Write the traffic log file.",
+              "title": "enabled",
+              "type": "boolean"
+            },
+            "path": {
+              "default": "/var/log/wso2/traffic/traffic.log",
+              "description": "Absolute path of the live log file; must be under the runtime traffic-log volume (/var/log/wso2).",
+              "pattern": "^/var/log/wso2/.+",
+              "title": "path",
+              "type": "string"
+            },
+            "maxSizeMB": {
+              "default": 100,
+              "description": "Size at which the file is rotated; the volume holds at most 2 x this.",
+              "minimum": 1,
+              "maximum": 200,
+              "title": "maxSizeMB",
+              "type": "integer"
+            },
+            "requestHeaders": {
+              "default": false,
+              "description": "Log request headers (masked per maskedHeaders). With audit.enabled, captured headers are also sent unmasked in the analytics feed.",
+              "title": "requestHeaders",
+              "type": "boolean"
+            },
+            "responseHeaders": {
+              "default": false,
+              "description": "Log response headers (masked per maskedHeaders). With audit.enabled, captured headers are also sent unmasked in the analytics feed.",
+              "title": "responseHeaders",
+              "type": "boolean"
+            },
+            "requestBody": {
+              "default": false,
+              "description": "Log request bodies (prompts, tool arguments).",
+              "title": "requestBody",
+              "type": "boolean"
+            },
+            "responseBody": {
+              "default": false,
+              "description": "Log response bodies (completions, tool results).",
+              "title": "responseBody",
+              "type": "boolean"
+            },
+            "maskedHeaders": {
+              "description": "Header names whose values are replaced with ****.",
+              "items": {
+                "type": "string"
+              },
+              "title": "maskedHeaders",
+              "type": "array"
+            }
+          },
+          "required": [],
+          "title": "trafficLog",
+          "type": "object"
         }
       },
       "required": [],

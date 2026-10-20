@@ -320,6 +320,59 @@
           "required": [],
           "title": "otelCollector",
           "type": "object"
+        },
+        "amObserver": {
+          "additionalProperties": false,
+          "description": "Lets Agent Manager and the evaluation job reach the Agent Manager Observer API port from other namespaces, which the OpenChoreo observability-plane NetworkPolicy (1.3.0+) otherwise blocks.",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "No-op on clusters whose CNI does not enforce NetworkPolicy.",
+              "title": "enabled",
+              "type": "boolean"
+            },
+            "allowedNamespaces": {
+              "default": ["wso2-amp", "workflows-default"],
+              "description": "Namespaces admitted to the observer's API port: Agent Manager's and the evaluation job's workflow namespace.",
+              "items": {"minLength": 1, "type": "string"},
+              "minItems": 1,
+              "title": "allowedNamespaces",
+              "type": "array"
+            }
+          },
+          "required": [],
+          "title": "amObserver",
+          "type": "object"
+        },
+        "openchoreoObserverAudit": {
+          "additionalProperties": false,
+          "description": "Lets Agent Manager read audit records through the OpenChoreo Observer's public port. The internal port stays closed.",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "No-op on clusters whose CNI does not enforce NetworkPolicy.",
+              "title": "enabled",
+              "type": "boolean"
+            },
+            "agentManagerNamespace": {
+              "default": "wso2-amp",
+              "description": "Namespace Agent Manager runs in.",
+              "minLength": 1,
+              "title": "agentManagerNamespace",
+              "type": "string"
+            },
+            "observerPort": {
+              "default": 8080,
+              "description": "The OpenChoreo Observer's public API port.",
+              "maximum": 65535,
+              "minimum": 1,
+              "title": "observerPort",
+              "type": "integer"
+            }
+          },
+          "required": [],
+          "title": "openchoreoObserverAudit",
+          "type": "object"
         }
       },
       "required": [],

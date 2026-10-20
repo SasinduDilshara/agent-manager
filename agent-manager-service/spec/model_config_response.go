@@ -23,6 +23,8 @@ type ConfigResponse struct {
 	ObserverBaseUrl string `json:"observerBaseUrl"`
 	// Whether this deployment accepts console usage analytics. The console buffers and sends nothing when false, so CONSOLE_ANALYTICS_ENABLED on the service is the single switch for the whole path rather than one half of it. Absent is treated as false.
 	ConsoleAnalyticsEnabled *bool `json:"consoleAnalyticsEnabled,omitempty"`
+	// Whether this deployment can read the audit trail back (the service's AUDIT_OBSERVER_URL is set), so the console offers its Audit Logs page only where it works. Permission is still checked per request. Absent is treated as false.
+	AuditTrailEnabled *bool `json:"auditTrailEnabled,omitempty"`
 }
 
 // NewConfigResponse instantiates a new ConfigResponse object
@@ -99,6 +101,38 @@ func (o *ConfigResponse) SetConsoleAnalyticsEnabled(v bool) {
 	o.ConsoleAnalyticsEnabled = &v
 }
 
+// GetAuditTrailEnabled returns the AuditTrailEnabled field value if set, zero value otherwise.
+func (o *ConfigResponse) GetAuditTrailEnabled() bool {
+	if o == nil || IsNil(o.AuditTrailEnabled) {
+		var ret bool
+		return ret
+	}
+	return *o.AuditTrailEnabled
+}
+
+// GetAuditTrailEnabledOk returns a tuple with the AuditTrailEnabled field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ConfigResponse) GetAuditTrailEnabledOk() (*bool, bool) {
+	if o == nil || IsNil(o.AuditTrailEnabled) {
+		return nil, false
+	}
+	return o.AuditTrailEnabled, true
+}
+
+// HasAuditTrailEnabled returns a boolean if a field has been set.
+func (o *ConfigResponse) HasAuditTrailEnabled() bool {
+	if o != nil && !IsNil(o.AuditTrailEnabled) {
+		return true
+	}
+
+	return false
+}
+
+// SetAuditTrailEnabled gets a reference to the given bool and assigns it to the AuditTrailEnabled field.
+func (o *ConfigResponse) SetAuditTrailEnabled(v bool) {
+	o.AuditTrailEnabled = &v
+}
+
 func (o ConfigResponse) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -112,6 +146,9 @@ func (o ConfigResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["observerBaseUrl"] = o.ObserverBaseUrl
 	if !IsNil(o.ConsoleAnalyticsEnabled) {
 		toSerialize["consoleAnalyticsEnabled"] = o.ConsoleAnalyticsEnabled
+	}
+	if !IsNil(o.AuditTrailEnabled) {
+		toSerialize["auditTrailEnabled"] = o.AuditTrailEnabled
 	}
 	return toSerialize, nil
 }

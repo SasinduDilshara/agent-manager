@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -244,6 +245,53 @@ func Project(name string) Option {
 // field that distinguishes a production change from a sandbox one.
 func Environment(name string) Option {
 	return func(e *Event) { e.Environment = name }
+}
+
+// Agent records the agent an event concerns when the resource is something
+// else, such as the LLM proxy an agent called.
+func Agent(name string) Option {
+	return func(e *Event) { e.AgentName = name }
+}
+
+// OccurredAt overrides the event time. For records of something observed
+// elsewhere — a request a gateway handled — the time is when it happened
+// there, not when this service learned of it.
+func OccurredAt(t time.Time) Option {
+	return func(e *Event) { e.OccurredAt = t }
+}
+
+// EventID fixes the event id. Records rebuilt from another system's report use
+// a deterministic id, so a report delivered twice yields the same id twice and
+// the duplicate is recognisable.
+func EventID(id uuid.UUID) Option {
+	return func(e *Event) { e.EventID = id }
+}
+
+// Correlation records the request id the event belongs to, for events built
+// outside the request that carried it.
+func Correlation(id string) Option {
+	return func(e *Event) { e.CorrelationID = id }
+}
+
+// Origin records where an observed request came from.
+func Origin(ip, userAgent string) Option {
+	return func(e *Event) {
+		e.SourceIP = ip
+		e.UserAgent = userAgent
+	}
+}
+
+// Request records the method and path of an observed request.
+func Request(method, path string) Option {
+	return func(e *Event) {
+		e.RequestMethod = method
+		e.RequestPath = path
+	}
+}
+
+// Duration records how long the operation took.
+func Duration(ms int64) Option {
+	return func(e *Event) { e.DurationMs = ms }
 }
 
 // Actor overrides the acting principal. The token subject is still recorded

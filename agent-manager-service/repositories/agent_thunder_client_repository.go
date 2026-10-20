@@ -52,6 +52,11 @@ type AgentThunderClientRepository interface {
 	// Get returns the binding for a specific agent in a specific environment.
 	Get(ctx context.Context, ouID, projectName, agentName, environmentName string) (*models.AgentThunderClient, error)
 
+	// FindByThunderIdentity returns the binding whose AgentID identity is
+	// subject — the env-Thunder agent id or OAuth client id an AgentID token
+	// names — within the org. Returns ErrAgentThunderClientNotFound when none.
+	FindByThunderIdentity(ctx context.Context, ouID, subject string) (*models.AgentThunderClient, error)
+
 	// FindDue returns up to limit bindings ready for an attempt: PENDING rows
 	// whose next retry time has arrived (or was never set — the write-ahead row
 	// before its first attempt), plus IN_PROGRESS rows abandoned by a crashed
@@ -202,6 +207,23 @@ func (r *AgentThunderClientRepo) Get(ctx context.Context, ouID, projectName, age
 			return nil, ErrAgentThunderClientNotFound
 		}
 		return nil, fmt.Errorf("get agent thunder client: %w", err)
+	}
+	return &c, nil
+}
+
+func (r *AgentThunderClientRepo) FindByThunderIdentity(ctx context.Context, ouID, subject string) (*models.AgentThunderClient, error) {
+	if subject == "" {
+		return nil, ErrAgentThunderClientNotFound
+	}
+	var c models.AgentThunderClient
+	err := r.db.WithContext(ctx).
+		Where("ou_id = ? AND (thunder_agent_id = ? OR thunder_client_id = ?)", ouID, subject, subject).
+		First(&c).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrAgentThunderClientNotFound
+		}
+		return nil, fmt.Errorf("find agent thunder client by identity: %w", err)
 	}
 	return &c, nil
 }

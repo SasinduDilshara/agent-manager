@@ -132,3 +132,25 @@ networkPolicy:
   otelCollector:
     # No-op on clusters whose CNI doesn't enforce NetworkPolicy.
     enabled: true
+  # The OpenChoreo observability-plane chart (1.3.0+) admits ingress to this
+  # namespace only from pods inside it. These two policies reopen exactly the
+  # cross-namespace paths Agent Manager depends on. No-op without an enforcing CNI.
+  amObserver:
+    # Agent Manager (build logs) and the evaluation job (traces) call the
+    # Agent Manager Observer's API port from other namespaces.
+    enabled: true
+    # The namespaces admitted: Agent Manager's, and the workflow namespace the
+    # evaluation job runs in ("workflows-<environment>"). Browsers and the CLI
+    # arrive through the observability-plane gateway, which is in this
+    # namespace and needs no entry. Agents' own namespaces are not admitted.
+    allowedNamespaces:
+      - "wso2-amp"
+      - "workflows-default"
+  openchoreoObserverAudit:
+    # Agent Manager reads the audit trail through the OpenChoreo Observer's
+    # public (JWT-authenticated) port. The internal port stays closed.
+    enabled: true
+    # Namespace Agent Manager runs in.
+    agentManagerNamespace: "wso2-amp"
+    # The OpenChoreo Observer's public API port.
+    observerPort: 8080

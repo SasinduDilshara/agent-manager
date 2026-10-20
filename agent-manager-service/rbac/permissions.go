@@ -158,6 +158,14 @@ const (
 	AgentIdentityDelete Permission = "agent-identity:delete"
 )
 
+// Audit trail permissions. Reading the trail discloses everything the
+// organization's users and agents did; exporting it takes that out of the
+// platform, so it is a separate grant.
+const (
+	AuditLogRead   Permission = "audit-log:read"
+	AuditLogExport Permission = "audit-log:export"
+)
+
 // LLM proxy permissions
 const (
 	LLMProxyCreate       Permission = "llm-proxy:create"

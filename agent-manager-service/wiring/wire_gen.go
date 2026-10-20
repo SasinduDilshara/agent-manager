@@ -15,6 +15,8 @@ import (
 	"github.com/google/wire"
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/observersvc"
+	"github.com/wso2/agent-manager/agent-manager-service/clients/ocauditsvc"
+	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/auth"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/thundersvc"
@@ -42,7 +44,8 @@ func InitializeAppParamsWithEnvThunderEndpoints(cfg *config.Config, db *gorm.DB,
 	thunderConfig := ProvideThunderConfig(configConfig)
 	identityClient := ProvideIdentityClient(thunderConfig)
 	orgResolver := ProvideOrgResolver(identityClient)
-	recorder := ProvideAuditRecorder(configConfig, logger)
+	openChoreoAuditSink := ProvideOpenChoreoAuditSink(configConfig)
+	recorder := ProvideAuditRecorder(configConfig, logger, openChoreoAuditSink)
 	openChoreoClient, err := ProvideOCClient(configConfig, authProvider)
 	if err != nil {
 		return nil, err
@@ -159,7 +162,13 @@ func InitializeAppParamsWithEnvThunderEndpoints(cfg *config.Config, db *gorm.DB,
 	deploymentAckHandler := ProvideDeploymentAckHandler(deploymentRepository)
 	webSocketController := ProvideWebSocketController(manager, eventHub, platformGatewayService, deploymentAckHandler, configConfig)
 	gatewayInternalAPIService := services.NewGatewayInternalAPIService(llmProviderRepository, llmProxyRepository, deploymentRepository, gatewayRepository, infraResourceManager, v)
-	gatewayInternalController := controllers.NewGatewayInternalController(platformGatewayService, gatewayInternalAPIService, apiKeyRepository, aiApplicationRepository)
+	gatewayAuditIngest := ProvideGatewayAuditIngest(configConfig, openChoreoAuditSink, aiApplicationRepository, agentThunderClientRepository, logger)
+	gatewayInternalController := controllers.NewGatewayInternalController(platformGatewayService, gatewayInternalAPIService, apiKeyRepository, aiApplicationRepository, gatewayAuditIngest)
+	auditTrailService, err := ProvideAuditTrailService(configConfig, logger)
+	if err != nil {
+		return nil, err
+	}
+	auditLogController := controllers.NewAuditLogController(auditTrailService)
 	monitorController := controllers.NewMonitorController(monitorManagerService)
 	monitorScoresService := services.NewMonitorScoresService(scoreRepository, monitorRepository, logger)
 	monitorScoresController := controllers.NewMonitorScoresController(monitorScoresService)
@@ -210,6 +219,7 @@ func InitializeAppParamsWithEnvThunderEndpoints(cfg *config.Config, db *gorm.DB,
 		MCPProxyController:               mcpProxyController,
 		WebSocketController:              webSocketController,
 		GatewayInternalController:        gatewayInternalController,
+		AuditLogController:               auditLogController,
 		MonitorController:                monitorController,
 		MonitorScoresController:          monitorScoresController,
 		MonitorScoresPublisherController: monitorScoresPublisherController,
@@ -248,7 +258,8 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 	thunderConfig := ProvideThunderConfig(configConfig)
 	identityClient := ProvideIdentityClient(thunderConfig)
 	orgResolver := ProvideOrgResolver(identityClient)
-	recorder := ProvideAuditRecorder(configConfig, logger)
+	openChoreoAuditSink := ProvideOpenChoreoAuditSink(configConfig)
+	recorder := ProvideAuditRecorder(configConfig, logger, openChoreoAuditSink)
 	openChoreoClient := ProvideTestOpenChoreoClient(testClients)
 	secretManagementClient := ProvideTestSecretManagementClient(testClients)
 	gitCredentialsService, err := ProvideGitCredentialsService(openChoreoClient, configConfig)
@@ -359,7 +370,13 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 	deploymentAckHandler := ProvideDeploymentAckHandler(deploymentRepository)
 	webSocketController := ProvideWebSocketController(manager, eventHub, platformGatewayService, deploymentAckHandler, configConfig)
 	gatewayInternalAPIService := services.NewGatewayInternalAPIService(llmProviderRepository, llmProxyRepository, deploymentRepository, gatewayRepository, infraResourceManager, v)
-	gatewayInternalController := controllers.NewGatewayInternalController(platformGatewayService, gatewayInternalAPIService, apiKeyRepository, aiApplicationRepository)
+	gatewayAuditIngest := ProvideGatewayAuditIngest(configConfig, openChoreoAuditSink, aiApplicationRepository, agentThunderClientRepository, logger)
+	gatewayInternalController := controllers.NewGatewayInternalController(platformGatewayService, gatewayInternalAPIService, apiKeyRepository, aiApplicationRepository, gatewayAuditIngest)
+	auditTrailService, err := ProvideAuditTrailService(configConfig, logger)
+	if err != nil {
+		return nil, err
+	}
+	auditLogController := controllers.NewAuditLogController(auditTrailService)
 	monitorController := controllers.NewMonitorController(monitorManagerService)
 	monitorScoresService := services.NewMonitorScoresService(scoreRepository, monitorRepository, logger)
 	monitorScoresController := controllers.NewMonitorScoresController(monitorScoresService)
@@ -410,6 +427,7 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 		MCPProxyController:               mcpProxyController,
 		WebSocketController:              webSocketController,
 		GatewayInternalController:        gatewayInternalController,
+		AuditLogController:               auditLogController,
 		MonitorController:                monitorController,
 		MonitorScoresController:          monitorScoresController,
 		MonitorScoresPublisherController: monitorScoresPublisherController,
@@ -468,7 +486,7 @@ var instrumentationProviderSet = wire.NewSet(
 	ProvideDefaultPythonVersion,
 )
 
-var controllerProviderSet = wire.NewSet(controllers.NewAgentController, controllers.NewAgentKindController, controllers.NewInfraResourceController, controllers.NewAgentTokenController, controllers.NewRepositoryController, controllers.NewEnvironmentController, controllers.NewGatewayController, controllers.NewLLMController, controllers.NewLLMDeploymentController, controllers.NewLLMProviderAPIKeyController, controllers.NewLLMProxyAPIKeyController, controllers.NewAgentAPIKeyController, controllers.NewA2AAgentCardController, controllers.NewA2AProxyController, controllers.NewLLMProxyDeploymentController, controllers.NewMCPProxyController, ProvideWebSocketController, controllers.NewGatewayInternalController, controllers.NewMonitorController, controllers.NewMonitorScoresController, controllers.NewMonitorScoresPublisherController, controllers.NewEvaluatorController, controllers.NewCatalogController, ProvideAgentBuildOptionsController, controllers.NewAgentConfigurationController, controllers.NewGitSecretController, controllers.NewIdentityController, controllers.NewMCPProxyScopeController, controllers.NewAgentIdentityController)
+var controllerProviderSet = wire.NewSet(controllers.NewAgentController, controllers.NewAgentKindController, controllers.NewInfraResourceController, controllers.NewAgentTokenController, controllers.NewRepositoryController, controllers.NewEnvironmentController, controllers.NewGatewayController, controllers.NewLLMController, controllers.NewLLMDeploymentController, controllers.NewLLMProviderAPIKeyController, controllers.NewLLMProxyAPIKeyController, controllers.NewAgentAPIKeyController, controllers.NewA2AAgentCardController, controllers.NewA2AProxyController, controllers.NewLLMProxyDeploymentController, controllers.NewMCPProxyController, ProvideWebSocketController, controllers.NewGatewayInternalController, ProvideGatewayAuditIngest, controllers.NewAuditLogController, ProvideAuditTrailService, controllers.NewMonitorController, controllers.NewMonitorScoresController, controllers.NewMonitorScoresPublisherController, controllers.NewEvaluatorController, controllers.NewCatalogController, ProvideAgentBuildOptionsController, controllers.NewAgentConfigurationController, controllers.NewGitSecretController, controllers.NewIdentityController, controllers.NewMCPProxyScopeController, controllers.NewAgentIdentityController)
 
 var testClientProviderSet = wire.NewSet(
 	ProvideTestOpenChoreoClient,
@@ -490,18 +508,39 @@ func ProvideLogger() *slog.Logger {
 	return slog.Default()
 }
 
+// OpenChoreoAuditSink is the sink writing OpenChoreo audit records, shared by
+// the recorder and the gateway audit ingest. Sink is nil when the OpenChoreo
+// format is disabled (AUDIT_OPENCHOREO_SINK_ENABLED).
+type OpenChoreoAuditSink struct {
+	Sink audit.Sink
+}
+
+// ProvideOpenChoreoAuditSink builds the OpenChoreo audit sink when enabled.
+func ProvideOpenChoreoAuditSink(cfg config.Config) OpenChoreoAuditSink {
+	if !cfg.Audit.Enabled || !cfg.Audit.OpenChoreoSinkEnabled {
+		return OpenChoreoAuditSink{}
+	}
+	return OpenChoreoAuditSink{Sink: audit.NewOpenChoreoSink()}
+}
+
 // ProvideAuditRecorder builds the audit recorder.
 //
 // Records go to stdout as structured JSON, where the platform's log pipeline
 // already collects them. That also gives the trail a copy this service cannot
 // rewrite, since there is no write path from here back into the log store.
-func ProvideAuditRecorder(cfg config.Config, logger *slog.Logger) audit.Recorder {
+// With the OpenChoreo sink enabled, each record is also written in OpenChoreo's
+// audit format, which OpenChoreo's logs module routes to its audit store.
+func ProvideAuditRecorder(cfg config.Config, logger *slog.Logger, oc OpenChoreoAuditSink) audit.Recorder {
 	if !cfg.Audit.Enabled {
 		logger.Warn("audit logging is disabled; no record of privileged operations will be kept",
 			"setting", "AUDIT_ENABLED")
 		return audit.NewNoopRecorder()
 	}
-	return audit.NewRecorder(audit.NewStdoutSink(), logger, audit.Config{
+	sinks := []audit.Sink{audit.NewStdoutSink()}
+	if oc.Sink != nil {
+		sinks = append(sinks, oc.Sink)
+	}
+	return audit.NewRecorder(audit.NewMultiSink(sinks...), logger, audit.Config{
 		BufferSize:    cfg.Audit.BufferSize,
 		BatchSize:     cfg.Audit.BatchSize,
 		FlushInterval: time.Duration(cfg.Audit.FlushIntervalMs) * time.Millisecond,
@@ -679,8 +718,50 @@ func ProvidePublisherProvisioner(cfg config.Config, encryptionKey []byte, logger
 
 var loggerProviderSet = wire.NewSet(
 	ProvideLogger,
+	ProvideOpenChoreoAuditSink,
 	ProvideAuditRecorder,
 )
+
+// ProvideGatewayAuditIngest builds the gateway audit ingest, or a disabled one.
+func ProvideGatewayAuditIngest(
+	cfg config.Config,
+	oc OpenChoreoAuditSink,
+	apps repositories.AIApplicationRepository,
+	identities repositories.AgentThunderClientRepository,
+	logger *slog.Logger,
+) controllers.GatewayAuditIngest {
+	ingest := cfg.Audit.GatewayIngest
+	if !ingest.Enabled || oc.Sink == nil {
+		return controllers.GatewayAuditIngest{}
+	}
+	return controllers.GatewayAuditIngest{
+		Service:      services.NewGatewayAuditIngestService(oc.Sink, apps, identities, time.Duration(ingest.ResolverCacheTTLSeconds)*time.Second, logger),
+		MaxBodyBytes: ingest.MaxBodyBytes,
+	}
+}
+
+// ProvideAuditTrailService builds the audit trail reader. Without an audit
+// observer URL it has no client and reports the trail as not configured.
+func ProvideAuditTrailService(cfg config.Config, logger *slog.Logger) (services.AuditTrailService, error) {
+	reader := cfg.Audit.Reader
+	var client2 ocauditsvc.Client
+	if reader.QueryEnabled() {
+		var err error
+		client2, err = ocauditsvc.NewClient(&ocauditsvc.Config{
+			BaseURL: reader.ObserverURL,
+
+			AuthProvider: auth.NewAuthProvider(auth.Config{
+				TokenURL:     reader.TokenURL,
+				ClientID:     reader.ClientID,
+				ClientSecret: reader.ClientSecret,
+			}),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("audit trail reader: %w", err)
+		}
+	}
+	return services.NewAuditTrailService(client2, reader.ExportMaxRecords, time.Duration(reader.ExportSettleSeconds)*time.Second, logger), nil
+}
 
 var repositoryProviderSet = wire.NewSet(
 	ProvideGatewayRepository,

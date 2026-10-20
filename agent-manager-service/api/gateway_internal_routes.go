@@ -47,6 +47,10 @@ func RegisterGatewayInternalRoutes(rr *middleware.RouteRegistrar, ctrl controlle
 	// Gateway manifest endpoint
 	rr.HandleFuncWithValidation("POST /gateways/{gatewayId}/manifest", ctrl.PushGatewayManifest)
 
+	// Agent activity the gateway observed, delivered by its OTel analytics
+	// publisher (OTLP/HTTP JSON) for the audit trail.
+	rr.HandleFuncWithValidation("POST /audit/gateway-events", ctrl.IngestAuditEvents)
+
 	// LLM Provider endpoints
 	rr.HandleFuncWithValidation("GET /llm-providers/{providerId}", ctrl.GetLLMProvider)
 

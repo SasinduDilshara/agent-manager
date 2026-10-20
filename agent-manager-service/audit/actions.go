@@ -50,6 +50,9 @@ const (
 	ClassRead ActionClass = "read"
 	// ClassSystem covers AMS-initiated events: startup posture, reconcilers, purge.
 	ClassSystem ActionClass = "system"
+	// ClassActivity covers what agents did at runtime, as observed by an AI
+	// gateway: LLM calls, MCP tool calls, calls to other agents.
+	ClassActivity ActionClass = "activity"
 )
 
 // Platform-level actions. Unlike resource actions these are not derived from a

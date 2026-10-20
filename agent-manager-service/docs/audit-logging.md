@@ -6,7 +6,7 @@ Agent Manager records who did what, to which resource, with what outcome. This d
 
 Every state-changing API call, every authorization denial, and every rejected token *attempts* one record. Records are written to **stdout as structured JSON** tagged `log_type=audit`, for the cluster log pipeline to collect.
 
-"Attempts" rather than "produces", because two paths deliberately emit less than one record per event: authentication and internal-surface denials are rate-limited per source (see [Denials](#denials)), and ordinary buffered records are dropped rather than allowed to block a request when the buffer fills. The two end up in different places. Suppressed JWT authentication failures are reported in the trail: their count rides on the next emitted `authn:failure` record as `suppressedCount` (repeats on the internal surface are suppressed without a count). Buffer drops are counted and logged only to the application log (`audit buffer full; event dropped`, with a running `droppedTotal`) — they do **not** reach the audit trail, because `system:audit-dropped` is registered but nothing emits it (see [Not yet covered](#not-yet-covered)). Either way, the record count is a floor, not an exact tally. The one path with no such allowance is `audit.Begin`, which refuses the operation rather than losing the record (see [Reliability](#reliability)).
+"Attempts" rather than "produces", because two paths deliberately emit less than one record per event: authentication and internal-surface denials are rate-limited per source (see [Denials](#denials)), and ordinary buffered records are dropped rather than allowed to block a request when the buffer fills. The two end up in different places. Suppressed JWT authentication failures are reported in the trail: their count rides on the next emitted `authn:failure` record as `suppressedCount` (repeats on the internal surface are suppressed without a count). Buffer drops are counted, logged to the application log (`audit buffer full; event dropped`, with a running `droppedTotal`), and reported in the trail itself as a `system:audit-dropped` record carrying the running total (see [Reliability](#reliability)). Either way, the record count is a floor, not an exact tally. The one path with no such allowance is `audit.Begin`, which refuses the operation rather than losing the record (see [Reliability](#reliability)).
 
 Coverage comes from two tiers:
 
@@ -24,6 +24,7 @@ Five surfaces are covered, and the `surface` field on every record says which on
 | `internal` | The gateway-facing internal server (no JWT, `api-key` header) | The gateway |
 | `system` | Reconcilers and schedulers, plus startup posture | `system:<component>`, with `onBehalfOf` when a user requested the work earlier |
 | `publisher` | The evaluation job publishing monitor scores | The `amp-publisher-*` audience |
+| `gateway` | Agent activity observed by an AI gateway and relayed here (see [Agent activity observed by the gateway](#agent-activity-observed-by-the-gateway)) | The agent, when it could be resolved; otherwise `anonymous`, with the caller's `applicationId` and `authSubject` in the details |
 
 When a semantic event describes a successful request, the coverage tier stands down so the trail carries one record rather than two. On failure the coverage record is always kept — a request rejected before it reached the service emits nothing semantic, and that rejection is exactly what must not go unrecorded.
 
@@ -139,6 +140,47 @@ Where a secret must be referenced, `audit.SecretRef` stores a SHA-256 prefix plu
 
 Resource **names** are recorded deliberately, including secret names. A name is not a credential, and "which git secret was deleted" is where an investigation starts.
 
+## Agent activity observed by the gateway
+
+The control-plane tiers above record what people and services did *through Agent Manager*. What an agent does at runtime — the LLM calls it makes, the MCP tools it calls, the other agents it invokes — never passes through this service. It passes through the organization's AI gateways, so the gateway is where it is observed.
+
+Each gateway's OTel analytics publisher sends one OTLP/HTTP JSON log record per request it handled to the internal endpoint `POST /api/internal/v1/audit/gateway-events`, authenticated with the gateway's own token (`api-key` header, as for every internal route). The organization of every relayed record is the one the gateway's credential belongs to, never anything named in the batch. For each record the service:
+
+1. **Reads only an allowlist of attributes** — model and token usage, MCP method and tool, upstream status, guardrail outcome, latency. Request and response headers and bodies, which the gateway may have captured, are never read, so credentials and prompt content cannot reach the trail.
+2. **Names the acting agent** — from the API key's application or the token subject, looked up only within the delivering gateway's organization (`details.resolution` says how it was resolved). A request whose agent cannot be resolved is recorded with an `anonymous` actor (id `anonymous`: OpenChoreo's reader skips records without an actor id) and keeps `applicationId` and `authSubject` in its details.
+3. **Classifies the request** by the kind of API it reached: `llm:call`, `mcp:tool-call`, `mcp:call`, `agent:invoke`, or `api:call` for anything else. A request refused with 401 or 403, or blocked by a guardrail (outcome `deny`), is raised from info to warning; a record with no response status is recorded as a failure.
+4. **Gives it a deterministic `eventId`**, derived from the gateway id and the record exactly as delivered. A batch the gateway resends after a timeout is stored again under the same ids. An export delivers each record once and counts the extra copies in `duplicatesSkipped`; a query (and the console) shows every stored copy, so a resent batch can appear twice there under one `eventId`.
+
+Records are written synchronously before the batch is acknowledged. A batch that cannot be written — or whose agent lookup fails, since writing it unattributed would lose the attribution for good — is answered `503` with `Retry-After`, which the publisher retries; only a batch that can never be accepted (malformed, too large, wrong content type) is a `4xx`, which the publisher drops. Records within an accepted batch that cannot be relayed (an unexpected scope or event name, an unreadable timestamp) are summarised in one `system:audit-ingest-rejected` record per batch, naming the most frequent reason. The delivering calls themselves are recorded as `audit-log:ingest`, at most once per gateway every five minutes.
+
+**These records are best effort, and say so.** Each carries `details.provenance: "observed-best-effort"`: the gateway buffers records in memory and can lose them if it restarts or cannot reach this service for longer than its queue holds. Use them to answer "what did this agent do", not as proof that something did *not* happen.
+
+The gateway's own traffic log is separate from this: when enabled (`apiGateway.trafficLog.enabled`), the gateway writes request/response metadata to a file in the gateway-runtime pod (`/var/log/wso2/traffic/traffic.log` by default). That file is for operators and never enters the audit trail. Header and body capture are off by default. The gateway captures them once for every consumer, so with the audit feed on, whatever the traffic log captures also travels — unmasked, since `maskedHeaders` applies to the log file only — in the records sent here. This service never reads those attributes (step 1), but credentials should not make the trip: turn header capture on only where it is needed.
+
+## The OpenChoreo audit store
+
+With `AUDIT_OPENCHOREO_SINK_ENABLED=true` every control-plane record is also written to stdout as an OpenChoreo audit line (schema `1.0`, `"msg":"AUDIT-LOG"`, `producer: agent-manager-service`), alongside the `log_type=audit` record described above, so an existing log pipeline keeps working. Gateway-observed records are written **only** as OpenChoreo audit lines: a pipeline that collects `log_type=audit` alone does not see agent activity. The observability plane's log collector routes the audit lines from this service's pods to the `audit-logs-*` index, the same store OpenChoreo's own API and Observer write to.
+
+In that line the organization (OU id) is `resource.namespace`, and everything specific to Agent Manager sits under `metadata.amp`. Because every organization shares one OpenChoreo namespace, the reader below always forces both `resource.namespace` and `producer` server-side.
+
+This requires OpenChoreo 1.3 or later with the logs module's audit routing enabled (`auditLogs.enabled=true`, with `agent-manager-service` in the `wso2-amp` namespace listed as a producer).
+
+## Reading the trail
+
+Organization administrators read the trail from **Audit Logs** in the console, or through the API. The console offers the page only where reading is configured (`AUDIT_OBSERVER_URL` set, reported to it as `auditTrailEnabled` by `GET /api/v1/config`) and to callers holding `audit-log:read`.
+
+| Route | Permission | What it does |
+|---|---|---|
+| `GET /orgs/{orgName}/audit-logs` | `audit-log:read` | Records in a window (at most 366 days), filtered and searched, newest first; at most 1000 per call with the exact `total` |
+| `GET /orgs/{orgName}/audit-logs/filter-values` | `audit-log:read` | Distinct values of one field, with counts, for filter pickers |
+| `GET /orgs/{orgName}/audit-logs/export` | `audit-log:export` | Every matching record as NDJSON, oldest first, ending with a manifest line |
+
+The organization is always the caller's token's, never the path's or the query's. Records that belong to no organization — `system:startup` and `system:audit-dropped` — are in the store but never returned by these routes; operators find them in the `log_type=audit` output or the store itself. The service reads the store through OpenChoreo's Observer using its own client credential (`amp-audit-reader-client`, granted only `auditlogs:view`), so the reader cannot write and a user's token is never forwarded.
+
+**An export states whether it is complete.** Its last line, `{"manifest": {...}}`, gives `exportedCount`, the store's exact `storeCount` for the same query, `complete`, a `reason` when incomplete, and the SHA-256 of every byte before it. A file with no manifest line was cut off. The window ends at least `AUDIT_EXPORT_SETTLE_SECONDS` before the request, so records still in transit are not counted against the export.
+
+Reading is recorded too, and names the person: every query and every filter-values lookup writes an `audit-log:read` record with the window, the filters and how many records it returned (the console's Audit Logs page writes one for its query and one per filter picker it fills). `audit-log:export` is fail-closed — if the intent record cannot be written, the export is refused (`503`) before any record is sent — and its outcome record carries what was delivered and the file's SHA-256.
+
 ## Looking things up
 
 Records are newline-delimited JSON on stdout. These work with `jq` against a collected log file and translate directly to a SIEM query.
@@ -244,7 +286,7 @@ Authorization is always enforced: every audited route carries the `requiredPermi
 | Ordinary records (`audit.Record`) | Asynchronous, buffered. On overflow, dropped and counted — never blocks a request. A slow sink must not become an outage. |
 | Security-critical operations (`audit.Begin`) | Synchronous. If the record cannot be written the operation is **refused**, because an untraceable privileged change is worse than a failed one. |
 
-Drops are counted and logged to the application log, at most once every 30 seconds, with the running total. A trail that silently loses records is worse than one that admits it — which is why emitting `system:audit-dropped` into the trail itself is listed under [Not yet covered](#not-yet-covered).
+Drops are counted and logged to the application log, at most once every 30 seconds, with the running total. The trail admits them as well: whenever events have been dropped since the last report, a `system:audit-dropped` record (critical, with `droppedTotal` and the `sink`) is written at most once every 30 seconds, and once more on shutdown. It goes straight to the sink rather than through the buffer that just overflowed.
 
 **The honest limit of "fail-closed" here:** a successful write means the record reached the process's output, not that it reached durable storage. This catches the common failure — the process is running but its sink is broken — but it is not the atomic "change and record commit together" guarantee a same-database write would give. `audit.Begin` therefore writes an *intent* record before an external mutation and an *outcome* record after. A record left at `outcome: "unknown"` means the process died mid-operation; that orphan is deliberate forensic signal, not a defect.
 
@@ -264,6 +306,15 @@ The buffer is flushed on shutdown **after both HTTP servers stop**, so in-flight
 | `AUDIT_BUFFER_SIZE` | `4096` | Queued events before dropping. |
 | `AUDIT_BATCH_SIZE` | `200` | Events written per sink call. |
 | `AUDIT_FLUSH_INTERVAL_MS` | `1000` | Maximum time an event waits before being written. |
+| `AUDIT_OPENCHOREO_SINK_ENABLED` | `false` | Also write every record as an OpenChoreo audit line, for the `audit-logs-*` store. |
+| `AUDIT_GATEWAY_INGEST_ENABLED` | `false` | Accept gateway-observed agent activity. Requires the OpenChoreo sink. |
+| `AUDIT_GATEWAY_INGEST_MAX_BODY_BYTES` | `4194304` | Largest batch accepted (after gzip decoding). |
+| `AUDIT_GATEWAY_INGEST_RESOLVER_CACHE_TTL_SECONDS` | `60` | How long an agent lookup is cached. |
+| `AUDIT_OBSERVER_URL` | — | OpenChoreo Observer the trail is read from. Unset means the read routes answer `503`. |
+| `AUDIT_READER_TOKEN_URL` | the IdP token URL | Token endpoint for the reader credential. |
+| `AUDIT_READER_CLIENT_ID` / `AUDIT_READER_CLIENT_SECRET` | — | The reader credential; required once `AUDIT_OBSERVER_URL` is set. |
+| `AUDIT_EXPORT_MAX_RECORDS` | `500000` | Largest export; a larger one is refused with `400`. |
+| `AUDIT_EXPORT_SETTLE_SECONDS` | `60` | How far before the request an export's window must end. |
 
 Helm: `agentManagerService.config.audit.*`.
 
@@ -357,6 +408,7 @@ The registry is the source of truth (`audit/actions.go`, `audit/actions_domain.g
 | `agent:create` | config | 2 notice | `agentName`, `agentType` |
 | `agent:delete` | config | 3 warning | `agentName` |
 | `agent:deploy` | deployment | 2 notice | `agentName`, `environment`, `imageId`, `isProduction` |
+| `agent:invoke` | activity | 1 info | gateway activity keys ¹ |
 | `agent:promote` | deployment | 3 warning | `agentName`, `environment`, `isProduction`, `sourceEnv`, `targetEnv` |
 | `agent:read` | read | 1 info | — |
 | `agent:remove-a2a-proxy` | credential | 4 critical | `agentName`, `upstreamAuthChanged`, `upstreamAuthHeader` |
@@ -368,6 +420,10 @@ The registry is the source of truth (`audit/actions.go`, `audit/actions_domain.g
 | `api-key:revoke` | credential | 4 critical | `gatewayCount`, `keyName`, `ownerName`, `ownerType` |
 | `api-key:rotate` | credential | 4 critical | `expiresAt`, `gatewayConnected`, `gatewayCount`, `keyName`, `ownerName`, `ownerType` |
 | `api-key:sync` | read | 2 notice | `keyCount` |
+| `api:call` | activity | 1 info | gateway activity keys ¹ |
+| `audit-log:export` | read | 3 warning | `complete`, `endTime`, `exportedCount`, `filters`, `format`, `sha256`, `startTime` |
+| `audit-log:ingest` | system | 1 info | — |
+| `audit-log:read` | read | 2 notice | `endTime`, `filters`, `operation`, `returnedCount`, `startTime`, `totalCount` |
 | `authn:failure` | authn | 3 warning | `authHeader`, `reason` |
 | `authz:deny` | authz | 3 warning | `grantedScopes`, `missingScope`, `reason` |
 | `authz:root-ou-bypass` | authz | 4 critical | `rootOUBypass` |
@@ -386,6 +442,9 @@ The registry is the source of truth (`audit/actions.go`, `audit/actions_domain.g
 | `git-secret:delete` | credential | 4 critical | — |
 | `group:add-member` | identity | 4 critical | `groupName`, `memberCount`, `memberTypes`, `members` |
 | `group:remove-member` | identity | 4 critical | `groupName`, `memberCount`, `memberTypes`, `members` |
+| `llm:call` | activity | 1 info | gateway activity keys ¹ |
+| `mcp:call` | activity | 1 info | gateway activity keys ¹ |
+| `mcp:tool-call` | activity | 1 info | gateway activity keys ¹ |
 | `monitor-score:publish` | config | 1 info | `monitorId`, `runId`, `scoreCount` |
 | `monitor:create` | config | 1 info | `agentName`, `evaluators`, `monitorName`, `monitorType` |
 | `monitor:delete` | config | 2 notice | `agentName`, `evaluators`, `monitorName`, `monitorType` |
@@ -406,11 +465,14 @@ The registry is the source of truth (`audit/actions.go`, `audit/actions_domain.g
 | `system:agent-identity-exhausted` | credential | 3 warning | `agentName`, `environment`, `reason` |
 | `system:agent-identity-provisioned` | credential | 2 notice | `agentName`, `clientId`, `environment` |
 | `system:audit-dropped` | system | 4 critical | `droppedTotal`, `sink` |
+| `system:audit-ingest-rejected` | system | 3 warning | `gatewayId`, `reason`, `rejectedCount` |
 | `system:startup` | system | 2 notice | `instance`, `sinks`, `version` |
 | `user:create` | identity | 4 critical | `attributeCount`, `attributeKeys`, `containsSensitiveKey`, `email`, `groups`, `userType`, `username` |
 | `user:delete` | identity | 4 critical | `username` |
 | `user:invite` | identity | 4 critical | `attributeCount`, `attributeKeys`, `containsSensitiveKey`, `email`, `groups`, `userType`, `username` |
 | `user:update` | identity | 4 critical | `attributeCount`, `attributeKeys`, `containsSensitiveKey`, `email`, `groups`, `userType`, `username` |
+
+¹ The gateway activity keys, each set only when the gateway reported the value: `gatewayId`, `provenance`, `resolution`, `applicationId`, `authSubject`, `apiId`, `apiKind`, `apiContext`, `route`, `upstreamHost`, `upstreamStatus`, `faultType`, `provider`, `operation`, `requestModel`, `responseModel`, `inputTokens`, `outputTokens`, `totalTokens`, `costUsd`, `mcpMethod`, `mcpSessionId`, `toolName`, `promptName`, `resourceUri`, `guardrailHit`, `guardrailName`, `backendLatencyMs`. A refused request is raised to 3 warning at the emit site.
 
 Read actions (`agent:read`, `project:read`, `environment:read`) are declared so every MCP tool can name what it does; they are classified as reads and not recorded.
 
@@ -418,7 +480,7 @@ Read actions (`agent:read`, `project:read`, `environment:read`) are declared so 
 
 One record per action, produced by the audit emitter on `main` — `audit.Begin`/`Complete`, `Record`, `RecordSync`, `RecordAncillary`, the coverage envelope and `AuthFailureRecorder` — called with the same options, route pattern and permission as the production emit site named beside it, then serialized by the stdout sink's JSON handler. Each was checked for: class and severity matching the registry, no `_droppedKeys`, and for `Begin` actions an intent record with outcome `unknown` whose `eventId` the outcome record carries as `attemptEventId`. Only the outcome record is shown. Identifiers, names and timestamps are illustrative; every key and the shape of every value is real.
 
-Not shown: the three read actions, which are never recorded, and `system:audit-dropped`, which nothing emits yet.
+Not shown: the three read actions, which are never recorded, and the actions added with the audit store and gateway ingest (`audit-log:*`, the gateway activity actions, `system:audit-ingest-rejected`, and `system:audit-dropped`, which is now emitted); their record shape is described under [Agent activity observed by the gateway](#agent-activity-observed-by-the-gateway) and [Reading the trail](#reading-the-trail).
 
 Where two emit sites share an action, the sample shows the first listed; the others differ as noted.
 
@@ -2920,5 +2982,5 @@ No semantic emit: the coverage envelope for the route.
 Semantic-event coverage is incomplete, not absent, in these places: some events are never emitted, and others are emitted but not registered, so they lack a detail schema. Each is a real gap in coverage today:
 
 - **Thunder's own events** — see the authentication gap above. This is the one gap that cannot be closed from this repository.
-- **`system:audit-dropped`** — registered, but the recorder only logs drops to the application log; no record reaches the trail.
+- **Gateway-observed activity is best effort** — records the gateway loses before delivery (a restart, or an outage longer than its queue) leave no trace here; see [Agent activity observed by the gateway](#agent-activity-observed-by-the-gateway).
 - **`thunder-url:set` / `:delete`** — emitted (fail-closed) but not registered, so they are classified by heuristic (`config`, info / notice) and their `handle` and `url` details are dropped into `_droppedKeys`.

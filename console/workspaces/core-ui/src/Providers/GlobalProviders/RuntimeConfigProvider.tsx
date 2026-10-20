@@ -21,6 +21,7 @@ import {
   useRuntimeConfig,
   setObserverBaseUrl,
   setConsoleAnalyticsEnabled,
+  setAuditTrailEnabled,
 } from "@agent-management-platform/api-client";
 import { FullPageLoader } from "@agent-management-platform/views";
 
@@ -45,9 +46,17 @@ export function RuntimeConfigProvider({ children }: { children: React.ReactNode 
       // no flag of its own. On error data is undefined, which leaves analytics
       // off — the safe direction for telemetry.
       setConsoleAnalyticsEnabled(data?.consoleAnalyticsEnabled);
+      // Likewise the service's own answer; on error the Audit Logs page stays off.
+      setAuditTrailEnabled(data?.auditTrailEnabled);
       setSynced(true);
     }
-  }, [isLoading, isError, data?.observerBaseUrl, data?.consoleAnalyticsEnabled]);
+  }, [
+    isLoading,
+    isError,
+    data?.observerBaseUrl,
+    data?.consoleAnalyticsEnabled,
+    data?.auditTrailEnabled,
+  ]);
 
   // Gate rendering until discovery settles so observability pages never
   // render against a transiently-empty observer URL. On error/timeout we

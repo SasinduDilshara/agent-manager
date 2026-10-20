@@ -45,6 +45,7 @@ import {
   LazyAddLLMProvidersOrg,
   LazyViewMCPServerComponent,
   LazyGatewaysOrg,
+  LazyAuditLogsOrg,
   LazyThunderInstancesOrg,
   LazySettingsOrg,
   LazyDeploymentPipelinesOrg,
@@ -281,6 +282,12 @@ export function RootRouter() {
             <Route
               path={relativeRouteMap.children.org.children.gateways.path + "/*"}
               element={<LazyGatewaysOrg />}
+            />
+            <Route
+              path={
+                relativeRouteMap.children.org.children.auditLogs.path + "/*"
+              }
+              element={<LazyAuditLogsOrg />}
             />
             <Route
               path={

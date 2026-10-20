@@ -295,6 +295,16 @@ install_observability_plane() {
     # because no collector tails that node's container logs. operator=Exists tolerates
     # any taint, so both the gvisor and kata taints are covered. Harmless for all-runc
     # clusters (the toleration just matches nothing).
+    #
+    # auditLogs.enabled routes audit records from the chart's default producers
+    # (openchoreo-api, observer) to the audit-logs-* index. Agent Manager is not
+    # added as a producer here: in this dev setup it runs under docker compose,
+    # outside the cluster, so Fluent Bit never sees its container log. The
+    # quick-start installer, which runs it in-cluster, adds it.
+    #
+    # fluentBitCustomizations.clusterInstance is required by the logs module
+    # (0.6.0+) whenever fluent-bit is on: it stamps every record with the source
+    # cluster.
     echo "Enabling log collection in Observability Plane..."
     helm upgrade observability-logs-opensearch \
       oci://ghcr.io/openchoreo/helm-charts/observability-logs-opensearch \
@@ -303,7 +313,9 @@ install_observability_plane() {
       --version "${OBSERVABILITY_LOGS_OPENSEARCH_VERSION}" \
       --reuse-values \
       --set fluent-bit.enabled=true \
-      --set "fluent-bit.tolerations[0].operator=Exists"
+      --set "fluent-bit.tolerations[0].operator=Exists" \
+      --set "fluentBitCustomizations.clusterInstance=${CLUSTER_NAME}" \
+      --set auditLogs.enabled=true
     echo "✅ OpenSearch Log collection enabled"
 
     echo "Enabling opensearch based tracing module..."

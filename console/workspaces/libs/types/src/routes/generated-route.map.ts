@@ -65,6 +65,11 @@ export const generatedRouteMap =  {
             }
           }
         },
+        "auditLogs": {
+          "path": "/org/:orgId/audit-logs",
+          "wildPath": "/org/:orgId/audit-logs/*",
+          "children": {}
+        },
         "gateways": {
           "path": "/org/:orgId/gateways",
           "wildPath": "/org/:orgId/gateways/*",

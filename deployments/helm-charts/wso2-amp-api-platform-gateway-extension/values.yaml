@@ -258,6 +258,56 @@ apiGateway:
     #           key: subscription-key
     systemExtraEnv: []
 
+  # Agent audit feed. The gateway's OTel analytics publisher sends one record per
+  # request it handles (LLM, MCP and API calls) to Agent Manager's audit ingest,
+  # authenticating with this gateway's own registration token (gateway.tokenSecret).
+  # Records are queued in memory and delivered best effort: when Agent Manager is
+  # unreachable for longer than the queue absorbs, new records are dropped and
+  # counted by the policy engine's analytics drop metric.
+  audit:
+    enabled: false
+    # Full OTLP/HTTP logs URL of the ingest. Empty derives it from controlPlane:
+    # <scheme>://<controlPlane.host>/api/internal/v1/audit/gateway-events.
+    endpoint: ""
+    # Records held in memory while the ingest is slow or down.
+    queueCapacity: 10000
+    # Records per export request, and the longest a record waits for a batch.
+    batchSize: 100
+    flushInterval: "5s"
+    # Request paths that produce no audit record (and no traffic-log line).
+    # /otel is the agents' trace export route: telemetry, not an agent action.
+    ignorePathPrefixes:
+      - "/otel"
+
+  # Local traffic log: one JSON line per request written to a file inside the
+  # gateway-runtime pod, for an operator to read directly
+  # (kubectl exec <gateway-runtime pod> -- cat <path>). Independent of audit.
+  trafficLog:
+    enabled: false
+    # Must sit under the runtime's traffic-log volume, mounted at /var/log/wso2.
+    path: "/var/log/wso2/traffic/traffic.log"
+    # Rotation size. The volume holds at most 2 x this (live file + one backup).
+    maxSizeMB: 100
+    # Capture is shared by every consumer of the gateway's request collector.
+    # With audit.enabled the analytics publisher sends what is captured to
+    # Agent Manager too, and it does not mask headers (maskedHeaders applies
+    # to this log only): captured Authorization and API-key values would
+    # travel with each record. Agent Manager never reads or stores them, but
+    # leave capture off where the audit feed is on unless it is needed.
+    requestHeaders: false
+    responseHeaders: false
+    # Bodies carry prompts, completions and tool arguments. Off unless needed.
+    requestBody: false
+    responseBody: false
+    # Header values replaced with **** in this log. Includes Agent Manager's own
+    # key headers (API-Key on LLM proxies, x-amp-api-key on the trace route).
+    maskedHeaders:
+      - "authorization"
+      - "x-api-key"
+      - "x-jwt-assertion"
+      - "api-key"
+      - "x-amp-api-key"
+
 # Bootstrap Job configuration
 #
 # The job runs as a pre-install, pre-upgrade AND pre-rollback hook, so `helm rollback` now

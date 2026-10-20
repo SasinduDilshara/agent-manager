@@ -26,4 +26,9 @@ export interface ConfigResponse {
    * that one switch governs the whole path. Absent is treated as false.
    */
   consoleAnalyticsEnabled?: boolean;
+  /**
+   * Whether this deployment can read the audit trail back (the service's
+   * AUDIT_OBSERVER_URL is set). Absent is treated as false.
+   */
+  auditTrailEnabled?: boolean;
 }

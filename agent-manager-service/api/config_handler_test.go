@@ -166,3 +166,31 @@ func TestConfigEndpoint_PreflightOptionsSucceeds(t *testing.T) {
 		t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, origin)
 	}
 }
+
+// TestConfigEndpoint_ReportsWhetherTheAuditTrailCanBeRead: the console offers
+// its Audit Logs page only where the service can read the trail back.
+func TestConfigEndpoint_ReportsWhetherTheAuditTrailCanBeRead(t *testing.T) {
+	cfg := config.GetConfig()
+	orig := cfg.Audit.Reader.ObserverURL
+	t.Cleanup(func() { cfg.Audit.Reader.ObserverURL = orig })
+
+	for _, tc := range []struct {
+		observerURL string
+		want        bool
+	}{
+		{"", false},
+		{"http://observer.openchoreo-observability-plane.svc.cluster.local:8080", true},
+	} {
+		cfg.Audit.Reader.ObserverURL = tc.observerURL
+		rec := httptest.NewRecorder()
+		setupConfigMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/config", nil))
+
+		var body spec.ConfigResponse
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.AuditTrailEnabled == nil || *body.AuditTrailEnabled != tc.want {
+			t.Errorf("observerURL %q: auditTrailEnabled = %v, want %v", tc.observerURL, body.AuditTrailEnabled, tc.want)
+		}
+	}
+}

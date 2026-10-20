@@ -42,6 +42,7 @@ import {
   Gauge,
   Layers,
   MonitorCheck,
+  ScrollText,
 } from "@wso2/oxygen-ui-icons-react";
 import {
   generatePath,
@@ -51,6 +52,7 @@ import {
 } from "react-router-dom";
 import { absoluteRouteMap } from "@agent-management-platform/types";
 import {
+  isAuditTrailEnabled,
   useGetAgent,
   useTokenScopes,
 } from "@agent-management-platform/api-client";
@@ -141,6 +143,8 @@ export function useNavigationItems(): Array<
       identityRoles: true,
       identityGroups: true,
       agentIdentities: true,
+      // Not a permission: the deployment must be able to read the trail back.
+      auditLogs: isAuditTrailEnabled(),
     };
     if (!enforced) return showAll;
     // An unresolved token is handled below by rendering no navigation at all,
@@ -176,6 +180,7 @@ export function useNavigationItems(): Array<
       // the org scopes and gate the Settings tabs; these pages read the
       // agent-identity API and belong to its scope.
       agentIdentities: s.has("amp:agent-identity:read"),
+      auditLogs: isAuditTrailEnabled() && s.has("amp:audit-log:read"),
     };
   }, [enforced, scopes]);
 
@@ -835,6 +840,24 @@ export function useNavigationItems(): Array<
           pathname,
         ),
       },
+      ...(navVisibility.auditLogs
+        ? [
+            {
+              label: "Audit Logs",
+              type: "item" as const,
+              icon: <ScrollText size={20} />,
+              href: generatePath(
+                absoluteRouteMap.children.org.children.auditLogs.path,
+                { orgId },
+              ),
+              isActive: !!matchPath(
+                absoluteRouteMap.children.org.children.auditLogs.wildPath,
+                pathname,
+              ),
+              pinBottom: true,
+            },
+          ]
+        : []),
       ...(navVisibility.identityUsers ||
       navVisibility.identityRoles ||
       navVisibility.identityGroups

@@ -155,3 +155,47 @@ Resolve the IDP client secret from secret or direct value
   value: {{ .Values.agentManager.idp.clientSecret | quote }}
 {{- end }}
 {{- end }}
+
+{{/*
+URL of Agent Manager's gateway audit ingest, the OTLP/HTTP logs endpoint the
+gateway's OTel analytics publisher posts to. It is served on the same internal
+server (controlPlane.host) the gateway controller already connects to, so the
+same reachability and TLS settings apply. apiGateway.audit.endpoint overrides it.
+*/}}
+{{- define "wso2-amp-gateway-extension.auditEndpoint" -}}
+{{- if .Values.apiGateway.audit.endpoint }}
+{{- .Values.apiGateway.audit.endpoint }}
+{{- else }}
+{{- $scheme := ternary "https" "http" .Values.apiGateway.controlPlane.tls.enabled }}
+{{- printf "%s://%s/api/internal/v1/audit/gateway-events" $scheme .Values.apiGateway.controlPlane.host }}
+{{- end }}
+{{- end }}
+
+{{/*
+Name of the env var carrying this gateway's registration token into config.toml
+for the audit publisher's api-key header.
+*/}}
+{{- define "wso2-amp-gateway-extension.auditTokenEnvName" -}}
+AMP_GATEWAY_AUDIT_TOKEN
+{{- end }}
+
+{{/*
+extraEnv for the gateway-controller and gateway-runtime pods: the operator's
+systemExtraEnv plus, when the audit feed is on, the registration token.
+
+Both pods need the token variable even though only the policy engine sends to
+the ingest: both load the same config.toml, and an {{ env "..." }} token naming
+an unset variable fails the whole config load.
+*/}}
+{{- define "wso2-amp-gateway-extension.extraEnv" -}}
+{{- $env := list }}
+{{- range .Values.apiGateway.config.systemExtraEnv }}
+{{- $env = append $env . }}
+{{- end }}
+{{- if .Values.apiGateway.audit.enabled }}
+{{- $env = append $env (dict "name" (include "wso2-amp-gateway-extension.auditTokenEnvName" .) "valueFrom" (dict "secretKeyRef" (dict "name" (include "wso2-amp-gateway-extension.tokenSecretName" .) "key" .Values.gateway.tokenSecret.key))) }}
+{{- end }}
+{{- if $env }}
+{{- toYaml $env }}
+{{- end }}
+{{- end }}

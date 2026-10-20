@@ -76,6 +76,9 @@ const (
 	SurfaceInternal  Surface = "internal"
 	SurfacePublisher Surface = "publisher"
 	SurfaceSystem    Surface = "system"
+	// SurfaceGateway marks agent activity observed by an AI gateway — a call an
+	// agent made through it — rather than an operation on this service.
+	SurfaceGateway Surface = "gateway"
 )
 
 // Outcome is the result of the audited operation.
@@ -154,6 +157,9 @@ type Event struct {
 	ResourceName string `json:"resourceName,omitempty"`
 	ProjectName  string `json:"projectName,omitempty"`
 	Environment  string `json:"environment,omitempty"`
+	// AgentName is the agent the event concerns, when that is not the resource
+	// itself — the agent that called an LLM proxy through the gateway.
+	AgentName string `json:"agentName,omitempty"`
 
 	// Result.
 	Outcome      Outcome `json:"outcome"`

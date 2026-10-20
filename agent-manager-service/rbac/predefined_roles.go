@@ -54,6 +54,7 @@ var PredefinedRolePermissions = map[string][]Permission{
 		RoleCreate, RoleRead, RoleUpdate, RoleDelete,
 		GroupCreate, GroupRead, GroupUpdate, GroupDelete,
 		AgentIdentityRead, AgentIdentityCreate, AgentIdentityUpdate, AgentIdentityDelete,
+		AuditLogRead, AuditLogExport,
 		CatalogRead, RepositoryRead,
 		ProfileRead, ProfileUpdateAttributes,
 	},

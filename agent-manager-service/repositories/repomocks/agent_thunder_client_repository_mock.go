@@ -34,6 +34,9 @@ import (
 //			FindByOuAndEnvironmentFunc: func(ctx context.Context, ouID string, environmentName string) ([]models.AgentThunderClient, error) {
 //				panic("mock out the FindByOuAndEnvironment method")
 //			},
+//			FindByThunderIdentityFunc: func(ctx context.Context, ouID string, subject string) (*models.AgentThunderClient, error) {
+//				panic("mock out the FindByThunderIdentity method")
+//			},
 //			FindDueFunc: func(ctx context.Context, now time.Time, limit int) ([]models.AgentThunderClient, error) {
 //				panic("mock out the FindDue method")
 //			},
@@ -76,6 +79,9 @@ type AgentThunderClientRepositoryMock struct {
 
 	// FindByOuAndEnvironmentFunc mocks the FindByOuAndEnvironment method.
 	FindByOuAndEnvironmentFunc func(ctx context.Context, ouID string, environmentName string) ([]models.AgentThunderClient, error)
+
+	// FindByThunderIdentityFunc mocks the FindByThunderIdentity method.
+	FindByThunderIdentityFunc func(ctx context.Context, ouID string, subject string) (*models.AgentThunderClient, error)
 
 	// FindDueFunc mocks the FindDue method.
 	FindDueFunc func(ctx context.Context, now time.Time, limit int) ([]models.AgentThunderClient, error)
@@ -144,6 +150,15 @@ type AgentThunderClientRepositoryMock struct {
 			OuID string
 			// EnvironmentName is the environmentName argument value.
 			EnvironmentName string
+		}
+		// FindByThunderIdentity holds details about calls to the FindByThunderIdentity method.
+		FindByThunderIdentity []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// Subject is the subject argument value.
+			Subject string
 		}
 		// FindDue holds details about calls to the FindDue method.
 		FindDue []struct {
@@ -216,6 +231,7 @@ type AgentThunderClientRepositoryMock struct {
 	lockDeleteByIDs                   sync.RWMutex
 	lockFindByAgent                   sync.RWMutex
 	lockFindByOuAndEnvironment        sync.RWMutex
+	lockFindByThunderIdentity         sync.RWMutex
 	lockFindDue                       sync.RWMutex
 	lockFindRecentlyCompletedInternal sync.RWMutex
 	lockGet                           sync.RWMutex
@@ -422,6 +438,46 @@ func (mock *AgentThunderClientRepositoryMock) FindByOuAndEnvironmentCalls() []st
 	mock.lockFindByOuAndEnvironment.RLock()
 	calls = mock.calls.FindByOuAndEnvironment
 	mock.lockFindByOuAndEnvironment.RUnlock()
+	return calls
+}
+
+// FindByThunderIdentity calls FindByThunderIdentityFunc.
+func (mock *AgentThunderClientRepositoryMock) FindByThunderIdentity(ctx context.Context, ouID string, subject string) (*models.AgentThunderClient, error) {
+	if mock.FindByThunderIdentityFunc == nil {
+		panic("AgentThunderClientRepositoryMock.FindByThunderIdentityFunc: method is nil but AgentThunderClientRepository.FindByThunderIdentity was just called")
+	}
+	callInfo := struct {
+		Ctx     context.Context
+		OuID    string
+		Subject string
+	}{
+		Ctx:     ctx,
+		OuID:    ouID,
+		Subject: subject,
+	}
+	mock.lockFindByThunderIdentity.Lock()
+	mock.calls.FindByThunderIdentity = append(mock.calls.FindByThunderIdentity, callInfo)
+	mock.lockFindByThunderIdentity.Unlock()
+	return mock.FindByThunderIdentityFunc(ctx, ouID, subject)
+}
+
+// FindByThunderIdentityCalls gets all the calls that were made to FindByThunderIdentity.
+// Check the length with:
+//
+//	len(mockedAgentThunderClientRepository.FindByThunderIdentityCalls())
+func (mock *AgentThunderClientRepositoryMock) FindByThunderIdentityCalls() []struct {
+	Ctx     context.Context
+	OuID    string
+	Subject string
+} {
+	var calls []struct {
+		Ctx     context.Context
+		OuID    string
+		Subject string
+	}
+	mock.lockFindByThunderIdentity.RLock()
+	calls = mock.calls.FindByThunderIdentity
+	mock.lockFindByThunderIdentity.RUnlock()
 	return calls
 }
 

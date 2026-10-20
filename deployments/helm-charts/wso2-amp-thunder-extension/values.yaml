@@ -324,6 +324,8 @@ thunder:
       - "amp:agent-identity:create"
       - "amp:agent-identity:update"
       - "amp:agent-identity:delete"
+      - "amp:audit-log:read"
+      - "amp:audit-log:export"
     configMap:
       name: amp-thunder-bootstrap
       files:
@@ -353,6 +355,7 @@ thunder:
         - 72-am-observer-client.yaml
         - 73-am-obs-mcp-client.yaml
         - 73-amp-csp-config.yaml
+        - 74-amp-audit-reader-client.yaml
     # Observer Resource Reader Client configuration (for observability plane to read resources)
     observerResourceReaderClient:
       clientId: "openchoreo-observer-resource-reader-client" # clusterauthzrolebinding is already created with this clientId by openchoreo, so it should not be changed unless the corresponding ClusterAuthzRoleBinding is also updated
@@ -433,6 +436,32 @@ thunder:
       clientSecret: "am-observer-client-secret"
       name: "AM Observer Client"
       description: "Dedicated client for agent-manager-observer to read observability data from the OpenChoreo observer"
+      grantTypes:
+        - "client_credentials"
+      tokenEndpointAuthMethod: "client_secret_basic"
+      pkceRequired: false
+      publicClient: false
+      accessTokenValidityPeriod: 3600
+    # AMP Audit Reader Client configuration (dedicated outbound identity for
+    # agent-manager-service's audit-trail reads from the OpenChoreo observer).
+    # Like amObserverClient, its authority comes only from an OpenChoreo
+    # ClusterAuthzRoleBinding (amp-audit-reader-binding in
+    # wso2-amp-platform-resources-extension), which grants auditlogs:view and
+    # nothing else. It has no AMP scopes, so its tokens fail every
+    # agent-manager-service scope check by construction. Tenant isolation is
+    # enforced by agent-manager-service, which adds the caller's organization to
+    # every query it makes with this identity.
+    # WARNING: clientSecret below is a LOCAL-DEVELOPMENT-ONLY placeholder.
+    # In production, override ampAuditReaderClient.clientSecret via a Kubernetes
+    # Secret or external secret manager. Deploying with this default value is
+    # insecure.
+    # NOTE: pre-install bootstrap job only — on an existing install, helm upgrade
+    # does not create this client; re-run the bootstrap job.
+    ampAuditReaderClient:
+      clientId: "amp-audit-reader-client"
+      clientSecret: "amp-audit-reader-client-secret"
+      name: "AMP Audit Reader Client"
+      description: "Dedicated client for agent-manager-service to read the audit trail from the OpenChoreo observer"
       grantTypes:
         - "client_credentials"
       tokenEndpointAuthMethod: "client_secret_basic"

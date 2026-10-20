@@ -65,6 +65,27 @@ func NewMultiSink(sinks ...Sink) Sink {
 	}
 }
 
+// sinkNames lists the sinks behind s, unwrapping a multi-sink.
+func sinkNames(s Sink) []string {
+	if m, ok := s.(multiSink); ok {
+		out := make([]string, 0, len(m))
+		for _, inner := range m {
+			out = append(out, inner.Name())
+		}
+		return out
+	}
+	return []string{s.Name()}
+}
+
+// SinkNames reports where a recorder writes, for the startup posture record.
+// Nil for a recorder that writes nowhere (disabled or not installed).
+func SinkNames(r Recorder) []string {
+	if br, ok := r.(*bufferedRecorder); ok {
+		return sinkNames(br.sink)
+	}
+	return nil
+}
+
 type discardSink struct{}
 
 func (discardSink) Name() string                         { return "discard" }

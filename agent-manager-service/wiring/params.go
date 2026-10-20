@@ -66,6 +66,7 @@ type AppParams struct {
 	MCPProxyController               controllers.MCPProxyController
 	WebSocketController              controllers.WebSocketController
 	GatewayInternalController        controllers.GatewayInternalController
+	AuditLogController               controllers.AuditLogController
 	MonitorController                controllers.MonitorController
 	MonitorScoresController          controllers.MonitorScoresController
 	MonitorScoresPublisherController controllers.MonitorScoresPublisherController

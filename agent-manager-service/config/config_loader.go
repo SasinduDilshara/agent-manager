@@ -352,6 +352,22 @@ func loadEnvs() {
 		BufferSize:      int(r.readOptionalInt64("AUDIT_BUFFER_SIZE", 4096)),
 		BatchSize:       int(r.readOptionalInt64("AUDIT_BATCH_SIZE", 200)),
 		FlushIntervalMs: int(r.readOptionalInt64("AUDIT_FLUSH_INTERVAL_MS", 1000)),
+
+		OpenChoreoSinkEnabled: r.readOptionalBool("AUDIT_OPENCHOREO_SINK_ENABLED", false),
+		GatewayIngest: GatewayAuditIngestConfig{
+			Enabled:                 r.readOptionalBool("AUDIT_GATEWAY_INGEST_ENABLED", false),
+			MaxBodyBytes:            r.readOptionalInt64("AUDIT_GATEWAY_INGEST_MAX_BODY_BYTES", 4<<20),
+			ResolverCacheTTLSeconds: int(r.readOptionalInt64("AUDIT_GATEWAY_INGEST_RESOLVER_CACHE_TTL_SECONDS", 60)),
+		},
+		Reader: AuditReaderConfig{
+			ObserverURL: r.readOptionalString("AUDIT_OBSERVER_URL", ""),
+			// Same identity provider as every other service-to-service token.
+			TokenURL:            r.readOptionalString("AUDIT_READER_TOKEN_URL", config.IDP.TokenURL),
+			ClientID:            r.readOptionalString("AUDIT_READER_CLIENT_ID", ""),
+			ClientSecret:        r.readOptionalString("AUDIT_READER_CLIENT_SECRET", ""),
+			ExportMaxRecords:    r.readOptionalInt64("AUDIT_EXPORT_MAX_RECORDS", 500000),
+			ExportSettleSeconds: int(r.readOptionalInt64("AUDIT_EXPORT_SETTLE_SECONDS", 60)),
+		},
 	}
 	r.errors = append(r.errors, validateAuditConfig(config.Audit)...)
 
@@ -815,6 +831,50 @@ func validateAuditConfig(cfg AuditConfig) []error {
 			"AUDIT_BATCH_SIZE (%d) must not exceed AUDIT_BUFFER_SIZE (%d)",
 			cfg.BatchSize, cfg.BufferSize,
 		))
+	}
+
+	// Relayed gateway records are written only to the OpenChoreo audit store;
+	// accepting them with nowhere to write them would acknowledge records to
+	// the gateway that are then lost.
+	if cfg.GatewayIngest.Enabled && !cfg.OpenChoreoSinkEnabled {
+		errs = append(errs, fmt.Errorf(
+			"AUDIT_GATEWAY_INGEST_ENABLED requires AUDIT_OPENCHOREO_SINK_ENABLED"))
+	}
+	if cfg.GatewayIngest.Enabled && !cfg.Enabled {
+		errs = append(errs, fmt.Errorf("AUDIT_GATEWAY_INGEST_ENABLED requires AUDIT_ENABLED"))
+	}
+	if cfg.OpenChoreoSinkEnabled && !cfg.Enabled {
+		errs = append(errs, fmt.Errorf("AUDIT_OPENCHOREO_SINK_ENABLED requires AUDIT_ENABLED"))
+	}
+	if cfg.GatewayIngest.MaxBodyBytes <= 0 {
+		errs = append(errs, fmt.Errorf("AUDIT_GATEWAY_INGEST_MAX_BODY_BYTES must be a positive integer, got %d",
+			cfg.GatewayIngest.MaxBodyBytes))
+	}
+	if cfg.GatewayIngest.ResolverCacheTTLSeconds < 0 {
+		errs = append(errs, fmt.Errorf("AUDIT_GATEWAY_INGEST_RESOLVER_CACHE_TTL_SECONDS must not be negative, got %d",
+			cfg.GatewayIngest.ResolverCacheTTLSeconds))
+	}
+
+	// Reading is configured by AUDIT_OBSERVER_URL; once it is set, the identity
+	// it reads with must be complete, or the first read fails instead of startup.
+	if cfg.Reader.QueryEnabled() {
+		for _, field := range []struct{ name, value string }{
+			{"AUDIT_READER_TOKEN_URL", cfg.Reader.TokenURL},
+			{"AUDIT_READER_CLIENT_ID", cfg.Reader.ClientID},
+			{"AUDIT_READER_CLIENT_SECRET", cfg.Reader.ClientSecret},
+		} {
+			if field.value == "" {
+				errs = append(errs, fmt.Errorf("%s is required when AUDIT_OBSERVER_URL is set", field.name))
+			}
+		}
+	}
+	if cfg.Reader.ExportMaxRecords <= 0 {
+		errs = append(errs, fmt.Errorf("AUDIT_EXPORT_MAX_RECORDS must be a positive integer, got %d",
+			cfg.Reader.ExportMaxRecords))
+	}
+	if cfg.Reader.ExportSettleSeconds < 0 {
+		errs = append(errs, fmt.Errorf("AUDIT_EXPORT_SETTLE_SECONDS must not be negative, got %d",
+			cfg.Reader.ExportSettleSeconds))
 	}
 	return errs
 }

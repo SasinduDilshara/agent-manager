@@ -114,6 +114,7 @@ func redact(e *Event) {
 	e.ResourceName = clean(e.ResourceName, maxStringLen)
 	e.ProjectName = clean(e.ProjectName, maxStringLen)
 	e.Environment = clean(e.Environment, maxStringLen)
+	e.AgentName = clean(e.AgentName, maxStringLen)
 	e.ErrorCode = clean(e.ErrorCode, maxStringLen)
 	// The one field carrying unbounded third-party text. Errors from upstream
 	// systems routinely interpolate a whole HTTP response body — Thunder's

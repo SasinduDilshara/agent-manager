@@ -29,6 +29,9 @@ import (
 //			GetByAgentEnvFunc: func(ctx context.Context, ouID string, projectName string, agentID string, envName string) (*models.AIApplication, error) {
 //				panic("mock out the GetByAgentEnv method")
 //			},
+//			GetByHandleFunc: func(ctx context.Context, ouID string, handle string) (*models.AIApplication, error) {
+//				panic("mock out the GetByHandle method")
+//			},
 //			ListByAgentFunc: func(ctx context.Context, ouID string, projectName string, agentID string) ([]models.AIApplication, error) {
 //				panic("mock out the ListByAgent method")
 //			},
@@ -53,6 +56,9 @@ type AIApplicationRepositoryMock struct {
 
 	// GetByAgentEnvFunc mocks the GetByAgentEnv method.
 	GetByAgentEnvFunc func(ctx context.Context, ouID string, projectName string, agentID string, envName string) (*models.AIApplication, error)
+
+	// GetByHandleFunc mocks the GetByHandle method.
+	GetByHandleFunc func(ctx context.Context, ouID string, handle string) (*models.AIApplication, error)
 
 	// ListByAgentFunc mocks the ListByAgent method.
 	ListByAgentFunc func(ctx context.Context, ouID string, projectName string, agentID string) ([]models.AIApplication, error)
@@ -110,6 +116,15 @@ type AIApplicationRepositoryMock struct {
 			// EnvName is the envName argument value.
 			EnvName string
 		}
+		// GetByHandle holds details about calls to the GetByHandle method.
+		GetByHandle []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// Handle is the handle argument value.
+			Handle string
+		}
 		// ListByAgent holds details about calls to the ListByAgent method.
 		ListByAgent []struct {
 			// Ctx is the ctx argument value.
@@ -133,6 +148,7 @@ type AIApplicationRepositoryMock struct {
 	lockDeleteByAgent    sync.RWMutex
 	lockDeleteByAgentEnv sync.RWMutex
 	lockGetByAgentEnv    sync.RWMutex
+	lockGetByHandle      sync.RWMutex
 	lockListByAgent      sync.RWMutex
 	lockListByOrg        sync.RWMutex
 }
@@ -318,6 +334,46 @@ func (mock *AIApplicationRepositoryMock) GetByAgentEnvCalls() []struct {
 	mock.lockGetByAgentEnv.RLock()
 	calls = mock.calls.GetByAgentEnv
 	mock.lockGetByAgentEnv.RUnlock()
+	return calls
+}
+
+// GetByHandle calls GetByHandleFunc.
+func (mock *AIApplicationRepositoryMock) GetByHandle(ctx context.Context, ouID string, handle string) (*models.AIApplication, error) {
+	if mock.GetByHandleFunc == nil {
+		panic("AIApplicationRepositoryMock.GetByHandleFunc: method is nil but AIApplicationRepository.GetByHandle was just called")
+	}
+	callInfo := struct {
+		Ctx    context.Context
+		OuID   string
+		Handle string
+	}{
+		Ctx:    ctx,
+		OuID:   ouID,
+		Handle: handle,
+	}
+	mock.lockGetByHandle.Lock()
+	mock.calls.GetByHandle = append(mock.calls.GetByHandle, callInfo)
+	mock.lockGetByHandle.Unlock()
+	return mock.GetByHandleFunc(ctx, ouID, handle)
+}
+
+// GetByHandleCalls gets all the calls that were made to GetByHandle.
+// Check the length with:
+//
+//	len(mockedAIApplicationRepository.GetByHandleCalls())
+func (mock *AIApplicationRepositoryMock) GetByHandleCalls() []struct {
+	Ctx    context.Context
+	OuID   string
+	Handle string
+} {
+	var calls []struct {
+		Ctx    context.Context
+		OuID   string
+		Handle string
+	}
+	mock.lockGetByHandle.RLock()
+	calls = mock.calls.GetByHandle
+	mock.lockGetByHandle.RUnlock()
 	return calls
 }
 

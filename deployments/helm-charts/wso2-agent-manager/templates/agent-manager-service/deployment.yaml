@@ -192,6 +192,20 @@ spec:
                   key: thunder-client-secret
               {{- end }}
             {{- end }}
+            {{- with .Values.agentManagerService.config.audit.reader }}
+            {{- if and .observerUrl (or .clientSecret .existingSecret) }}
+            - name: AUDIT_READER_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  {{- if .existingSecret }}
+                  name: {{ .existingSecret }}
+                  key: {{ .existingSecretKey | default "audit-reader-client-secret" }}
+                  {{- else }}
+                  name: {{ include "agent-management-platform.agentManagerService.fullname" $ }}
+                  key: audit-reader-client-secret
+                  {{- end }}
+            {{- end }}
+            {{- end }}
             {{- if or .Values.agentManagerService.config.gatewayManifestCache.redis.password .Values.agentManagerService.config.gatewayManifestCache.redis.existingSecret }}
             - name: GATEWAY_MANIFEST_CACHE_REDIS_PASSWORD
               valueFrom:

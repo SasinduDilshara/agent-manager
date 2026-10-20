@@ -182,6 +182,13 @@ export const LazyMCPProxiesOrg = lazy(() =>
   }))
 );
 
+// Audit Logs
+export const LazyAuditLogsOrg = lazy(() =>
+  import("@agent-management-platform/audit-logs").then((m) => ({
+    default: m.metaData.levels!.organization as ComponentType,
+  }))
+);
+
 // Gateways
 export const LazyGatewaysOrg = lazy(() =>
   import("@agent-management-platform/gateways").then((m) => ({

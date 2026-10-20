@@ -1,0 +1,34 @@
+{{- if .Values.networkPolicy.openchoreoObserverAudit.enabled }}
+# Agent Manager reads the audit trail through the OpenChoreo Observer's audit
+# API (POST /api/v1alpha1/audit-logs/query). The observability-plane chart
+# (1.3.0+) admits ingress to its namespace only from pods inside it, so this
+# opens the Observer's public, JWT-authenticated port to the Agent Manager
+# namespace alone.
+#
+# The internal port (8081, no authentication) is deliberately not opened: it
+# serves alert-rule management and the alert webhook, never audit reads.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openchoreo-observer-audit-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "amp-observability-extension.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audit-reader
+spec:
+  podSelector:
+    matchLabels:
+      # The OpenChoreo Observer's selector labels (openchoreo-observability-plane
+      # chart: selectorLabels + component).
+      app.kubernetes.io/name: openchoreo-observability-plane
+      app.kubernetes.io/component: observer
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.openchoreoObserverAudit.agentManagerNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.openchoreoObserverAudit.observerPort }}
+{{- end }}

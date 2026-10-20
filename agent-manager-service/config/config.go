@@ -258,6 +258,56 @@ type AuditConfig struct {
 	// FlushIntervalMs bounds how long an event waits before being written, so a
 	// quiet service still emits promptly.
 	FlushIntervalMs int
+
+	// OpenChoreoSinkEnabled additionally writes every record as an OpenChoreo
+	// audit record (msg "AUDIT-LOG"), which OpenChoreo's logs module routes to
+	// its audit store when this service is on the module's trusted-producer
+	// allowlist. The existing stdout format is written unchanged alongside it.
+	OpenChoreoSinkEnabled bool
+
+	// GatewayIngest relays agent activity reported by AI gateways into the trail.
+	GatewayIngest GatewayAuditIngestConfig
+
+	// Reader reads the trail back through the OpenChoreo Observer's audit API.
+	Reader AuditReaderConfig
+}
+
+// GatewayAuditIngestConfig controls the internal endpoint AI gateways deliver
+// observed agent activity to (OTLP/HTTP logs from the gateway's OTel analytics
+// publisher).
+type GatewayAuditIngestConfig struct {
+	// Enabled serves the endpoint. Requires OpenChoreoSinkEnabled: the relayed
+	// records are written only to the OpenChoreo audit store.
+	Enabled bool
+	// MaxBodyBytes bounds one delivered batch, after decompression.
+	MaxBodyBytes int64
+	// ResolverCacheTTLSeconds bounds how long a resolved gateway id (an agent's
+	// application handle, a proxy handle) is reused before being looked up again.
+	ResolverCacheTTLSeconds int
+}
+
+// AuditReaderConfig configures reads of the trail through the OpenChoreo
+// Observer. Reads are served only when ObserverURL is set.
+//
+// The identity below is granted auditlogs:view at cluster scope by OpenChoreo
+// (amp-audit-reader-binding); this service confines every read to the caller's
+// organization itself.
+type AuditReaderConfig struct {
+	// ObserverURL is the Observer's public API base URL.
+	ObserverURL  string
+	TokenURL     string
+	ClientID     string
+	ClientSecret string
+	// ExportMaxRecords refuses an export larger than this, before it starts.
+	ExportMaxRecords int64
+	// ExportSettleSeconds keeps an export's window this far behind now, so
+	// records still in the delivery pipeline are not counted against it.
+	ExportSettleSeconds int
+}
+
+// QueryEnabled reports whether reads of the trail are configured.
+func (c AuditReaderConfig) QueryEnabled() bool {
+	return c.ObserverURL != ""
 }
 
 type TLSConfig struct {

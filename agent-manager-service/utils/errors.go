@@ -281,4 +281,27 @@ var (
 	ErrMissingKindConfigValue    = errors.New("missing required configuration value for agent kind")
 	ErrKindImageAlreadyPublished = errors.New("this build image is already published as a kind version")
 	ErrSourceAgentNotFound       = errors.New("source agent not found; cannot publish a kind from a deleted agent")
+
+	// Audit trail errors
+	// ErrAuditTrailNotConfigured: reads of the trail are not configured on this
+	// deployment (no audit observer URL). Maps to 503.
+	ErrAuditTrailNotConfigured = errors.New("the audit trail is not available on this deployment")
+	// ErrAuditTrailNotSupported: the observability backend has no audit store.
+	// Maps to 501.
+	ErrAuditTrailNotSupported = errors.New("the observability backend does not support audit logs")
+	// ErrAuditTrailUnavailable: the audit store could not be reached. Maps to 503.
+	ErrAuditTrailUnavailable = errors.New("the audit trail is temporarily unavailable")
+	// ErrInvalidAuditQuery: the window, limit or a filter is invalid. Maps to 400.
+	ErrInvalidAuditQuery = errors.New("invalid audit log query")
+	// ErrAuditExportNotRecorded: the export's intent record could not be written,
+	// so the export was refused before any record left the platform. Maps to 503.
+	ErrAuditExportNotRecorded = errors.New("the audit export could not be recorded")
+	// ErrAuditExportTooLarge: more records match than one export may hold. Maps to 400.
+	ErrAuditExportTooLarge = errors.New("too many audit records for one export")
+	// ErrAuditIngestUnavailable: a delivered gateway batch could not be written.
+	// Maps to 503, which the gateway retries.
+	ErrAuditIngestUnavailable = errors.New("audit ingest is temporarily unavailable")
+	// ErrMalformedAuditBatch: a delivered gateway batch is not an OTLP logs
+	// export request at all. Maps to 400, which the gateway does not retry.
+	ErrMalformedAuditBatch = errors.New("malformed audit batch")
 )

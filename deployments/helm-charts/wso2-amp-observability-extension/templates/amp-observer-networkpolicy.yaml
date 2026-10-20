@@ -1,0 +1,40 @@
+{{- if and .Values.amObserver.enabled .Values.networkPolicy.amObserver.enabled }}
+{{- /* An ingress rule with no sources admits every source, so an empty list
+       must stop the release rather than open the port to the whole cluster. */}}
+{{- if not .Values.networkPolicy.amObserver.allowedNamespaces }}
+{{- fail "networkPolicy.amObserver.allowedNamespaces must name at least one namespace (an empty list would admit all traffic); set networkPolicy.amObserver.enabled=false to manage access yourself" }}
+{{- end }}
+# The OpenChoreo observability-plane chart (1.3.0+) isolates its namespace:
+# ingress is admitted only from pods in the namespace itself, plus the gateway
+# and the OpenTelemetry collector. The Agent Manager Observer is served from
+# that namespace but is called from outside it, by Agent Manager (build logs)
+# and the evaluation job (traces) in the workflow namespaces.
+#
+# NetworkPolicies are additive, so this opens exactly the observer's API port,
+# to the namespaces listed in networkPolicy.amObserver.allowedNamespaces only,
+# without loosening anything else in the namespace. The observer also
+# authenticates every request on that port itself.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: amp-observer-api-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "amp-observability-extension.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observer
+spec:
+  podSelector:
+    matchLabels:
+      app: amp-observer
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.amObserver.allowedNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.amObserver.port }}
+{{- end }}

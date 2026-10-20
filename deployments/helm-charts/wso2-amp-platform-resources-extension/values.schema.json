@@ -488,6 +488,27 @@
           "required": [],
           "title": "amObserverClient",
           "type": "object"
+        },
+        "ampAuditReaderClient": {
+          "additionalProperties": false,
+          "description": "AMP Audit Reader Client authorization binding",
+          "properties": {
+            "clientId": {
+              "default": "amp-audit-reader-client",
+              "description": "Client ID used by agent-manager-service's audit-trail reads from the OpenChoreo observer (must match Thunder OAuth client_id seeded by wso2-amp-thunder-extension's ampAuditReaderClient)",
+              "title": "clientId",
+              "type": "string"
+            },
+            "role": {
+              "default": "amp-audit-reader",
+              "description": "Role granting auditlogs:view only",
+              "title": "role",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "title": "ampAuditReaderClient",
+          "type": "object"
         }
       },
       "required": [],

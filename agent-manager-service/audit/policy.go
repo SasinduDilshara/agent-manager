@@ -150,8 +150,8 @@ var nonMutatingWritePaths = map[string]bool{
 // security configuration of the org. Reading these is worth recording even
 // though nothing changes.
 //
-// The audit trail is stored outside this service, so there is no read route for
-// it here to add to this list.
+// The audit-log routes are listed too: the trail is stored outside this
+// service, but reading it here discloses every recorded action of the org.
 // coalesceWindows bound how often a route is recorded per caller.
 //
 // Gateways poll the bulk-sync endpoints on a timer, so recording every call
@@ -169,6 +169,12 @@ var coalesceWindows = map[string]time.Duration{
 	// above: the record worth keeping is that the platform-admin org read every
 	// tenant's fleet and when it started, not each poll in a degraded hour.
 	"/platform/gateways/failure-summary": 5 * time.Minute,
+
+	// Every AI gateway posts its observed traffic here every few seconds. The
+	// records it delivers are the audit trail; one coverage record per gateway
+	// per window says which gateway was delivering and when, without writing
+	// an audit record about every batch of audit records.
+	"/audit/gateway-events": 5 * time.Minute,
 }
 
 var sensitiveReadPaths = map[string]bool{
@@ -209,6 +215,13 @@ var sensitiveReadPaths = map[string]bool{
 	// request — statusCode tells them apart, outcome does not. Coalesced; see
 	// coalesceWindows.
 	"/platform/gateways/failure-summary": true,
+
+	// The audit trail itself. Reading it discloses everything an organization
+	// did, and the store behind it sees only this service's own identity, so
+	// the reader is recorded here or nowhere.
+	"/orgs/{orgName}/audit-logs":               true,
+	"/orgs/{orgName}/audit-logs/filter-values": true,
+	"/orgs/{orgName}/audit-logs/export":        true,
 }
 
 // actionOverrides maps a route path to the action it actually performs, for
@@ -339,6 +352,7 @@ var actionOverrides = map[string]Action{
 	"GET /llm-providers/api-keys":         "api-key:sync",
 	"GET /llm-proxies/api-keys":           "api-key:sync",
 	"GET /apis/api-keys":                  "api-key:sync",
+	"POST /audit/gateway-events":          "audit-log:ingest",
 
 	// Reads expressed as POST because they carry a request body.
 	// The score-publish route carries no rbac.Permission at all — it is gated

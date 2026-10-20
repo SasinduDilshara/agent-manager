@@ -35,7 +35,7 @@ import { isValid } from "date-fns";
 
 const CUSTOM_VALUE = "__custom__";
 const isValidDate = (d: Date | null): d is Date => isValid(d);
-const MAX_RANGE_MS = 14 * 24 * 60 * 60 * 1000;
+const DEFAULT_MAX_RANGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 const fmtLabel = (iso: string) =>
     new Date(iso).toLocaleString(undefined, {
@@ -52,6 +52,8 @@ export interface TimeRangeSelectorProps {
     options: Array<{ value: string; label: string }>;
     onPresetChange: (value: string) => void;
     onCustomRangeApply: (startISO: string, endISO: string) => void;
+    /** How far back, and how long, a custom range may reach. Defaults to 14 days. */
+    maxRangeMs?: number;
 }
 
 export const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({
@@ -61,6 +63,7 @@ export const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({
     options,
     onPresetChange,
     onCustomRangeApply,
+    maxRangeMs = DEFAULT_MAX_RANGE_MS,
 }) => {
     const anchorRef = useRef<HTMLElement>(null);
     const [popoverOpen, setPopoverOpen] = useState(false);
@@ -79,7 +82,7 @@ export const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({
     };
 
     const now = new Date();
-    const minStart = new Date(now.getTime() - MAX_RANGE_MS);
+    const minStart = new Date(now.getTime() - maxRangeMs);
 
     const isApplyDisabled =
         !isValidDate(draftStart) ||
@@ -87,7 +90,7 @@ export const TimeRangeSelector: React.FC<TimeRangeSelectorProps> = ({
         draftStart < minStart ||
         draftEnd > now ||
         draftStart >= draftEnd ||
-        draftEnd.getTime() - draftStart.getTime() > MAX_RANGE_MS;
+        draftEnd.getTime() - draftStart.getTime() > maxRangeMs;
 
     const handleApply = () => {
         if (isApplyDisabled) return;

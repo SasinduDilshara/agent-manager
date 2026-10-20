@@ -231,6 +231,14 @@ authz:
     clientId: am-observer-client
     # Minimal read-only role for observability data (traces/logs/metrics)
     role: amp-observer-reader
+  # AMP Audit Reader Client authorization binding
+  ampAuditReaderClient:
+    # Client ID used by agent-manager-service's audit-trail reads from the
+    # OpenChoreo observer (must match Thunder OAuth client_id seeded by
+    # wso2-amp-thunder-extension's ampAuditReaderClient)
+    clientId: amp-audit-reader-client
+    # Role granting auditlogs:view only
+    role: amp-audit-reader
 
 # Gateway TLS certificate configuration
 gatewayTls:

@@ -440,6 +440,13 @@ data:
           - { name: Read, handle: read, description: "View agent identities" }
           - { name: Update, handle: update, description: "Update an agent identity" }
           - { name: Delete, handle: delete, description: "Delete an agent identity" }
+      - name: Audit Log
+        handle: audit-log
+        parent: amp
+        description: The organization's audit trail
+        actions:
+          - { name: Read, handle: read, description: "Read the audit trail" }
+          - { name: Export, handle: export, description: "Export the audit trail" }
       - name: LLM Proxy
         handle: llm-proxy
         parent: amp
@@ -714,6 +721,8 @@ data:
           - "amp:agent-identity:create"
           - "amp:agent-identity:update"
           - "amp:agent-identity:delete"
+          - "amp:audit-log:read"
+          - "amp:audit-log:export"
           - "amp:catalog:read"
           - "amp:repository:read"
           - "amp:profile:read"
@@ -1316,6 +1325,31 @@ data:
             accessToken:
               clientConfig:
                 validityPeriod: {{ .Values.thunder.bootstrap.amObserverClient.accessTokenValidityPeriod }}
+                attributes: ["ouId", "ouHandle"]
+
+  74-amp-audit-reader-client.yaml: |
+    # No "scopes" key on purpose: this client's authority comes from its OpenChoreo
+    # ClusterAuthzRoleBinding (amp-audit-reader-binding), not from AMP scopes.
+    # Scope-less client_credentials tokens fall back to the client ID as audience.
+    resource_type: application
+    id: amp-audit-reader-client
+    type: m2m # client_credentials only, no interactive login
+    name: {{ .Values.thunder.bootstrap.ampAuditReaderClient.name | quote }}
+    description: {{ .Values.thunder.bootstrap.ampAuditReaderClient.description | quote }}
+    ouId: "01900000-0000-7000-8000-000000000001"
+    inboundAuthConfig:
+      - type: oauth2
+        config:
+          clientId: {{ .Values.thunder.bootstrap.ampAuditReaderClient.clientId | quote }}
+          clientSecret: {{ .Values.thunder.bootstrap.ampAuditReaderClient.clientSecret | quote }}
+          grantTypes: {{ .Values.thunder.bootstrap.ampAuditReaderClient.grantTypes | toJson }}
+          tokenEndpointAuthMethod: {{ .Values.thunder.bootstrap.ampAuditReaderClient.tokenEndpointAuthMethod | quote }}
+          pkceRequired: {{ .Values.thunder.bootstrap.ampAuditReaderClient.pkceRequired }}
+          publicClient: {{ .Values.thunder.bootstrap.ampAuditReaderClient.publicClient }}
+          token:
+            accessToken:
+              clientConfig:
+                validityPeriod: {{ .Values.thunder.bootstrap.ampAuditReaderClient.accessTokenValidityPeriod }}
                 attributes: ["ouId", "ouHandle"]
 
   {{- /* am-obs-mcp gets its OIDC scopes (amObsMcpClient.scopes) plus the four

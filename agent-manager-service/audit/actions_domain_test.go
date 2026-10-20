@@ -43,6 +43,10 @@ func TestDomainActionsMatchRouteDerivedActions(t *testing.T) {
 		action  Action
 	}{
 		{"POST /orgs/{orgName}/git-secrets", []rbac.Permission{rbac.GitSecretCreate}, ActionGitSecretCreate},
+		{"GET /orgs/{orgName}/audit-logs", []rbac.Permission{rbac.AuditLogRead}, ActionAuditLogRead},
+		{"GET /orgs/{orgName}/audit-logs/filter-values", []rbac.Permission{rbac.AuditLogRead}, ActionAuditLogRead},
+		{"GET /orgs/{orgName}/audit-logs/export", []rbac.Permission{rbac.AuditLogExport}, ActionAuditLogExport},
+		{"POST /audit/gateway-events", nil, ActionAuditLogIngest},
 		{"DELETE /orgs/{orgName}/git-secrets/{secretName}", []rbac.Permission{rbac.GitSecretDelete}, ActionGitSecretDelete},
 		{
 			"PUT /orgs/{orgName}/projects/{projName}/agents/{agentName}/environments/{envID}/agent-card/source",

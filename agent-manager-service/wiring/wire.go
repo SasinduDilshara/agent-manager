@@ -30,6 +30,8 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	observersvc "github.com/wso2/agent-manager/agent-manager-service/clients/observersvc"
+	"github.com/wso2/agent-manager/agent-manager-service/clients/ocauditsvc"
+	ocauth "github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/auth"
 	occlient "github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/thundersvc"
@@ -143,6 +145,9 @@ var controllerProviderSet = wire.NewSet(
 	controllers.NewMCPProxyController,
 	ProvideWebSocketController,
 	controllers.NewGatewayInternalController,
+	ProvideGatewayAuditIngest,
+	controllers.NewAuditLogController,
+	ProvideAuditTrailService,
 	controllers.NewMonitorController,
 	controllers.NewMonitorScoresController,
 	controllers.NewMonitorScoresPublisherController,
@@ -180,18 +185,39 @@ func ProvideLogger() *slog.Logger {
 	return slog.Default()
 }
 
+// OpenChoreoAuditSink is the sink writing OpenChoreo audit records, shared by
+// the recorder and the gateway audit ingest. Sink is nil when the OpenChoreo
+// format is disabled (AUDIT_OPENCHOREO_SINK_ENABLED).
+type OpenChoreoAuditSink struct {
+	Sink audit.Sink
+}
+
+// ProvideOpenChoreoAuditSink builds the OpenChoreo audit sink when enabled.
+func ProvideOpenChoreoAuditSink(cfg config.Config) OpenChoreoAuditSink {
+	if !cfg.Audit.Enabled || !cfg.Audit.OpenChoreoSinkEnabled {
+		return OpenChoreoAuditSink{}
+	}
+	return OpenChoreoAuditSink{Sink: audit.NewOpenChoreoSink()}
+}
+
 // ProvideAuditRecorder builds the audit recorder.
 //
 // Records go to stdout as structured JSON, where the platform's log pipeline
 // already collects them. That also gives the trail a copy this service cannot
 // rewrite, since there is no write path from here back into the log store.
-func ProvideAuditRecorder(cfg config.Config, logger *slog.Logger) audit.Recorder {
+// With the OpenChoreo sink enabled, each record is also written in OpenChoreo's
+// audit format, which OpenChoreo's logs module routes to its audit store.
+func ProvideAuditRecorder(cfg config.Config, logger *slog.Logger, oc OpenChoreoAuditSink) audit.Recorder {
 	if !cfg.Audit.Enabled {
 		logger.Warn("audit logging is disabled; no record of privileged operations will be kept",
 			"setting", "AUDIT_ENABLED")
 		return audit.NewNoopRecorder()
 	}
-	return audit.NewRecorder(audit.NewStdoutSink(), logger, audit.Config{
+	sinks := []audit.Sink{audit.NewStdoutSink()}
+	if oc.Sink != nil {
+		sinks = append(sinks, oc.Sink)
+	}
+	return audit.NewRecorder(audit.NewMultiSink(sinks...), logger, audit.Config{
 		BufferSize:    cfg.Audit.BufferSize,
 		BatchSize:     cfg.Audit.BatchSize,
 		FlushInterval: time.Duration(cfg.Audit.FlushIntervalMs) * time.Millisecond,
@@ -371,8 +397,53 @@ func ProvidePublisherProvisioner(cfg config.Config, encryptionKey []byte, logger
 
 var loggerProviderSet = wire.NewSet(
 	ProvideLogger,
+	ProvideOpenChoreoAuditSink,
 	ProvideAuditRecorder,
 )
+
+// ProvideGatewayAuditIngest builds the gateway audit ingest, or a disabled one.
+func ProvideGatewayAuditIngest(
+	cfg config.Config,
+	oc OpenChoreoAuditSink,
+	apps repositories.AIApplicationRepository,
+	identities repositories.AgentThunderClientRepository,
+	logger *slog.Logger,
+) controllers.GatewayAuditIngest {
+	ingest := cfg.Audit.GatewayIngest
+	if !ingest.Enabled || oc.Sink == nil {
+		return controllers.GatewayAuditIngest{}
+	}
+	return controllers.GatewayAuditIngest{
+		Service: services.NewGatewayAuditIngestService(oc.Sink, apps, identities,
+			time.Duration(ingest.ResolverCacheTTLSeconds)*time.Second, logger),
+		MaxBodyBytes: ingest.MaxBodyBytes,
+	}
+}
+
+// ProvideAuditTrailService builds the audit trail reader. Without an audit
+// observer URL it has no client and reports the trail as not configured.
+func ProvideAuditTrailService(cfg config.Config, logger *slog.Logger) (services.AuditTrailService, error) {
+	reader := cfg.Audit.Reader
+	var client ocauditsvc.Client
+	if reader.QueryEnabled() {
+		var err error
+		client, err = ocauditsvc.NewClient(&ocauditsvc.Config{
+			BaseURL: reader.ObserverURL,
+			// A dedicated identity holding auditlogs:view only — never the
+			// service's main client, which carries no such grant and should not.
+			AuthProvider: ocauth.NewAuthProvider(ocauth.Config{
+				TokenURL:     reader.TokenURL,
+				ClientID:     reader.ClientID,
+				ClientSecret: reader.ClientSecret,
+			}),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("audit trail reader: %w", err)
+		}
+	}
+	return services.NewAuditTrailService(client, reader.ExportMaxRecords,
+		time.Duration(reader.ExportSettleSeconds)*time.Second, logger), nil
+}
 
 var repositoryProviderSet = wire.NewSet(
 	ProvideGatewayRepository,

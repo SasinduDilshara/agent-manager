@@ -11380,8 +11380,443 @@ paths:
         "404":
           description: Environment not found
 
+  /orgs/{orgName}/audit-logs:
+    get:
+      tags:
+        - AuditLogs
+      summary: Query the organization's audit trail
+      description: |
+        Returns the audit records of the organization within a time window, newest
+        first by default: what users did through Agent Manager (control-plane
+        operations) and what agents did through the organization's AI gateways
+        (LLM calls, MCP tool calls, calls to other agents).
+
+        Records are read from the platform audit store and are always confined to
+        the caller's organization. Gateway-observed records are delivered best
+        effort; see `details.provenance`.
+
+        At most 1000 records are returned per call, with `total` the exact number
+        matching. To page, narrow the window: query again with `endTime` (or
+        `startTime` for ascending order) set to the last record's `occurredAt`.
+
+        Reading the trail is itself recorded (`audit-log:read`).
+      operationId: queryAuditLogs
+      parameters:
+        - $ref: "#/components/parameters/AuditLogOrgName"
+        - $ref: "#/components/parameters/AuditLogStartTime"
+        - $ref: "#/components/parameters/AuditLogEndTime"
+        - name: limit
+          in: query
+          description: Maximum number of records to return.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: sortOrder
+          in: query
+          description: Order by occurrence time.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - $ref: "#/components/parameters/AuditLogAction"
+        - $ref: "#/components/parameters/AuditLogResult"
+        - $ref: "#/components/parameters/AuditLogCategory"
+        - $ref: "#/components/parameters/AuditLogActorId"
+        - $ref: "#/components/parameters/AuditLogActorType"
+        - $ref: "#/components/parameters/AuditLogResourceType"
+        - $ref: "#/components/parameters/AuditLogResourceName"
+        - $ref: "#/components/parameters/AuditLogProject"
+        - $ref: "#/components/parameters/AuditLogEnvironment"
+        - $ref: "#/components/parameters/AuditLogAgent"
+        - $ref: "#/components/parameters/AuditLogRequestId"
+        - $ref: "#/components/parameters/AuditLogEventId"
+        - $ref: "#/components/parameters/AuditLogSearch"
+      responses:
+        "200":
+          description: Matching audit records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogListResponse"
+        "400":
+          description: Invalid query (window, limit or filter values)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized - invalid or missing authentication
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden - the caller lacks audit-log:read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "501":
+          description: The platform's observability backend has no audit store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The audit store is unavailable or not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /orgs/{orgName}/audit-logs/filter-values:
+    get:
+      tags:
+        - AuditLogs
+      summary: List the distinct values of one audit field
+      description: |
+        Returns the distinct values of one field among the organization's audit
+        records that match the given window and filters, with a record count for
+        each — for building filter pickers.
+      operationId: queryAuditLogFilterValues
+      parameters:
+        - $ref: "#/components/parameters/AuditLogOrgName"
+        - name: filter
+          in: query
+          required: true
+          description: The field to list values of.
+          schema:
+            type: string
+            enum:
+              - action
+              - result
+              - category
+              - actorId
+              - actorType
+              - resourceType
+              - resourceName
+              - project
+              - environment
+              - agent
+        - name: valueSearch
+          in: query
+          description: Only values containing this text (case-sensitive).
+          schema:
+            type: string
+            maxLength: 256
+        - name: maxValues
+          in: query
+          description: Maximum number of values to return.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - $ref: "#/components/parameters/AuditLogStartTime"
+        - $ref: "#/components/parameters/AuditLogEndTime"
+        - $ref: "#/components/parameters/AuditLogAction"
+        - $ref: "#/components/parameters/AuditLogResult"
+        - $ref: "#/components/parameters/AuditLogCategory"
+        - $ref: "#/components/parameters/AuditLogActorId"
+        - $ref: "#/components/parameters/AuditLogActorType"
+        - $ref: "#/components/parameters/AuditLogResourceType"
+        - $ref: "#/components/parameters/AuditLogResourceName"
+        - $ref: "#/components/parameters/AuditLogProject"
+        - $ref: "#/components/parameters/AuditLogEnvironment"
+        - $ref: "#/components/parameters/AuditLogAgent"
+        - $ref: "#/components/parameters/AuditLogSearch"
+      responses:
+        "200":
+          description: Distinct values and their record counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogFilterValuesResponse"
+        "400":
+          description: Invalid query
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized - invalid or missing authentication
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden - the caller lacks audit-log:read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "501":
+          description: The platform's observability backend has no audit store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The audit store is unavailable or not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /orgs/{orgName}/audit-logs/export:
+    get:
+      tags:
+        - AuditLogs
+      summary: Export the organization's audit trail
+      description: |
+        Streams every audit record of the organization matching the window and
+        filters as newline-delimited JSON (one `AuditLogRecord` per line, oldest
+        first), followed by one final line `{"manifest": AuditLogExportManifest}`.
+
+        The manifest states whether the export is complete: every record the store
+        held for the query was delivered, checked against the store's exact count.
+        `complete: false` with a `reason` means some records could not be reached
+        (for example more than 1000 records sharing one millisecond); narrow the
+        filters and export again. A file without a manifest line was cut off.
+
+        The window ends no later than one minute before the request, so records
+        still in transit are not counted against the export. Starting an export is
+        recorded before any record is sent (`audit-log:export`); if that record
+        cannot be written, the export is refused.
+      operationId: exportAuditLogs
+      parameters:
+        - $ref: "#/components/parameters/AuditLogOrgName"
+        - $ref: "#/components/parameters/AuditLogStartTime"
+        - $ref: "#/components/parameters/AuditLogEndTime"
+        - $ref: "#/components/parameters/AuditLogAction"
+        - $ref: "#/components/parameters/AuditLogResult"
+        - $ref: "#/components/parameters/AuditLogCategory"
+        - $ref: "#/components/parameters/AuditLogActorId"
+        - $ref: "#/components/parameters/AuditLogActorType"
+        - $ref: "#/components/parameters/AuditLogResourceType"
+        - $ref: "#/components/parameters/AuditLogResourceName"
+        - $ref: "#/components/parameters/AuditLogProject"
+        - $ref: "#/components/parameters/AuditLogEnvironment"
+        - $ref: "#/components/parameters/AuditLogAgent"
+        - $ref: "#/components/parameters/AuditLogRequestId"
+        - $ref: "#/components/parameters/AuditLogEventId"
+        - $ref: "#/components/parameters/AuditLogSearch"
+      responses:
+        "200":
+          description: The records, then the manifest line
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid query, or more records than an export may hold
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized - invalid or missing authentication
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden - the caller lacks audit-log:export
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "501":
+          description: The platform's observability backend has no audit store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The audit store is unavailable, or the export could not be recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   parameters:
+    AuditLogOrgName:
+      name: orgName
+      in: path
+      required: true
+      description: Organization name/handle
+      schema:
+        type: string
+        pattern: "^[a-z0-9-]+$"
+        minLength: 1
+        maxLength: 64
+    AuditLogStartTime:
+      name: startTime
+      in: query
+      required: true
+      description: Start of the window (inclusive), RFC3339.
+      schema:
+        type: string
+        format: date-time
+    AuditLogEndTime:
+      name: endTime
+      in: query
+      required: true
+      description: End of the window (exclusive), RFC3339. At most 366 days after startTime.
+      schema:
+        type: string
+        format: date-time
+    AuditLogAction:
+      name: action
+      in: query
+      description: Only these actions (repeatable), e.g. `llm:call`, `agent:deploy`.
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 20
+        items:
+          type: string
+    AuditLogResult:
+      name: result
+      in: query
+      description: Only these results (repeatable).
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 3
+        items:
+          type: string
+          enum: [success, failure, denied]
+    AuditLogCategory:
+      name: category
+      in: query
+      description: Only these categories (repeatable).
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 3
+        items:
+          type: string
+          enum: [management, authorization, access]
+    AuditLogActorId:
+      name: actorId
+      in: query
+      description: Only these actors (repeatable) — a user id, an agent name, a gateway id.
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 20
+        items:
+          type: string
+    AuditLogActorType:
+      name: actorType
+      in: query
+      description: Only these actor types (repeatable).
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 6
+        items:
+          type: string
+          enum: [user, service, agent, gateway, system, anonymous]
+    AuditLogResourceType:
+      name: resourceType
+      in: query
+      description: Only these resource types (repeatable), e.g. `agent`, `llm-proxy`.
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 20
+        items:
+          type: string
+    AuditLogResourceName:
+      name: resourceName
+      in: query
+      description: Only these resource names (repeatable).
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 20
+        items:
+          type: string
+    AuditLogProject:
+      name: project
+      in: query
+      description: Only these projects (repeatable).
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 20
+        items:
+          type: string
+    AuditLogEnvironment:
+      name: environment
+      in: query
+      description: Only these environments (repeatable).
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 20
+        items:
+          type: string
+    AuditLogAgent:
+      name: agent
+      in: query
+      description: |
+        Only records concerning these agents (repeatable): activity a gateway
+        observed the agent perform, operations on the agent itself, and
+        operations on its parts that name it (configurations, monitors, keys).
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 20
+        items:
+          type: string
+    AuditLogRequestId:
+      name: requestId
+      in: query
+      description: Only these request/correlation ids (repeatable).
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 20
+        items:
+          type: string
+    AuditLogEventId:
+      name: eventId
+      in: query
+      description: Only these event ids (repeatable).
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 20
+        items:
+          type: string
+    AuditLogSearch:
+      name: search
+      in: query
+      description: Free-text, case-sensitive substring search over the whole record.
+      schema:
+        type: string
+        maxLength: 256
     AgentIdentityOrgName:
       name: orgName
       in: path
@@ -11641,6 +12076,13 @@ components:
             console buffers and sends nothing when false, so CONSOLE_ANALYTICS_ENABLED
             on the service is the single switch for the whole path rather than
             one half of it. Absent is treated as false.
+        auditTrailEnabled:
+          type: boolean
+          description: |
+            Whether this deployment can read the audit trail back (the
+            service's AUDIT_OBSERVER_URL is set), so the console offers its
+            Audit Logs page only where it works. Permission is still checked
+            per request. Absent is treated as false.
 
     CreateLLMAPIKeyRequest:
       type: object
@@ -19279,3 +19721,209 @@ components:
             The workload may keep referencing the revoked credential until this is confirmed
             or the workload is redeployed.
           example: Could not confirm whether this is the deployment pipeline's lowest environment, so its shared workload-level credentials were left untouched as a precaution.
+
+    AuditLogActor:
+      type: object
+      description: Who performed the action.
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          description: user, service, agent, gateway, system or anonymous.
+          example: agent
+        id:
+          type: string
+          description: The actor's id — a user id, an agent name, a gateway id, or system:<component>.
+          example: support-agent
+        display:
+          type: string
+          description: A human-readable name, when one is recorded.
+
+    AuditLogRequest:
+      type: object
+      description: The request the record describes.
+      properties:
+        method:
+          type: string
+          example: POST
+        path:
+          type: string
+          description: |
+            For control-plane records, the route pattern (never the raw URL). For
+            gateway-observed records, the requested path without its query string.
+          example: /support-cfg-3fa9c1d2e4b5a6f7-proxy/chat/completions
+
+    AuditLogResource:
+      type: object
+      description: What the action was performed on.
+      properties:
+        type:
+          type: string
+          example: llm-proxy
+        id:
+          type: string
+        name:
+          type: string
+          example: support-cfg-3fa9c1d2e4b5a6f7-proxy
+        project:
+          type: string
+          example: customer-care
+        environment:
+          type: string
+          example: default
+        agent:
+          type: string
+          description: |
+            The agent the record concerns: the agent a gateway observed acting, the
+            agent that is the resource, or the agent an operation on one of its
+            parts names.
+          example: support-agent
+
+    AuditLogRecord:
+      type: object
+      required: [eventId, occurredAt, action, result, actor, producer]
+      properties:
+        eventId:
+          type: string
+          example: 0192b7c4-5e1a-7d3f-9c2e-1a2b3c4d5e6f
+        occurredAt:
+          type: string
+          format: date-time
+          description: When the action happened (for gateway records, when the gateway received the request).
+        action:
+          type: string
+          description: What happened, as `<resource>:<verb>`.
+          example: llm:call
+        category:
+          type: string
+          enum: [management, authorization, access]
+        result:
+          type: string
+          description: |
+            success, failure or denied; `unknown` marks an operation whose outcome was
+            never recorded (the service stopped mid-operation).
+          enum: [success, failure, denied, unknown]
+        actionClass:
+          type: string
+          description: Finer grouping — authn, authz, credential, identity, deployment, config, read, system, activity.
+          example: activity
+        severity:
+          type: integer
+          description: 1 info · 2 notice · 3 warning · 4 critical.
+          example: 1
+        actor:
+          $ref: "#/components/schemas/AuditLogActor"
+        authMethod:
+          type: string
+          example: api-key
+        surface:
+          type: string
+          description: Entry point — api, mcp, internal, system, publisher, or gateway (observed agent activity).
+          example: gateway
+        sourceIp:
+          type: string
+        userAgent:
+          type: string
+        requestId:
+          type: string
+          description: Correlation id of the request.
+        request:
+          $ref: "#/components/schemas/AuditLogRequest"
+        resource:
+          $ref: "#/components/schemas/AuditLogResource"
+        statusCode:
+          type: integer
+        durationMs:
+          type: integer
+          format: int64
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        requiredPermission:
+          type: string
+        producer:
+          type: string
+          example: agent-manager-service
+        details:
+          type: object
+          description: |
+            Action-specific fields. For gateway-observed activity: `provenance`
+            ("observed-best-effort"), `gatewayId`, `apiKind`, model and token usage
+            for LLM calls, method and tool name for MCP calls, guardrail outcome.
+          additionalProperties: true
+
+    AuditLogListResponse:
+      type: object
+      required: [records, total]
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLogRecord"
+        total:
+          type: integer
+          format: int64
+          description: Exact number of records matching the query, of which records is the first page.
+        tookMs:
+          type: integer
+          format: int64
+
+    AuditLogFilterValue:
+      type: object
+      required: [value, count]
+      properties:
+        value:
+          type: string
+        count:
+          type: integer
+          format: int64
+
+    AuditLogFilterValuesResponse:
+      type: object
+      required: [filter, values]
+      properties:
+        filter:
+          type: string
+        values:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLogFilterValue"
+        totalValues:
+          type: integer
+          format: int64
+
+    AuditLogExportManifest:
+      type: object
+      description: The last line of an export.
+      required: [complete, exportedCount, storeCount, startTime, endTime, sha256]
+      properties:
+        complete:
+          type: boolean
+          description: Every record the store held for the query was delivered.
+        reason:
+          type: string
+          description: Why the export is incomplete, when it is.
+        exportedCount:
+          type: integer
+          format: int64
+        storeCount:
+          type: integer
+          format: int64
+          description: The store's exact count for the query when the export finished.
+        duplicatesSkipped:
+          type: integer
+          format: int64
+          description: Records stored more than once (same eventId) that were delivered once.
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        generatedAt:
+          type: string
+          format: date-time
+        sha256:
+          type: string
+          description: SHA-256 of every byte before this line.

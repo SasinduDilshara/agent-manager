@@ -118,6 +118,23 @@ data:
   AUDIT_BUFFER_SIZE: {{ .Values.agentManagerService.config.audit.bufferSize | default 4096 | quote }}
   AUDIT_BATCH_SIZE: {{ .Values.agentManagerService.config.audit.batchSize | default 200 | quote }}
   AUDIT_FLUSH_INTERVAL_MS: {{ .Values.agentManagerService.config.audit.flushIntervalMs | default 1000 | quote }}
+  {{- with .Values.agentManagerService.config.audit }}
+  AUDIT_OPENCHOREO_SINK_ENABLED: {{ dig "openchoreoSink" "enabled" false . | quote }}
+  AUDIT_GATEWAY_INGEST_ENABLED: {{ dig "gatewayIngest" "enabled" false . | quote }}
+  AUDIT_GATEWAY_INGEST_MAX_BODY_BYTES: {{ dig "gatewayIngest" "maxBodyBytes" 4194304 . | int64 | quote }}
+  AUDIT_GATEWAY_INGEST_RESOLVER_CACHE_TTL_SECONDS: {{ dig "gatewayIngest" "resolverCacheTTLSeconds" 60 . | int64 | quote }}
+  {{- with .reader }}
+  {{- if .observerUrl }}
+  AUDIT_OBSERVER_URL: {{ .observerUrl | quote }}
+  AUDIT_READER_CLIENT_ID: {{ .clientId | quote }}
+  {{- with .tokenUrl }}
+  AUDIT_READER_TOKEN_URL: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  AUDIT_EXPORT_MAX_RECORDS: {{ .exportMaxRecords | default 500000 | int64 | quote }}
+  AUDIT_EXPORT_SETTLE_SECONDS: {{ .exportSettleSeconds | default 60 | int64 | quote }}
+  {{- end }}
+  {{- end }}
   # Gateway manifest cache backend. Must be "redis" whenever replicaCount > 1 — see
   # the gatewayManifestCache note in values.yaml.
   GATEWAY_MANIFEST_CACHE_BACKEND: {{ .Values.agentManagerService.config.gatewayManifestCache.backend | default "memory" | quote }}

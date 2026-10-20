@@ -84,6 +84,11 @@ export const rootRouteMap: AppRoute = {
                         },
                     },
                 },
+                auditLogs: {
+                    path: 'audit-logs',
+                    index: true,
+                    children: {},
+                },
                 gateways: {
                     path: 'gateways',
                     index: true,

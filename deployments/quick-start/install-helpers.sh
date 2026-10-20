@@ -152,6 +152,29 @@ wait_for_statefulset() {
     fi
 }
 
+# amp_chart_ref <chart-name>
+# Where an AMP chart is installed from: the published registry by default, or a
+# directory of chart sources when AMP_LOCAL_CHARTS_DIR is set. The local form
+# exists for installing a build that has no published chart — a branch under
+# test — from a checkout's deployments/helm-charts.
+amp_chart_ref() {
+    local chart_name="$1"
+    if [[ -n "${AMP_LOCAL_CHARTS_DIR:-}" ]]; then
+        printf '%s/%s' "${AMP_LOCAL_CHARTS_DIR%/}" "${chart_name}"
+    else
+        printf 'oci://%s/%s' "${HELM_CHART_REGISTRY}" "${chart_name}"
+    fi
+}
+
+# AMP_CHART_VERSION_ARGS: the --version flag a registry chart needs. A chart
+# directory has exactly one version and helm rejects --version for it, so the
+# local form passes nothing.
+if [[ -n "${AMP_LOCAL_CHARTS_DIR:-}" ]]; then
+    AMP_CHART_VERSION_ARGS=()
+else
+    AMP_CHART_VERSION_ARGS=(--version "${VERSION}")
+fi
+
 # Install helm chart with idempotency check
 install_amp_helm_chart() {
     local release_name="$1"
@@ -166,12 +189,20 @@ install_amp_helm_chart() {
         return 0
     fi
 
+    # A chart directory carries its dependencies as a lock file only; a packaged
+    # registry chart already bundles them.
+    if [[ -d "${chart_ref}" && -f "${chart_ref}/Chart.lock" ]]; then
+        if ! helm dependency build "${chart_ref}"; then
+            return 1
+        fi
+    fi
+
     # Install the chart
     if helm install "${release_name}" "${chart_ref}" \
         --namespace "${namespace}" \
         --create-namespace \
         --timeout "${timeout}s" \
-        "${extra_args[@]}"; then
+        ${extra_args[@]+"${extra_args[@]}"}; then
         return 0
     else
         return 1
@@ -206,17 +237,17 @@ install_registry_credentials() {
 }
 
 install_agent_management_platform() {
-    local chart_ref="oci://${HELM_CHART_REGISTRY}/${AMP_CHART_NAME}"
-    local chart_version="${VERSION}"
+    local chart_ref
+    chart_ref="$(amp_chart_ref "${AMP_CHART_NAME}")"
     local release_name="amp"
     local helm_log="/tmp/helm-amp-install.log"
 
     # Install Helm chart
     if ! install_amp_helm_chart "${release_name}" "${chart_ref}" "${AMP_NS}" "${TIMEOUT_AMP_INSTALL}" \
-        --version "${chart_version}" \
+        ${AMP_CHART_VERSION_ARGS[@]+"${AMP_CHART_VERSION_ARGS[@]}"} \
         --set console.config.instrumentationUrl="http://default-default.gateway.localhost:19080/otel" \
         --set agentManagerService.config.amObserverPublicURL="http://traces.amp.localhost:11080" \
-        "${AMP_HELM_ARGS[@]}" >"${helm_log}" 2>&1; then
+        ${AMP_HELM_ARGS[@]+"${AMP_HELM_ARGS[@]}"} >"${helm_log}" 2>&1; then
         echo "Helm installation log (last 50 lines):"
         tail -50 "${helm_log}" 2>/dev/null || cat "${helm_log}" 2>/dev/null || echo "Log file not available"
         echo ""
@@ -275,14 +306,14 @@ install_agent_management_platform() {
 
 # Install Observability Extension
 install_observability_extension() {
-    local chart_ref="oci://${HELM_CHART_REGISTRY}/${OBSERVABILITY_CHART_NAME}"
-    local chart_version="${VERSION}"
+    local chart_ref
+    chart_ref="$(amp_chart_ref "${OBSERVABILITY_CHART_NAME}")"
     local release_name="amp-observability-traces"
 
     # Install Helm chart
     if ! install_amp_helm_chart "${release_name}" "${chart_ref}" "${OBSERVABILITY_NS}" "${TIMEOUT_AMP_INSTALL}" \
-        --version "${chart_version}" \
-        "${OBSERVABILITY_HELM_ARGS[@]}"; then
+        ${AMP_CHART_VERSION_ARGS[@]+"${AMP_CHART_VERSION_ARGS[@]}"} \
+        ${OBSERVABILITY_HELM_ARGS[@]+"${OBSERVABILITY_HELM_ARGS[@]}"}; then
         return 1
     fi
 
@@ -371,16 +402,16 @@ install_default_env_thunder() {
 
 # Install AMP Thunder Extension
 install_amp_thunder_extension() {
-    local chart_ref="oci://${HELM_CHART_REGISTRY}/${THUNDER_EXTENSION_CHART_NAME}"
-    local chart_version="${VERSION}"
+    local chart_ref
+    chart_ref="$(amp_chart_ref "${THUNDER_EXTENSION_CHART_NAME}")"
     local release_name="amp-thunder-extension"
 
     # Install Helm chart. The chart's agentManagerMcpBaseUrl/observerMcpBaseUrl
     # defaults are already this install's gateway origins, so no MCP resource
     # identifier override is needed here.
     if ! install_amp_helm_chart "${release_name}" "${chart_ref}" "${THUNDER_NS}" "${TIMEOUT_AMP_INSTALL}" \
-        --version "${chart_version}" \
-        "${THUNDER_HELM_ARGS[@]}"; then
+        ${AMP_CHART_VERSION_ARGS[@]+"${AMP_CHART_VERSION_ARGS[@]}"} \
+        ${THUNDER_HELM_ARGS[@]+"${THUNDER_HELM_ARGS[@]}"}; then
         return 1
     fi
 
@@ -389,8 +420,8 @@ install_amp_thunder_extension() {
 
 # Install Evaluation Extension
 install_evaluation_extension() {
-    local chart_ref="oci://${HELM_CHART_REGISTRY}/${EVALUATION_CHART_NAME}"
-    local chart_version="${VERSION}"
+    local chart_ref
+    chart_ref="$(amp_chart_ref "${EVALUATION_CHART_NAME}")"
     local release_name="amp-evaluation-extension"
 
     # The chart's NetworkPolicy targets "workflows-<env>" (workflows-default unless
@@ -412,9 +443,9 @@ install_evaluation_extension() {
 
     # Install Helm chart
     if ! install_amp_helm_chart "${release_name}" "${chart_ref}" "${EVALUATION_NS}" "${TIMEOUT_AMP_INSTALL}" \
-        --version "${chart_version}" \
+        ${AMP_CHART_VERSION_ARGS[@]+"${AMP_CHART_VERSION_ARGS[@]}"} \
         ${api_server_args[@]+"${api_server_args[@]}"} \
-        "${EVALUATION_HELM_ARGS[@]}"; then
+        ${EVALUATION_HELM_ARGS[@]+"${EVALUATION_HELM_ARGS[@]}"}; then
         return 1
     fi
 
@@ -450,14 +481,14 @@ install_agent_sandbox_module() {
 
 # Install Platform Resources Extension
 install_platform_resources_extension() {
-    local chart_ref="oci://${HELM_CHART_REGISTRY}/${PLATFORM_RESOURCES_CHART_NAME}"
-    local chart_version="${VERSION}"
+    local chart_ref
+    chart_ref="$(amp_chart_ref "${PLATFORM_RESOURCES_CHART_NAME}")"
     local release_name="amp-platform-resources"
 
     # Install Helm chart
     if ! install_amp_helm_chart "${release_name}" "${chart_ref}" "${DEFAULT_NS}" "${TIMEOUT_AMP_INSTALL}" \
-        --version "${chart_version}" \
-        "${PLATFORM_RESOURCES_HELM_ARGS[@]}"; then
+        ${AMP_CHART_VERSION_ARGS[@]+"${AMP_CHART_VERSION_ARGS[@]}"} \
+        ${PLATFORM_RESOURCES_HELM_ARGS[@]+"${PLATFORM_RESOURCES_HELM_ARGS[@]}"}; then
         return 1
     fi
 
@@ -499,8 +530,8 @@ verify_amp_prerequisites() {
 #   1. Runs a bootstrap Job to register the gateway in Agent Manager and generate a token
 #   2. Deploys an APIGateway CR consumed by the gateway-operator to spin up the full stack
 install_gateway_extension() {
-    local chart_ref="oci://${HELM_CHART_REGISTRY}/${GATEWAY_EXTENSION_CHART_NAME}"
-    local chart_version="${VERSION}"
+    local chart_ref
+    chart_ref="$(amp_chart_ref "${GATEWAY_EXTENSION_CHART_NAME}")"
     local release_name="api-platform-default-default"
     local gateway_vhost="http://default-default.gateway.localhost:19080"
     local idp_skip_tls_verify="${IDP_SKIP_TLS_VERIFY:-true}"
@@ -591,13 +622,13 @@ install_gateway_extension() {
     # the APIGateway CR, config, RestApis, kgateway backendRef and token secret
     # — it must match the release namespace.
     if ! install_amp_helm_chart "${release_name}" "${chart_ref}" "${gateway_namespace}" "${TIMEOUT_AMP_INSTALL}" \
-        --version "${chart_version}" \
+        ${AMP_CHART_VERSION_ARGS[@]+"${AMP_CHART_VERSION_ARGS[@]}"} \
         --set apiGateway.namespace="${gateway_namespace}" \
         --set agentManager.orgName=default \
         --set gateway.environment=default \
         --set gateway.vhost="${gateway_vhost}" \
-        "${thunder_args[@]}" \
-        "${GATEWAY_HELM_ARGS[@]}"; then
+        ${thunder_args[@]+"${thunder_args[@]}"} \
+        ${GATEWAY_HELM_ARGS[@]+"${GATEWAY_HELM_ARGS[@]}"}; then
         return 1
     fi
 

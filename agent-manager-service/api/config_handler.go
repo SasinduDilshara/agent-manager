@@ -46,10 +46,14 @@ func registerConfigRoutes(mux *http.ServeMux) {
 		// whether to report at all, rather than carrying a second flag of its
 		// own that could disagree with this one.
 		consoleAnalytics := growthanalytics.ConsoleEnabled(cfg.GrowthAnalytics)
+		// The same test the audit trail service applies before reading, so the
+		// console offers the Audit Logs page exactly where reads can be served.
+		auditTrail := cfg.Audit.Reader.QueryEnabled()
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(spec.ConfigResponse{
 			ObserverBaseUrl:         cfg.Observer.PublicURL,
 			ConsoleAnalyticsEnabled: &consoleAnalytics,
+			AuditTrailEnabled:       &auditTrail,
 		}); err != nil {
 			logger.GetLogger(r.Context()).Error("failed to encode config response", "error", err)
 		}

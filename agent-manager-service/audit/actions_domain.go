@@ -125,7 +125,79 @@ const (
 	// System-initiated work. Recorded when it changes state, not on every tick.
 	ActionSystemAgentIdentityProvisioned Action = "system:agent-identity-provisioned"
 	ActionSystemAgentIdentityExhausted   Action = "system:agent-identity-exhausted"
+
+	// Agent activity observed by an AI gateway: one record per request the
+	// gateway handled, relayed to the audit trail by the gateway audit ingest.
+	// The action is chosen from the kind of API the request reached.
+	ActionLLMCall     Action = "llm:call"
+	ActionMCPToolCall Action = "mcp:tool-call"
+	ActionMCPCall     Action = "mcp:call"
+	ActionAgentInvoke Action = "agent:invoke"
+	ActionAPICall     Action = "api:call"
+
+	// The audit trail itself. Reading it is recorded with the real reader,
+	// because the store records only this service's own identity for the read.
+	ActionAuditLogRead   Action = "audit-log:read"
+	ActionAuditLogExport Action = "audit-log:export"
+	// ActionAuditLogIngest labels a gateway delivering a batch of observed
+	// activity (the coverage record of the ingest route, coalesced per gateway).
+	ActionAuditLogIngest Action = "audit-log:ingest"
+	// ActionAuditIngestRejected summarises the records of an accepted gateway
+	// batch that could not be relayed (an unexpected scope or event name, an
+	// unreadable timestamp). The organization always comes from the gateway's
+	// credential, so a batch cannot claim another one's.
+	ActionAuditIngestRejected Action = "system:audit-ingest-rejected"
 )
+
+// Resource types of observed agent activity: the kind of API the request
+// reached at the gateway.
+const (
+	ResourceLLMProxy    = "llm-proxy"
+	ResourceLLMProvider = "llm-provider"
+	ResourceMCPProxy    = "mcp-proxy"
+	ResourceAPI         = "api"
+	ResourceAuditLog    = "audit-log"
+)
+
+// gatewayActivityFields is the detail schema shared by every observed-activity
+// action. Each key is filled only when the gateway reported the value.
+var gatewayActivityFields = map[string]FieldKind{
+	// Where the record came from and how it was resolved.
+	"gatewayId":     KindIdentifier,
+	"provenance":    KindEnum,
+	"resolution":    KindEnum,
+	"applicationId": KindIdentifier,
+	"authSubject":   KindIdentifier,
+	// The API the request reached.
+	"apiId":      KindIdentifier,
+	"apiKind":    KindEnum,
+	"apiContext": KindName,
+	"route":      KindName,
+	// Upstream outcome.
+	"upstreamHost":   KindName,
+	"upstreamStatus": KindCount,
+	"faultType":      KindEnum,
+	// LLM calls.
+	"provider":      KindName,
+	"operation":     KindName,
+	"requestModel":  KindName,
+	"responseModel": KindName,
+	"inputTokens":   KindCount,
+	"outputTokens":  KindCount,
+	"totalTokens":   KindCount,
+	"costUsd":       KindCount,
+	// MCP calls.
+	"mcpMethod":    KindName,
+	"mcpSessionId": KindIdentifier,
+	"toolName":     KindName,
+	"promptName":   KindName,
+	"resourceUri":  KindURL,
+	// Guardrails.
+	"guardrailHit":  KindFlag,
+	"guardrailName": KindName,
+	// Latency.
+	"backendLatencyMs": KindCount,
+}
 
 // APIKeyOwner names the kind of resource an API key belongs to. Every API-key
 // route shares one permission and one action, so without this the trail cannot
@@ -523,6 +595,44 @@ func init() {
 		"agentName":   KindName,
 		"environment": KindName,
 		"reason":      KindName,
+	})
+
+	// Observed agent activity. Routine by volume, so informational; a refused
+	// request is raised to a warning at the emit site.
+	for _, a := range []Action{ActionLLMCall, ActionMCPToolCall, ActionMCPCall, ActionAgentInvoke, ActionAPICall} {
+		Register(a, ClassActivity, SeverityInfo)
+		RegisterDetailSchema(a, gatewayActivityFields)
+	}
+
+	// Reading the trail discloses every recorded action of an organization.
+	Register(ActionAuditLogRead, ClassRead, SeverityNotice)
+	RegisterDetailSchema(ActionAuditLogRead, map[string]FieldKind{
+		"operation":     KindEnum,
+		"startTime":     KindName,
+		"endTime":       KindName,
+		"filters":       KindNameList,
+		"returnedCount": KindCount,
+		"totalCount":    KindCount,
+	})
+	// An export takes the trail out of the platform, so it is recorded before
+	// it starts (fail-closed) and again with what was actually delivered.
+	Register(ActionAuditLogExport, ClassRead, SeverityWarning)
+	RegisterDetailSchema(ActionAuditLogExport, map[string]FieldKind{
+		"format":        KindEnum,
+		"startTime":     KindName,
+		"endTime":       KindName,
+		"filters":       KindNameList,
+		"exportedCount": KindCount,
+		"complete":      KindFlag,
+		"sha256":        KindIdentifier,
+	})
+	Register(ActionAuditLogIngest, ClassSystem, SeverityInfo)
+	RegisterDetailSchema(ActionAuditLogIngest, map[string]FieldKind{})
+	Register(ActionAuditIngestRejected, ClassSystem, SeverityWarning)
+	RegisterDetailSchema(ActionAuditIngestRejected, map[string]FieldKind{
+		"gatewayId":     KindIdentifier,
+		"reason":        KindEnum,
+		"rejectedCount": KindCount,
 	})
 }
 

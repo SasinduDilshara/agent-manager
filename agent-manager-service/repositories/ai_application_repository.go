@@ -36,6 +36,10 @@ type AIApplicationRepository interface {
 	// GetByAgentEnv returns the AIApplication for the given org/project/agent/environment.
 	// Returns gorm.ErrRecordNotFound when no row exists.
 	GetByAgentEnv(ctx context.Context, ouID, projectName, agentID, envName string) (*models.AIApplication, error)
+	// GetByHandle returns the AIApplication whose gateway-facing handle (the
+	// application id a gateway reports) is handle, within the organisation.
+	// Returns gorm.ErrRecordNotFound when no row exists.
+	GetByHandle(ctx context.Context, ouID, handle string) (*models.AIApplication, error)
 	// ListByOrg returns all AIApplication rows for the given organisation.
 	ListByOrg(ctx context.Context, ouID string) ([]models.AIApplication, error)
 	// ListByAgent returns all AIApplication rows for the given org+project+agent across all environments.
@@ -79,6 +83,18 @@ func (r *AIApplicationRepo) GetByAgentEnv(ctx context.Context, ouID, projectName
 	err := r.db.WithContext(ctx).
 		Where("ou_id = ? AND project_name = ? AND agent_id = ? AND environment_name = ?",
 			ouID, projectName, agentID, envName).
+		First(&app).Error
+	if err != nil {
+		return nil, err
+	}
+	return &app, nil
+}
+
+// GetByHandle fetches the AIApplication with the given handle in an org.
+func (r *AIApplicationRepo) GetByHandle(ctx context.Context, ouID, handle string) (*models.AIApplication, error) {
+	var app models.AIApplication
+	err := r.db.WithContext(ctx).
+		Where("ou_id = ? AND handle = ?", ouID, handle).
 		First(&app).Error
 	if err != nil {
 		return nil, err

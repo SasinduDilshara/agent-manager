@@ -414,7 +414,7 @@ func recordStartupPosture(recorder audit.Recorder) {
 		ctx, audit.ActionSystemStartup,
 		audit.Actor(audit.ActorSystem, "system:agent-manager-service", ""),
 		audit.SurfaceOpt(audit.SurfaceSystem),
-		audit.Detail("sinks", []string{"stdout"}),
+		audit.Detail("sinks", audit.SinkNames(recorder)),
 	)
 }
 

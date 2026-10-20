@@ -171,6 +171,10 @@ func (r *bufferedRecorder) run() {
 	defer ticker.Stop()
 
 	batch := make([]Event, 0, r.cfg.BatchSize)
+	// reporter turns the drop counter into records in the trail itself; the
+	// application log alone would leave a reader of the trail unable to tell a
+	// quiet period from a lossy one.
+	reporter := dropReporter{interval: dropReportInterval}
 	flush := func() {
 		if len(batch) == 0 {
 			return
@@ -193,6 +197,7 @@ func (r *bufferedRecorder) run() {
 			}
 		case <-ticker.C:
 			flush()
+			reporter.report(r, false)
 		case <-r.stopping:
 			// Drain whatever is already queued, then stop. Anything a late
 			// producer sends after this is left in the buffer and lost, which
@@ -207,11 +212,56 @@ func (r *bufferedRecorder) run() {
 					}
 				default:
 					flush()
+					reporter.report(r, true)
 					return
 				}
 			}
 		}
 	}
+}
+
+// dropReportInterval bounds how often a system:audit-dropped record is written
+// while the buffer keeps overflowing.
+const dropReportInterval = 30 * time.Second
+
+// dropReporter writes a system:audit-dropped record whenever events have been
+// dropped since the last one it wrote. It runs on the recorder's single writer
+// goroutine, so its fields need no synchronisation.
+type dropReporter struct {
+	interval time.Duration
+	reported uint64
+	last     time.Time
+}
+
+// report writes a record when there are unreported drops and the interval has
+// passed, or unconditionally when final (on shutdown). The record goes straight
+// to the sink: queuing it behind the buffer that just overflowed would lose it
+// for the same reason the events were lost.
+func (d *dropReporter) report(r *bufferedRecorder, final bool) {
+	total := r.dropped.Load()
+	if total == d.reported {
+		return
+	}
+	now := time.Now()
+	if !final && now.Sub(d.last) < d.interval {
+		return
+	}
+	d.last = now
+	e := BuildObservedEvent(ActionSystemAuditDropped,
+		Actor(ActorSystem, "system:audit-recorder", ""),
+		SurfaceOpt(SurfaceSystem),
+		Detail("droppedTotal", int64(total)),
+		Detail("sink", r.sink.Name()),
+	)
+	prepare(&e)
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+	if err := r.sink.Write(ctx, []Event{e}); err != nil {
+		r.logger.Error("audit sink write failed; drop report lost",
+			"error", err, "sink", r.sink.Name(), "droppedTotal", total)
+		return
+	}
+	d.reported = total
 }
 
 // noteDrop counts a dropped event and warns at most once every 30 seconds, so
@@ -259,6 +309,43 @@ func prepare(e *Event) {
 		e.Surface = SurfaceSystem
 	}
 	redact(e)
+}
+
+// BuildObservedEvent assembles a record of something another system observed
+// and reported — a request an AI gateway handled — rather than of an operation
+// on this service.
+//
+// It deliberately starts from no request context: the request that delivered
+// the report belongs to the reporter (its actor is the gateway), and none of
+// it may leak into what the report describes. Every field comes from opts.
+func BuildObservedEvent(action Action, opts ...Option) Event {
+	e := newEvent(context.Background(), action)
+	// newEvent stamps a placeholder correlation id outside a request; a relayed
+	// record carries the reporter's id or none at all.
+	e.CorrelationID = ""
+	for _, opt := range opts {
+		opt(&e)
+	}
+	return e
+}
+
+// WriteSync prepares events exactly as the recorder does — stamping identity
+// and applying redaction — and writes them to sink before returning.
+//
+// It is for records this service relays: a batch of agent activity a gateway
+// reported. Such a batch must be on the sink before the gateway is told it was
+// accepted, because the gateway resends only what it was not acknowledged for,
+// so it cannot ride the buffered, drop-on-overflow path Record uses.
+func WriteSync(ctx context.Context, sink Sink, events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+	for i := range events {
+		prepare(&events[i])
+	}
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
+	defer cancel()
+	return sink.Write(writeCtx, events)
 }
 
 // noopRecorder discards events. Used when auditing is disabled by configuration.
