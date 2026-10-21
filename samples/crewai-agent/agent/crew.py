@@ -77,7 +77,7 @@ def create_crew() -> Crew:
     )
 
     research_task = Task(
-        description="Answer the user's question: {question}",
+        description="Today's date is {today}. Answer the user's question: {question}",
         expected_output="A sentence answering the question.",
         agent=researcher,
     )

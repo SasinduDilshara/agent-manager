@@ -15,6 +15,8 @@ os.environ.setdefault("CREWAI_STORAGE_DIR", "/tmp/crewai")
 if not os.access(os.path.expanduser("~"), os.W_OK):
     os.environ["HOME"] = "/tmp"
 
+import datetime
+
 import dotenv
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -51,5 +53,7 @@ def chat(payload: ChatRequest):
     # context, so it doesn't carry over to other requests.
     if Traceloop is not None:
         Traceloop.set_association_properties({"session_id": payload.session_id})
-    result = crew.kickoff(inputs={"question": payload.message})
+    # The model does not know the date; tools such as a forecast need it.
+    today = datetime.date.today().isoformat()
+    result = crew.kickoff(inputs={"question": payload.message, "today": today})
     return JSONResponse(content={"response": str(result)})
