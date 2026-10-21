@@ -58,6 +58,22 @@ CREWAI_STORAGE_DIR=/tmp/crewai
 2. Click **"Deploy"**
 3. Wait for the build to complete
 
+### Optional: route calls through the AI gateway
+
+To have the agent's LLM and tool calls pass through Agent Manager's AI gateway
+(and so appear in the gateway audit trail), attach them to the agent and name
+the injected variables as follows; the crew picks them up automatically:
+
+| Attach | Variable for the URL | Variable for the API key |
+|---|---|---|
+| An LLM provider (model config) | `LLM_PROXY_URL` | `LLM_PROXY_API_KEY` |
+| An MCP server (MCP config) | `WEATHER_MCP_URL` | `WEATHER_MCP_API_KEY` |
+
+The LLM proxy key is sent in an `API-Key` header and the MCP proxy key in
+`X-API-Key` (override with `LLM_PROXY_API_KEY_HEADER` /
+`WEATHER_MCP_API_KEY_HEADER`). Without these variables the crew calls OpenAI
+directly with `OPENAI_API_KEY`, as above.
+
 ## Testing Your Agent
 
 ### Step 1: Navigate to Chat Interface
