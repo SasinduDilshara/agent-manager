@@ -48,6 +48,8 @@ type AuditLogRecord struct {
 	ErrorMessage       *string           `json:"errorMessage,omitempty"`
 	RequiredPermission *string           `json:"requiredPermission,omitempty"`
 	Producer           string            `json:"producer"`
+	// Where the record came from: `platform` (an operation performed through Agent Manager), or agent activity relayed from the gateways by the OTel feed (`gateway-otel`) or the traffic-log feed (`gateway-traffic-log`).
+	Source string `json:"source"`
 	// Action-specific fields. For gateway-observed activity: `provenance` (\"observed-best-effort\"), `gatewayId`, `apiKind`, model and token usage for LLM calls, method and tool name for MCP calls, guardrail outcome.
 	Details map[string]interface{} `json:"details,omitempty"`
 }
@@ -56,7 +58,7 @@ type AuditLogRecord struct {
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewAuditLogRecord(eventId string, occurredAt time.Time, action string, result string, actor AuditLogActor, producer string) *AuditLogRecord {
+func NewAuditLogRecord(eventId string, occurredAt time.Time, action string, result string, actor AuditLogActor, producer string, source string) *AuditLogRecord {
 	this := AuditLogRecord{}
 	this.EventId = eventId
 	this.OccurredAt = occurredAt
@@ -64,6 +66,7 @@ func NewAuditLogRecord(eventId string, occurredAt time.Time, action string, resu
 	this.Result = result
 	this.Actor = actor
 	this.Producer = producer
+	this.Source = source
 	return &this
 }
 
@@ -699,6 +702,30 @@ func (o *AuditLogRecord) SetProducer(v string) {
 	o.Producer = v
 }
 
+// GetSource returns the Source field value
+func (o *AuditLogRecord) GetSource() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.Source
+}
+
+// GetSourceOk returns a tuple with the Source field value
+// and a boolean to check if the value has been set.
+func (o *AuditLogRecord) GetSourceOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Source, true
+}
+
+// SetSource sets field value
+func (o *AuditLogRecord) SetSource(v string) {
+	o.Source = v
+}
+
 // GetDetails returns the Details field value if set, zero value otherwise.
 func (o *AuditLogRecord) GetDetails() map[string]interface{} {
 	if o == nil || IsNil(o.Details) {
@@ -792,6 +819,7 @@ func (o AuditLogRecord) ToMap() (map[string]interface{}, error) {
 		toSerialize["requiredPermission"] = o.RequiredPermission
 	}
 	toSerialize["producer"] = o.Producer
+	toSerialize["source"] = o.Source
 	if !IsNil(o.Details) {
 		toSerialize["details"] = o.Details
 	}

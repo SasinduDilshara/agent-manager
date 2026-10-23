@@ -123,6 +123,13 @@ data:
   AUDIT_GATEWAY_INGEST_ENABLED: {{ dig "gatewayIngest" "enabled" false . | quote }}
   AUDIT_GATEWAY_INGEST_MAX_BODY_BYTES: {{ dig "gatewayIngest" "maxBodyBytes" 4194304 . | int64 | quote }}
   AUDIT_GATEWAY_INGEST_RESOLVER_CACHE_TTL_SECONDS: {{ dig "gatewayIngest" "resolverCacheTTLSeconds" 60 . | int64 | quote }}
+  AUDIT_GATEWAY_INGEST_KEEP_BODY_EXCERPTS: {{ dig "gatewayIngest" "keepBodyExcerpts" false . | quote }}
+  AUDIT_GATEWAY_INGEST_BODY_EXCERPT_BYTES: {{ dig "gatewayIngest" "bodyExcerptBytes" 8192 . | int64 | quote }}
+  AUDIT_TRAFFIC_INGEST_ENABLED: {{ dig "gatewayTrafficIngest" "enabled" false . | quote }}
+  AUDIT_TRAFFIC_INGEST_MAX_BODY_BYTES: {{ dig "gatewayTrafficIngest" "maxBodyBytes" 8388608 . | int64 | quote }}
+  AUDIT_TRAFFIC_INGEST_RESOLVER_CACHE_TTL_SECONDS: {{ dig "gatewayTrafficIngest" "resolverCacheTTLSeconds" 60 . | int64 | quote }}
+  AUDIT_TRAFFIC_INGEST_KEEP_BODY_EXCERPTS: {{ dig "gatewayTrafficIngest" "keepBodyExcerpts" false . | quote }}
+  AUDIT_TRAFFIC_INGEST_BODY_EXCERPT_BYTES: {{ dig "gatewayTrafficIngest" "bodyExcerptBytes" 8192 . | int64 | quote }}
   {{- with .reader }}
   {{- if .observerUrl }}
   AUDIT_OBSERVER_URL: {{ .observerUrl | quote }}

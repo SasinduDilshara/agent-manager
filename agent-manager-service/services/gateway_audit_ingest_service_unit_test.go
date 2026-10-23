@@ -158,7 +158,7 @@ var acmeGateway = GatewayAuditCaller{GatewayID: "gw-1", OUID: "ou-acme"}
 
 func TestGatewayAuditIngest_LLMCallIsRelayedWithAttribution(t *testing.T) {
 	sink := &captureSink{}
-	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, 0, discardLogger())
 
 	res, err := svc.Ingest(context.Background(), acmeGateway, otlpBatch(gatewayAnalyticsScope, llmCallRecord()))
 	require.NoError(t, err)
@@ -206,7 +206,7 @@ func TestGatewayAuditIngest_LLMCallIsRelayedWithAttribution(t *testing.T) {
 // headers and prompts, and none of it may reach the trail in any field.
 func TestGatewayAuditIngest_NeverRecordsHeadersOrBodies(t *testing.T) {
 	sink := &captureSink{}
-	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, 0, discardLogger())
 	_, err := svc.Ingest(context.Background(), acmeGateway, otlpBatch(gatewayAnalyticsScope, llmCallRecord()))
 	require.NoError(t, err)
 
@@ -231,7 +231,7 @@ func TestGatewayAuditIngest_MCPToolCallResolvedByAgentIdentity(t *testing.T) {
 	// AgentID-authenticated routes carry no application id.
 	apps := &repomocks.AIApplicationRepositoryMock{}
 	sink := &captureSink{}
-	svc := NewGatewayAuditIngestService(sink, apps, identities, time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(sink, apps, identities, time.Minute, 0, discardLogger())
 
 	rec := otlpRecord(testRequestTime.UnixNano(),
 		otlpAttr("http.response.status_code", 200),
@@ -263,7 +263,7 @@ func TestGatewayAuditIngest_MCPToolCallResolvedByAgentIdentity(t *testing.T) {
 // organization's application is recorded unresolved, under the gateway's org.
 func TestGatewayAuditIngest_ForeignApplicationDoesNotResolve(t *testing.T) {
 	sink := &captureSink{}
-	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, 0, discardLogger())
 	other := GatewayAuditCaller{GatewayID: "gw-2", OUID: "ou-globex"}
 
 	_, err := svc.Ingest(context.Background(), other, otlpBatch(gatewayAnalyticsScope, llmCallRecord()))
@@ -280,7 +280,7 @@ func TestGatewayAuditIngest_ForeignApplicationDoesNotResolve(t *testing.T) {
 
 func TestGatewayAuditIngest_DeniedAndGuardrailOutcomes(t *testing.T) {
 	sink := &captureSink{}
-	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, 0, discardLogger())
 
 	denied := otlpRecord(testRequestTime.UnixNano(), otlpAttr("http.response.status_code", 403), otlpAttr("wso2.api.type", "Mcp"))
 	blocked := otlpRecord(testRequestTime.UnixNano()+1, otlpAttr("http.response.status_code", 422),
@@ -312,7 +312,7 @@ func TestGatewayAuditIngest_DeniedAndGuardrailOutcomes(t *testing.T) {
 // batch it was not acknowledged for; the copy must be recognisable as one.
 func TestGatewayAuditIngest_RedeliveryYieldsTheSameEventID(t *testing.T) {
 	sink := &captureSink{}
-	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, 0, discardLogger())
 	batch := otlpBatch(gatewayAnalyticsScope, llmCallRecord())
 
 	_, err := svc.Ingest(context.Background(), acmeGateway, batch)
@@ -332,7 +332,7 @@ func TestGatewayAuditIngest_RedeliveryYieldsTheSameEventID(t *testing.T) {
 
 func TestGatewayAuditIngest_RejectsRecordsItCannotAccept(t *testing.T) {
 	sink := &captureSink{}
-	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, 0, discardLogger())
 
 	otherEvent := strings.ReplaceAll(llmCallRecord(), gatewayAnalyticsEvent, "some.other.event")
 	badTime := strings.Replace(llmCallRecord(), fmt.Sprintf(`"timeUnixNano":"%d"`, testRequestTime.UnixNano()),
@@ -353,7 +353,7 @@ func TestGatewayAuditIngest_RejectsRecordsItCannotAccept(t *testing.T) {
 }
 
 func TestGatewayAuditIngest_MalformedBatch(t *testing.T) {
-	svc := NewGatewayAuditIngestService(&captureSink{}, supportAgentApps(t), noIdentities(), time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(&captureSink{}, supportAgentApps(t), noIdentities(), time.Minute, 0, discardLogger())
 	_, err := svc.Ingest(context.Background(), acmeGateway, []byte("not json"))
 	require.ErrorIs(t, err, utils.ErrMalformedAuditBatch)
 }
@@ -368,7 +368,7 @@ func TestGatewayAuditIngest_LookupFailureAsksForRedelivery(t *testing.T) {
 		},
 	}
 	sink := &captureSink{}
-	svc := NewGatewayAuditIngestService(sink, apps, noIdentities(), time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(sink, apps, noIdentities(), time.Minute, 0, discardLogger())
 
 	_, err := svc.Ingest(context.Background(), acmeGateway, otlpBatch(gatewayAnalyticsScope, llmCallRecord()))
 	require.ErrorIs(t, err, utils.ErrAuditIngestUnavailable)
@@ -378,14 +378,14 @@ func TestGatewayAuditIngest_LookupFailureAsksForRedelivery(t *testing.T) {
 
 func TestGatewayAuditIngest_SinkFailureAsksForRedelivery(t *testing.T) {
 	sink := &captureSink{err: errors.New("stdout closed")}
-	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(sink, supportAgentApps(t), noIdentities(), time.Minute, 0, discardLogger())
 	_, err := svc.Ingest(context.Background(), acmeGateway, otlpBatch(gatewayAnalyticsScope, llmCallRecord()))
 	require.ErrorIs(t, err, utils.ErrAuditIngestUnavailable)
 }
 
 func TestGatewayAuditIngest_ResolverCachesHitsAndMisses(t *testing.T) {
 	apps := supportAgentApps(t)
-	svc := NewGatewayAuditIngestService(&captureSink{}, apps, noIdentities(), time.Minute, discardLogger())
+	svc := NewGatewayAuditIngestService(&captureSink{}, apps, noIdentities(), time.Minute, 0, discardLogger())
 	unknown := strings.Replace(llmCallRecord(), "support-agent-9c41e0ab", "ghost-app", 1)
 	batch := otlpBatch(gatewayAnalyticsScope, llmCallRecord(), llmCallRecord(), unknown, unknown)
 

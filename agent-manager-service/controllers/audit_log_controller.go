@@ -261,6 +261,7 @@ func parseAuditTrailQuery(params url.Values, withPaging bool) (services.AuditTra
 	q.Agents = params["agent"]
 	q.RequestIDs = params["requestId"]
 	q.EventIDs = params["eventId"]
+	q.Sources = params["source"]
 	q.Search = params.Get("search")
 	return q, nil
 }

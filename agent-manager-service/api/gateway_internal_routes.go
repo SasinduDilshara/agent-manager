@@ -51,6 +51,10 @@ func RegisterGatewayInternalRoutes(rr *middleware.RouteRegistrar, ctrl controlle
 	// publisher (OTLP/HTTP JSON) for the audit trail.
 	rr.HandleFuncWithValidation("POST /audit/gateway-events", ctrl.IngestAuditEvents)
 
+	// The same activity from the gateway's traffic log, delivered by its
+	// traffic-log HTTP sink (NDJSON) — a second feed, evaluated against the first.
+	rr.HandleFuncWithValidation("POST /audit/traffic-events", ctrl.IngestTrafficAuditEvents)
+
 	// LLM Provider endpoints
 	rr.HandleFuncWithValidation("GET /llm-providers/{providerId}", ctrl.GetLLMProvider)
 

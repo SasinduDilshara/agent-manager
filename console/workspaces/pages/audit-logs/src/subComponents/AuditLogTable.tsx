@@ -28,9 +28,9 @@ import {
   formatActor,
   formatResource,
   formatTimestamp,
-  isGatewayObserved,
   RESULT_COLOR,
 } from "../utils";
+import { SOURCE_LABEL } from "../feeds";
 
 interface AuditLogTableProps {
   records: AuditLogRecord[];
@@ -66,7 +66,7 @@ export function AuditLogTable({ records, isLoading, onSelect }: AuditLogTablePro
           <ListingTable.Cell>Actor</ListingTable.Cell>
           <ListingTable.Cell>Resource</ListingTable.Cell>
           <ListingTable.Cell>Agent</ListingTable.Cell>
-          <ListingTable.Cell width="110px">Source</ListingTable.Cell>
+          <ListingTable.Cell width="160px">Source</ListingTable.Cell>
           <ListingTable.Cell align="center" width="100px">
             Result
           </ListingTable.Cell>
@@ -116,14 +116,15 @@ export function AuditLogTable({ records, isLoading, onSelect }: AuditLogTablePro
                 </Typography>
               </ListingTable.Cell>
               <ListingTable.Cell>
-                {isGatewayObserved(record) ? (
-                  <Tooltip title="Agent activity observed by the AI gateway">
-                    <Chip size="small" variant="outlined" label="Gateway" />
-                  </Tooltip>
-                ) : (
+                {record.source === "platform" ? (
                   <Typography variant="body2" color="text.secondary">
-                    {record.surface || "—"}
+                    {SOURCE_LABEL.platform}
+                    {record.surface ? ` · ${record.surface}` : ""}
                   </Typography>
+                ) : (
+                  <Tooltip title="Agent activity observed by the AI gateway, relayed by this feed">
+                    <Chip size="small" variant="outlined" label={SOURCE_LABEL[record.source] ?? record.source} />
+                  </Tooltip>
                 )}
               </ListingTable.Cell>
               <ListingTable.Cell align="center">

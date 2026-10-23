@@ -73,6 +73,15 @@ type ingestFixture struct {
 
 func newIngestController(t *testing.T, svc services.GatewayAuditIngestService, maxBytes int64) (GatewayInternalController, *ingestFixture) {
 	t.Helper()
+	return newInternalController(t, GatewayAuditIngest{Service: svc, MaxBodyBytes: maxBytes}, GatewayTrafficAuditIngest{})
+}
+
+// newInternalController builds the controller with the given feeds over the
+// real token verification.
+func newInternalController(
+	t *testing.T, otel GatewayAuditIngest, traffic GatewayTrafficAuditIngest,
+) (GatewayInternalController, *ingestFixture) {
+	t.Helper()
 	gateway := &models.Gateway{UUID: uuid.New(), Name: "edge", OUID: ingestTestOUID}
 	prefix := uuid.New().String()
 	fx := &ingestFixture{gatewayID: gateway.UUID.String(), token: prefix + "-secretpart"}
@@ -96,8 +105,7 @@ func newIngestController(t *testing.T, svc services.GatewayAuditIngestService, m
 			return gateway, nil
 		},
 	}
-	ctrl := NewGatewayInternalController(services.NewPlatformGatewayService(repo, nil), nil, nil, nil,
-		GatewayAuditIngest{Service: svc, MaxBodyBytes: maxBytes})
+	ctrl := NewGatewayInternalController(services.NewPlatformGatewayService(repo, nil), nil, nil, nil, otel, traffic)
 	return ctrl, fx
 }
 

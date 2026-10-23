@@ -18,19 +18,27 @@
 import type { ReactNode } from "react";
 import { Alert, Box, Chip, Divider, Stack, Typography } from "@wso2/oxygen-ui";
 import { ScrollText } from "@wso2/oxygen-ui-icons-react";
-import {
-  DrawerContent,
-  DrawerHeader,
-  DrawerWrapper,
-} from "@agent-management-platform/views";
+import { DrawerContent, DrawerHeader, DrawerWrapper } from "@agent-management-platform/views";
 import { CodeBlock } from "@agent-management-platform/shared-component";
 import type { AuditLogRecord } from "@agent-management-platform/types";
-import {
-  formatTimestamp,
-  isGatewayObserved,
-  RESULT_COLOR,
-  SEVERITY_LABEL,
-} from "../utils";
+import { formatTimestamp, isGatewayObserved, RESULT_COLOR, SEVERITY_LABEL } from "../utils";
+import { SOURCE_LABEL } from "../feeds";
+
+const EXCERPT_KEYS = [
+  "requestBodyExcerpt",
+  "responseBodyExcerpt",
+  "bodyExcerptTruncated",
+  "bodyExcerptsOmitted",
+];
+
+/** A body excerpt, pretty-printed when it is whole JSON. */
+function formatExcerpt(text: string): { code: string; language: string } {
+  try {
+    return { code: JSON.stringify(JSON.parse(text), null, 2), language: "json" };
+  } catch {
+    return { code: text, language: "text" };
+  }
+}
 
 interface AuditLogDetailDrawerProps {
   record: AuditLogRecord | null;
@@ -46,11 +54,7 @@ function Field({ label, value }: FieldProps) {
   if (value === undefined || value === null || value === "") return null;
   return (
     <Stack direction="row" spacing={2} alignItems="baseline">
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{ width: 140, flexShrink: 0 }}
-      >
+      <Typography variant="caption" color="text.secondary" sx={{ width: 140, flexShrink: 0 }}>
         {label}
       </Typography>
       <Typography variant="body2" sx={{ wordBreak: "break-all" }}>
@@ -74,11 +78,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 export function AuditLogDetailDrawer({ record, onClose }: AuditLogDetailDrawerProps) {
   return (
     <DrawerWrapper open={!!record} onClose={onClose} minWidth={560} maxWidth={720}>
-      <DrawerHeader
-        icon={<ScrollText size={24} />}
-        title="Audit Record"
-        onClose={onClose}
-      />
+      <DrawerHeader icon={<ScrollText size={24} />} title="Audit Record" onClose={onClose} />
       <DrawerContent>
         {record && (
           <Stack spacing={3}>
@@ -103,8 +103,8 @@ export function AuditLogDetailDrawer({ record, onClose }: AuditLogDetailDrawerPr
 
             {isGatewayObserved(record) && (
               <Alert severity="info">
-                Observed by the AI gateway and delivered best effort: a record can
-                be missing if the gateway could not deliver it.
+                Observed by the AI gateway and delivered best effort: a record can be missing if the
+                gateway could not deliver it.
               </Alert>
             )}
 
@@ -113,6 +113,7 @@ export function AuditLogDetailDrawer({ record, onClose }: AuditLogDetailDrawerPr
               <Field label="Event ID" value={record.eventId} />
               <Field label="Category" value={record.category} />
               <Field label="Action class" value={record.actionClass} />
+              <Field label="Source" value={SOURCE_LABEL[record.source] ?? record.source} />
               <Field label="Surface" value={record.surface} />
               <Field label="Producer" value={record.producer} />
             </Section>
@@ -137,9 +138,7 @@ export function AuditLogDetailDrawer({ record, onClose }: AuditLogDetailDrawerPr
                   <Field label="Status code" value={record.statusCode} />
                   <Field
                     label="Duration"
-                    value={
-                      record.durationMs !== undefined ? `${record.durationMs} ms` : undefined
-                    }
+                    value={record.durationMs !== undefined ? `${record.durationMs} ms` : undefined}
                   />
                   <Field label="Request ID" value={record.requestId} />
                 </Section>
@@ -171,21 +170,67 @@ export function AuditLogDetailDrawer({ record, onClose }: AuditLogDetailDrawerPr
               </>
             )}
 
-            {record.details && Object.keys(record.details).length > 0 && (
-              <>
-                <Divider />
-                <Section title="Details">
-                  <Box>
-                    <CodeBlock
-                      code={JSON.stringify(record.details, null, 2)}
-                      language="json"
-                      fieldId="audit-record-details"
-                      analyticsId="audit-record-details"
-                    />
-                  </Box>
-                </Section>
-              </>
+            {record.details?.bodyExcerptsOmitted === true && (
+              <Alert severity="info">
+                The request and response body excerpts were left out of this record: with them it
+                exceeded the audit store&apos;s record size.
+              </Alert>
             )}
+
+            {(["requestBodyExcerpt", "responseBodyExcerpt"] as const).map((key) => {
+              const text = record.details?.[key];
+              if (typeof text !== "string" || text === "") return null;
+              const { code, language } = formatExcerpt(text);
+              return (
+                <Box key={key}>
+                  <Divider sx={{ mb: 3 }} />
+                  <Section
+                    title={
+                      key === "requestBodyExcerpt"
+                        ? "Request body (prompt)"
+                        : "Response body (completion)"
+                    }
+                  >
+                    {record.details?.bodyExcerptTruncated === true && (
+                      <Typography variant="caption" color="text.secondary">
+                        Excerpt — the body was longer and was cut.
+                      </Typography>
+                    )}
+                    <CodeBlock
+                      code={code}
+                      language={language}
+                      fieldId={`audit-${key}`}
+                      analyticsId="audit-body-excerpt"
+                    />
+                  </Section>
+                </Box>
+              );
+            })}
+
+            {record.details &&
+              Object.keys(record.details).some((k) => !EXCERPT_KEYS.includes(k)) && (
+                <>
+                  <Divider />
+                  <Section title="Details">
+                    <Box>
+                      <CodeBlock
+                        code={JSON.stringify(
+                          Object.fromEntries(
+                            Object.entries(record.details).filter(
+                              ([k]) => !EXCERPT_KEYS.includes(k),
+                            ),
+                          ),
+                          null,
+                          2,
+                        )}
+                        language="json"
+                        fieldId="audit-record-details"
+                        analyticsId="audit-record-details"
+                      />
+                    </Box>
+                  </Section>
+                </>
+              )}
 
             <Divider />
             <Section title="Raw record">

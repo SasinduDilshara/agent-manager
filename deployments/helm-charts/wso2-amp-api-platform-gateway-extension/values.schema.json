@@ -482,10 +482,78 @@
               },
               "title": "ignorePathPrefixes",
               "type": "array"
+            },
+            "captureBodies": {
+              "default": false,
+              "description": "Capture request/response bodies so the publisher sends them, for Agent Manager's opt-in body excerpts. Shared by every consumer of the gateway's collector.",
+              "title": "captureBodies",
+              "type": "boolean"
             }
           },
           "required": [],
           "title": "audit",
+          "type": "object"
+        },
+        "trafficAudit": {
+          "additionalProperties": false,
+          "description": "Agent audit feed from the traffic log, a second feed beside audit (OTel): the traffic log's http sink POSTs its lines to Agent Manager's traffic-log ingest, authenticated with this gateway's registration token. Best effort.",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "description": "Send traffic-log lines to Agent Manager.",
+              "title": "enabled",
+              "type": "boolean"
+            },
+            "endpoint": {
+              "default": "",
+              "description": "Full URL of the ingest. Empty derives <scheme>://<controlPlane.host>/api/internal/v1/audit/traffic-events.",
+              "title": "endpoint",
+              "type": "string"
+            },
+            "captureBodies": {
+              "default": false,
+              "description": "Capture request/response bodies, from which Agent Manager reads the model, token usage and MCP method/tool. Shared by every consumer of the gateway's collector.",
+              "title": "captureBodies",
+              "type": "boolean"
+            },
+            "maxPayloadSize": {
+              "default": 262144,
+              "description": "Bytes of each body kept in a line. Not unlimited: an oversized line would push its batch past Agent Manager's batch limit.",
+              "minimum": 1,
+              "title": "maxPayloadSize",
+              "type": "integer"
+            },
+            "queueCapacity": {
+              "default": 10000,
+              "description": "Lines held in memory while the ingest is slow or unreachable.",
+              "minimum": 1,
+              "title": "queueCapacity",
+              "type": "integer"
+            },
+            "batchMaxEvents": {
+              "default": 100,
+              "description": "Lines per delivery.",
+              "minimum": 1,
+              "title": "batchMaxEvents",
+              "type": "integer"
+            },
+            "batchMaxBytes": {
+              "default": 4194304,
+              "description": "Bytes per delivery; must stay below Agent Manager's AUDIT_TRAFFIC_INGEST_MAX_BODY_BYTES.",
+              "minimum": 1,
+              "title": "batchMaxBytes",
+              "type": "integer"
+            },
+            "flushInterval": {
+              "default": "5s",
+              "description": "Longest a line waits for a batch to fill (Go duration).",
+              "pattern": "^[0-9]+(ms|s|m)$",
+              "title": "flushInterval",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "title": "trafficAudit",
           "type": "object"
         },
         "trafficLog": {

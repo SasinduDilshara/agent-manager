@@ -146,6 +146,7 @@ var controllerProviderSet = wire.NewSet(
 	ProvideWebSocketController,
 	controllers.NewGatewayInternalController,
 	ProvideGatewayAuditIngest,
+	ProvideGatewayTrafficAuditIngest,
 	controllers.NewAuditLogController,
 	ProvideAuditTrailService,
 	controllers.NewMonitorController,
@@ -415,7 +416,27 @@ func ProvideGatewayAuditIngest(
 	}
 	return controllers.GatewayAuditIngest{
 		Service: services.NewGatewayAuditIngestService(oc.Sink, apps, identities,
-			time.Duration(ingest.ResolverCacheTTLSeconds)*time.Second, logger),
+			time.Duration(ingest.ResolverCacheTTLSeconds)*time.Second, ingest.ExcerptBytes(), logger),
+		MaxBodyBytes: ingest.MaxBodyBytes,
+	}
+}
+
+// ProvideGatewayTrafficAuditIngest builds the traffic-log feed, or a disabled
+// one. It writes to the same OpenChoreo audit sink as the OTel feed.
+func ProvideGatewayTrafficAuditIngest(
+	cfg config.Config,
+	oc OpenChoreoAuditSink,
+	apps repositories.AIApplicationRepository,
+	identities repositories.AgentThunderClientRepository,
+	logger *slog.Logger,
+) controllers.GatewayTrafficAuditIngest {
+	ingest := cfg.Audit.GatewayTrafficIngest
+	if !ingest.Enabled || oc.Sink == nil {
+		return controllers.GatewayTrafficAuditIngest{}
+	}
+	return controllers.GatewayTrafficAuditIngest{
+		Service: services.NewGatewayTrafficAuditIngestService(oc.Sink, apps, identities,
+			time.Duration(ingest.ResolverCacheTTLSeconds)*time.Second, ingest.ExcerptBytes(), logger),
 		MaxBodyBytes: ingest.MaxBodyBytes,
 	}
 }

@@ -48,6 +48,14 @@ const (
 	// trusted-producer allowlist entry for this service carries the same name.
 	OpenChoreoProducer = "agent-manager-service"
 
+	// The producers of agent activity relayed from the AI gateways, one per
+	// feed, so the trail can be read one feed at a time. They are written by
+	// this same workload: the logs module trusts audit lines by the container
+	// that emits them and routes them without reading the producer, so these
+	// need no allowlist entry of their own.
+	OpenChoreoProducerGatewayOTel       = OpenChoreoProducer + ".gateway-otel"
+	OpenChoreoProducerGatewayTrafficLog = OpenChoreoProducer + ".gateway-traffic-log"
+
 	// ampMetadataKey namespaces Agent Manager's own fields inside a record's
 	// metadata, so they cannot collide with anything OpenChoreo adds later.
 	ampMetadataKey = "amp"
@@ -133,7 +141,7 @@ func toOpenChoreoRecord(e *Event) ocRecord {
 		RequestID:     e.CorrelationID,
 		SourceIP:      e.SourceIP,
 		UserAgent:     e.UserAgent,
-		Producer:      OpenChoreoProducer,
+		Producer:      ProducerOf(e),
 		Surface:       openChoreoSurface(e.Surface),
 	}
 	if e.RequestMethod != "" || e.RequestPath != "" {
@@ -150,6 +158,21 @@ func toOpenChoreoRecord(e *Event) ocRecord {
 	}
 	rec.Metadata = map[string]any{ampMetadataKey: ampMetadata(e)}
 	return rec
+}
+
+// OpenChoreoProducers lists every producer this service writes, which is the
+// set its reader confines every query to.
+func OpenChoreoProducers() []string {
+	return []string{OpenChoreoProducer, OpenChoreoProducerGatewayOTel, OpenChoreoProducerGatewayTrafficLog}
+}
+
+// ProducerOf is the producer a record is written as: the relaying feed's, or
+// this service's own.
+func ProducerOf(e *Event) string {
+	if e.Producer != "" {
+		return e.Producer
+	}
+	return OpenChoreoProducer
 }
 
 // openChoreoActor fills the actor OpenChoreo's reader requires. Its logs

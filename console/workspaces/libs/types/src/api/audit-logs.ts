@@ -22,6 +22,13 @@ export type AuditLogResult = "success" | "failure" | "denied" | "unknown";
 
 export type AuditLogCategory = "management" | "authorization" | "access";
 
+/**
+ * Where a record came from: an operation performed through Agent Manager, or
+ * agent activity relayed from the AI gateways by one of the two gateway feeds
+ * (the OTel analytics publisher, or the traffic log).
+ */
+export type AuditLogSource = "platform" | "gateway-otel" | "gateway-traffic-log";
+
 export type AuditLogActorType =
   | "user"
   | "service"
@@ -41,7 +48,8 @@ export type AuditLogFilterField =
   | "resourceName"
   | "project"
   | "environment"
-  | "agent";
+  | "agent"
+  | "source";
 
 export interface AuditLogActor {
   type: string;
@@ -88,6 +96,7 @@ export interface AuditLogRecord {
   errorMessage?: string;
   requiredPermission?: string;
   producer: string;
+  source: AuditLogSource;
   details?: Record<string, unknown>;
 }
 
@@ -140,6 +149,7 @@ export interface AuditLogFilters {
   agent?: string[];
   requestId?: string[];
   eventId?: string[];
+  source?: AuditLogSource[];
   /** Case-sensitive substring over the whole record. */
   search?: string;
 }

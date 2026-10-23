@@ -43,6 +43,7 @@ type ApiExportAuditLogsRequest struct {
 	agent        *[]string
 	requestId    *[]string
 	eventId      *[]string
+	source       *[]string
 	search       *string
 }
 
@@ -127,6 +128,12 @@ func (r ApiExportAuditLogsRequest) RequestId(requestId []string) ApiExportAuditL
 // Only these event ids (repeatable).
 func (r ApiExportAuditLogsRequest) EventId(eventId []string) ApiExportAuditLogsRequest {
 	r.eventId = &eventId
+	return r
+}
+
+// Only records from these sources (repeatable): &#x60;platform&#x60; (operations performed through Agent Manager), &#x60;gateway-otel&#x60; (agent activity relayed from the gateways&#39; OTel analytics feed) or &#x60;gateway-traffic-log&#x60; (agent activity relayed from the gateways&#39; traffic-log feed).
+func (r ApiExportAuditLogsRequest) Source(source []string) ApiExportAuditLogsRequest {
+	r.source = &source
 	return r
 }
 
@@ -339,6 +346,17 @@ func (a *AuditLogsAPIService) ExportAuditLogsExecute(r ApiExportAuditLogsRequest
 			parameterAddToHeaderOrQuery(localVarQueryParams, "eventId", t, "multi")
 		}
 	}
+	if r.source != nil {
+		t := *r.source
+		if reflect.TypeOf(t).Kind() == reflect.Slice {
+			s := reflect.ValueOf(t)
+			for i := 0; i < s.Len(); i++ {
+				parameterAddToHeaderOrQuery(localVarQueryParams, "source", s.Index(i).Interface(), "multi")
+			}
+		} else {
+			parameterAddToHeaderOrQuery(localVarQueryParams, "source", t, "multi")
+		}
+	}
 	if r.search != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "search", r.search, "")
 	}
@@ -469,6 +487,7 @@ type ApiQueryAuditLogFilterValuesRequest struct {
 	project      *[]string
 	environment  *[]string
 	agent        *[]string
+	source       *[]string
 	search       *string
 }
 
@@ -559,6 +578,12 @@ func (r ApiQueryAuditLogFilterValuesRequest) Environment(environment []string) A
 // Only records concerning these agents (repeatable): activity a gateway observed the agent perform, operations on the agent itself, and operations on its parts that name it (configurations, monitors, keys).
 func (r ApiQueryAuditLogFilterValuesRequest) Agent(agent []string) ApiQueryAuditLogFilterValuesRequest {
 	r.agent = &agent
+	return r
+}
+
+// Only records from these sources (repeatable): &#x60;platform&#x60; (operations performed through Agent Manager), &#x60;gateway-otel&#x60; (agent activity relayed from the gateways&#39; OTel analytics feed) or &#x60;gateway-traffic-log&#x60; (agent activity relayed from the gateways&#39; traffic-log feed).
+func (r ApiQueryAuditLogFilterValuesRequest) Source(source []string) ApiQueryAuditLogFilterValuesRequest {
+	r.source = &source
 	return r
 }
 
@@ -748,6 +773,17 @@ func (a *AuditLogsAPIService) QueryAuditLogFilterValuesExecute(r ApiQueryAuditLo
 			parameterAddToHeaderOrQuery(localVarQueryParams, "agent", t, "multi")
 		}
 	}
+	if r.source != nil {
+		t := *r.source
+		if reflect.TypeOf(t).Kind() == reflect.Slice {
+			s := reflect.ValueOf(t)
+			for i := 0; i < s.Len(); i++ {
+				parameterAddToHeaderOrQuery(localVarQueryParams, "source", s.Index(i).Interface(), "multi")
+			}
+		} else {
+			parameterAddToHeaderOrQuery(localVarQueryParams, "source", t, "multi")
+		}
+	}
 	if r.search != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "search", r.search, "")
 	}
@@ -879,6 +915,7 @@ type ApiQueryAuditLogsRequest struct {
 	agent        *[]string
 	requestId    *[]string
 	eventId      *[]string
+	source       *[]string
 	search       *string
 }
 
@@ -975,6 +1012,12 @@ func (r ApiQueryAuditLogsRequest) RequestId(requestId []string) ApiQueryAuditLog
 // Only these event ids (repeatable).
 func (r ApiQueryAuditLogsRequest) EventId(eventId []string) ApiQueryAuditLogsRequest {
 	r.eventId = &eventId
+	return r
+}
+
+// Only records from these sources (repeatable): &#x60;platform&#x60; (operations performed through Agent Manager), &#x60;gateway-otel&#x60; (agent activity relayed from the gateways&#39; OTel analytics feed) or &#x60;gateway-traffic-log&#x60; (agent activity relayed from the gateways&#39; traffic-log feed).
+func (r ApiQueryAuditLogsRequest) Source(source []string) ApiQueryAuditLogsRequest {
+	r.source = &source
 	return r
 }
 
@@ -1191,6 +1234,17 @@ func (a *AuditLogsAPIService) QueryAuditLogsExecute(r ApiQueryAuditLogsRequest) 
 			}
 		} else {
 			parameterAddToHeaderOrQuery(localVarQueryParams, "eventId", t, "multi")
+		}
+	}
+	if r.source != nil {
+		t := *r.source
+		if reflect.TypeOf(t).Kind() == reflect.Slice {
+			s := reflect.ValueOf(t)
+			for i := 0; i < s.Len(); i++ {
+				parameterAddToHeaderOrQuery(localVarQueryParams, "source", s.Index(i).Interface(), "multi")
+			}
+		} else {
+			parameterAddToHeaderOrQuery(localVarQueryParams, "source", t, "multi")
 		}
 	}
 	if r.search != nil {

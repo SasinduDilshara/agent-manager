@@ -691,6 +691,55 @@
                       "description": "How long a resolved agent is reused.",
                       "minimum": 0,
                       "type": "integer"
+                    },
+                    "keepBodyExcerpts": {
+                      "default": false,
+                      "description": "Keep the first bodyExcerptBytes of each captured request and response body (prompts and completions) in the record. Makes prompt content audit data.",
+                      "type": "boolean"
+                    },
+                    "bodyExcerptBytes": {
+                      "default": 8192,
+                      "description": "Bytes of each body an excerpt keeps.",
+                      "maximum": 16384,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                },
+                "gatewayTrafficIngest": {
+                  "additionalProperties": false,
+                  "description": "Relay agent activity from the AI gateways' traffic log into the trail (internal endpoint /api/internal/v1/audit/traffic-events): a second feed beside gatewayIngest, for comparing the two. Requires openchoreoSink.",
+                  "properties": {
+                    "enabled": {
+                      "default": false,
+                      "description": "Serve the traffic-log ingest.",
+                      "type": "boolean"
+                    },
+                    "maxBodyBytes": {
+                      "default": 8388608,
+                      "description": "Largest batch accepted. Traffic-log lines can carry bodies.",
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "resolverCacheTTLSeconds": {
+                      "default": 60,
+                      "description": "How long a resolved agent is reused.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "keepBodyExcerpts": {
+                      "default": false,
+                      "description": "Keep the first bodyExcerptBytes of each captured request and response body (prompts and completions) in the record. Makes prompt content audit data.",
+                      "type": "boolean"
+                    },
+                    "bodyExcerptBytes": {
+                      "default": 8192,
+                      "description": "Bytes of each body an excerpt keeps.",
+                      "maximum": 16384,
+                      "minimum": 1,
+                      "type": "integer"
                     }
                   },
                   "required": [],

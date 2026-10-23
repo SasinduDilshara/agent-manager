@@ -197,6 +197,24 @@ var gatewayActivityFields = map[string]FieldKind{
 	"guardrailName": KindName,
 	// Latency.
 	"backendLatencyMs": KindCount,
+	// Reported by the traffic-log feed only.
+	"apiName":             KindName,
+	"apiVersion":          KindName,
+	"applicationName":     KindName,
+	"applicationKeyType":  KindEnum,
+	"authType":            KindEnum,
+	"requestMediationMs":  KindCount,
+	"responseMediationMs": KindCount,
+	// Read from captured request/response bodies (traffic-log feed only): set
+	// when any of the LLM or MCP fields above came from a body, not the gateway.
+	"derivedFromBody": KindFlag,
+	"mcpError":        KindFlag,
+	// Opt-in excerpts of the captured bodies themselves, kept by either gateway
+	// feed (AUDIT_GATEWAY_INGEST_KEEP_BODY_EXCERPTS,
+	// AUDIT_TRAFFIC_INGEST_KEEP_BODY_EXCERPTS): the prompt and the completion.
+	"requestBodyExcerpt":   KindText,
+	"responseBodyExcerpt":  KindText,
+	"bodyExcerptTruncated": KindFlag,
 }
 
 // APIKeyOwner names the kind of resource an API key belongs to. Every API-key

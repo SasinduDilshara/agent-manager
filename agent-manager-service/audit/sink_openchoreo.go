@@ -17,6 +17,7 @@
 package audit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -28,8 +29,9 @@ import (
 
 // maxOpenChoreoLineBytes bounds one written record. Redaction already caps
 // every field, but a record may carry many capped detail values; above this
-// size the details are left out (and the omission recorded) rather than
-// writing a line the log collector might split or skip.
+// size the body excerpts are left out first, then the details if that is not
+// enough (each omission recorded), rather than writing a line the log
+// collector might split or skip.
 const maxOpenChoreoLineBytes = 64 * 1024
 
 // openChoreoSink writes OpenChoreo audit records, one JSON line each, to
@@ -97,18 +99,60 @@ func renderOpenChoreoLine(e *Event, now time.Time) ([]byte, error) {
 		Msg:      OpenChoreoRoutingKey,
 		ocRecord: toOpenChoreoRecord(e),
 	}
-	b, err := json.Marshal(line)
+	b, err := marshalLine(line)
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > maxOpenChoreoLineBytes {
-		amp, _ := line.Metadata[ampMetadataKey].(map[string]any)
-		delete(amp, "details")
-		amp["detailsOmitted"] = true
-		amp["originalBytes"] = len(b)
-		if b, err = json.Marshal(line); err != nil {
+	if len(b) <= maxOpenChoreoLineBytes {
+		return b, nil
+	}
+	original := len(b) - 1
+	amp, _ := line.Metadata[ampMetadataKey].(map[string]any)
+	// The excerpts are what makes a record large; dropping them keeps the
+	// fields an investigation needs (model, tokens, attribution).
+	if details, ok := amp["details"].(map[string]any); ok && hasBodyExcerpt(details) {
+		trimmed := make(map[string]any, len(details))
+		for k, v := range details {
+			if !bodyExcerptKeys[k] {
+				trimmed[k] = v
+			}
+		}
+		trimmed["bodyExcerptsOmitted"] = true
+		amp["details"] = trimmed
+		if b, err = marshalLine(line); err != nil {
 			return nil, err
 		}
+		if len(b) <= maxOpenChoreoLineBytes {
+			return b, nil
+		}
 	}
-	return append(b, '\n'), nil
+	delete(amp, "details")
+	amp["detailsOmitted"] = true
+	amp["originalBytes"] = original
+	return marshalLine(line)
+}
+
+// bodyExcerptKeys are the detail keys holding captured body text.
+var bodyExcerptKeys = map[string]bool{"requestBodyExcerpt": true, "responseBodyExcerpt": true}
+
+func hasBodyExcerpt(details map[string]any) bool {
+	for k := range bodyExcerptKeys {
+		if _, ok := details[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// marshalLine encodes a line without HTML escaping: json.Marshal would write
+// each <, > and & as a six-byte \u escape, which can grow body text sixfold
+// past the line limit. The line is read by a JSON parser, never as HTML.
+func marshalLine(line ocLine) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(line); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil // Encode appends the newline
 }

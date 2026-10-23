@@ -19,19 +19,14 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
-	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
@@ -42,17 +37,6 @@ import (
 const (
 	gatewayAnalyticsScope = "wso2.analytics"
 	gatewayAnalyticsEvent = "wso2.api.transaction"
-
-	// provenanceObserved marks a record as relayed from a gateway's
-	// best-effort analytics feed, as opposed to one this service produced.
-	provenanceObserved = "observed-best-effort"
-)
-
-// How the acting agent of an observed request was identified.
-const (
-	resolutionApplication   = "application"    // the gateway's application id (API-key routes)
-	resolutionAgentIdentity = "agent-identity" // the AgentID token subject (JWT routes)
-	resolutionUnresolved    = "unresolved"     // neither named a known agent of the gateway's org
 )
 
 // Reasons a reported record is not relayed.
@@ -64,21 +48,6 @@ const (
 
 // observedEventNamespace keys the deterministic event ids of relayed records.
 var observedEventNamespace = uuid.MustParse("2c8a5e3d-6f1b-4d7e-9a0c-5b3f1e8d2a74")
-
-// GatewayAuditCaller is the authenticated gateway delivering a batch. Its
-// organization comes from its credential, never from the batch.
-type GatewayAuditCaller struct {
-	GatewayID string
-	OUID      string
-}
-
-// GatewayAuditIngestResult reports what became of a delivered batch.
-type GatewayAuditIngestResult struct {
-	Accepted int
-	Rejected int
-	// RejectReasons counts rejected records by reason.
-	RejectReasons map[string]int
-}
 
 // GatewayAuditIngestService relays the agent activity an AI gateway observed
 // into the audit trail: one record per request the gateway handled.
@@ -94,7 +63,9 @@ type GatewayAuditIngestService interface {
 type gatewayAuditIngestService struct {
 	sink     audit.Sink
 	resolver *gatewayAgentResolver
-	logger   *slog.Logger
+	// excerptBytes keeps that much of each captured body in the record; 0 keeps none.
+	excerptBytes int
+	logger       *slog.Logger
 }
 
 // NewGatewayAuditIngestService returns the ingest service. sink is where relayed
@@ -104,15 +75,17 @@ func NewGatewayAuditIngestService(
 	apps repositories.AIApplicationRepository,
 	identities repositories.AgentThunderClientRepository,
 	cacheTTL time.Duration,
+	excerptBytes int,
 	logger *slog.Logger,
 ) GatewayAuditIngestService {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &gatewayAuditIngestService{
-		sink:     sink,
-		resolver: newGatewayAgentResolver(apps, identities, cacheTTL),
-		logger:   logger,
+		sink:         sink,
+		resolver:     newGatewayAgentResolver(apps, identities, cacheTTL),
+		excerptBytes: excerptBytes,
+		logger:       logger,
 	}
 }
 
@@ -169,7 +142,7 @@ func (s *gatewayAuditIngestService) Ingest(ctx context.Context, caller GatewayAu
 					return nil, fmt.Errorf("%w: resolve agent: %w", utils.ErrAuditIngestUnavailable, err)
 				}
 				id := uuid.NewSHA1(observedEventNamespace, []byte(caller.GatewayID+"\n"+string(raw)))
-				events = append(events, buildObservedGatewayEvent(caller, id, occurred, attrs, agent))
+				events = append(events, buildObservedGatewayEvent(caller, id, occurred, attrs, agent, s.excerptBytes))
 			}
 		}
 	}
@@ -209,10 +182,12 @@ func rejectReasonSummary(reasons map[string]int) string {
 // buildObservedGatewayEvent maps one gateway analytics record onto an audit
 // event. Only the attributes named here are read: header attributes
 // (http.request.header.*, http.response.header.*) and payloads
-// (wso2.request.body, wso2.response.body) are never touched, so credentials and
-// prompt content the gateway may have captured cannot reach the trail.
+// (wso2.request.body, wso2.response.body) are read only for the opt-in
+// excerpts (excerptBytes > 0), so credentials cannot reach the trail and
+// prompt content reaches it only when an operator asks for it.
 func buildObservedGatewayEvent(
 	caller GatewayAuditCaller, id uuid.UUID, occurred time.Time, a otlpAttributes, agent resolvedAgent,
+	excerptBytes int,
 ) audit.Event {
 	apiKind := a.str("wso2.api.type")
 	mcpMethod := a.str("mcp.method.name")
@@ -223,6 +198,7 @@ func buildObservedGatewayEvent(
 		audit.OccurredAt(occurred),
 		audit.Org(caller.OUID),
 		audit.SurfaceOpt(audit.SurfaceGateway),
+		audit.ProducedBy(audit.OpenChoreoProducerGatewayOTel),
 		audit.Correlation(a.str("wso2.correlation.id")),
 		audit.Origin(a.str("client.address"), a.str("user_agent.original")),
 		audit.Request(a.str("http.request.method"), a.str("url.path")),
@@ -306,30 +282,11 @@ func buildObservedGatewayEvent(
 	}
 	detailStr("guardrailName", "wso2.guardrail.name")
 	detailInt("backendLatencyMs", "wso2.latency.backend_ms")
+	// Opt-in excerpts of the bodies the publisher sends when the gateway's
+	// collector captures them. Nothing else of a body is ever read.
+	opts = append(opts, bodyExcerptOptions(a.str("wso2.request.body"), a.str("wso2.response.body"), excerptBytes)...)
 
 	return audit.BuildObservedEvent(action, opts...)
-}
-
-// classifyGatewayRequest names the action and resource type of a request from
-// the kind of API it reached (the gateway's artifact kinds: LlmProxy,
-// LlmProvider, Mcp, Agent, RestApi, ...). Unknown kinds are recorded as a plain
-// API call rather than dropped.
-func classifyGatewayRequest(apiKind, mcpMethod string) (audit.Action, string) {
-	switch strings.ToLower(apiKind) {
-	case "llmproxy":
-		return audit.ActionLLMCall, audit.ResourceLLMProxy
-	case "llmprovider":
-		return audit.ActionLLMCall, audit.ResourceLLMProvider
-	case "mcp":
-		if mcpMethod == "tools/call" {
-			return audit.ActionMCPToolCall, audit.ResourceMCPProxy
-		}
-		return audit.ActionMCPCall, audit.ResourceMCPProxy
-	case "agent":
-		return audit.ActionAgentInvoke, audit.ResourceAgent
-	default:
-		return audit.ActionAPICall, audit.ResourceAPI
-	}
 }
 
 func parseUnixNano(s string) (time.Time, bool) {
@@ -338,123 +295,6 @@ func parseUnixNano(s string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return time.Unix(0, n).UTC(), true
-}
-
-// --- Agent resolution --------------------------------------------------------
-
-type resolvedAgent struct {
-	agentName       string
-	projectName     string
-	environmentName string
-	resolution      string
-}
-
-// gatewayAgentResolver names the agent behind an observed request. Every
-// lookup is confined to the delivering gateway's organization, so a request
-// naming another organization's application or identity resolves to nothing.
-type gatewayAgentResolver struct {
-	apps       repositories.AIApplicationRepository
-	identities repositories.AgentThunderClientRepository
-	ttl        time.Duration
-
-	mu    sync.Mutex
-	cache map[string]cachedAgent
-}
-
-type cachedAgent struct {
-	agent   resolvedAgent
-	expires time.Time
-}
-
-// resolverCacheMax bounds the cache; past it the cache is cleared rather than
-// growing with every distinct id a gateway reports.
-const resolverCacheMax = 10000
-
-func newGatewayAgentResolver(
-	apps repositories.AIApplicationRepository, identities repositories.AgentThunderClientRepository, ttl time.Duration,
-) *gatewayAgentResolver {
-	return &gatewayAgentResolver{apps: apps, identities: identities, ttl: ttl, cache: map[string]cachedAgent{}}
-}
-
-// resolve tries the application id first (API-key routes), then the token
-// subject (AgentID-authenticated routes). A lookup that fails for any reason
-// other than "not found" is returned as an error.
-func (r *gatewayAgentResolver) resolve(ctx context.Context, ouID, applicationID, subject string) (resolvedAgent, error) {
-	if applicationID != "" {
-		agent, found, err := r.cached("app|"+ouID+"|"+applicationID, func() (resolvedAgent, bool, error) {
-			app, err := r.apps.GetByHandle(ctx, ouID, applicationID)
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return resolvedAgent{}, false, nil
-			}
-			if err != nil {
-				return resolvedAgent{}, false, err
-			}
-			return agentFromApplication(app), true, nil
-		})
-		if err != nil || found {
-			return agent, err
-		}
-	}
-	if subject != "" {
-		agent, found, err := r.cached("sub|"+ouID+"|"+subject, func() (resolvedAgent, bool, error) {
-			c, err := r.identities.FindByThunderIdentity(ctx, ouID, subject)
-			if errors.Is(err, repositories.ErrAgentThunderClientNotFound) {
-				return resolvedAgent{}, false, nil
-			}
-			if err != nil {
-				return resolvedAgent{}, false, err
-			}
-			return agentFromIdentity(c), true, nil
-		})
-		if err != nil || found {
-			return agent, err
-		}
-	}
-	return resolvedAgent{resolution: resolutionUnresolved}, nil
-}
-
-// cached memoises lookups, including misses, for the TTL. Errors are not cached.
-func (r *gatewayAgentResolver) cached(key string, lookup func() (resolvedAgent, bool, error)) (resolvedAgent, bool, error) {
-	now := time.Now()
-	r.mu.Lock()
-	if e, ok := r.cache[key]; ok && now.Before(e.expires) {
-		r.mu.Unlock()
-		return e.agent, e.agent.agentName != "", nil
-	}
-	r.mu.Unlock()
-
-	// Looked up without the lock held: never hold a lock across I/O.
-	agent, found, err := lookup()
-	if err != nil {
-		return resolvedAgent{}, false, err
-	}
-	if r.ttl > 0 {
-		r.mu.Lock()
-		if len(r.cache) >= resolverCacheMax {
-			r.cache = map[string]cachedAgent{}
-		}
-		r.cache[key] = cachedAgent{agent: agent, expires: now.Add(r.ttl)}
-		r.mu.Unlock()
-	}
-	return agent, found, nil
-}
-
-func agentFromApplication(app *models.AIApplication) resolvedAgent {
-	return resolvedAgent{
-		agentName:       app.AgentID,
-		projectName:     app.ProjectName,
-		environmentName: app.EnvironmentName,
-		resolution:      resolutionApplication,
-	}
-}
-
-func agentFromIdentity(c *models.AgentThunderClient) resolvedAgent {
-	return resolvedAgent{
-		agentName:       c.AgentName,
-		projectName:     c.ProjectName,
-		environmentName: c.EnvironmentName,
-		resolution:      resolutionAgentIdentity,
-	}
 }
 
 // --- OTLP/HTTP JSON ------------------------------------------------------------

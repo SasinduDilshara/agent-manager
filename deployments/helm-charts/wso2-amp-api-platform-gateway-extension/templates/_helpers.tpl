@@ -175,6 +175,15 @@ same reachability and TLS settings apply. apiGateway.audit.endpoint overrides it
 Name of the env var carrying this gateway's registration token into config.toml
 for the audit publisher's api-key header.
 */}}
+{{- define "wso2-amp-gateway-extension.trafficAuditEndpoint" -}}
+{{- if .Values.apiGateway.trafficAudit.endpoint }}
+{{- .Values.apiGateway.trafficAudit.endpoint }}
+{{- else }}
+{{- $scheme := ternary "https" "http" .Values.apiGateway.controlPlane.tls.enabled }}
+{{- printf "%s://%s/api/internal/v1/audit/traffic-events" $scheme .Values.apiGateway.controlPlane.host }}
+{{- end }}
+{{- end }}
+
 {{- define "wso2-amp-gateway-extension.auditTokenEnvName" -}}
 AMP_GATEWAY_AUDIT_TOKEN
 {{- end }}
@@ -192,7 +201,7 @@ an unset variable fails the whole config load.
 {{- range .Values.apiGateway.config.systemExtraEnv }}
 {{- $env = append $env . }}
 {{- end }}
-{{- if .Values.apiGateway.audit.enabled }}
+{{- if or .Values.apiGateway.audit.enabled .Values.apiGateway.trafficAudit.enabled }}
 {{- $env = append $env (dict "name" (include "wso2-amp-gateway-extension.auditTokenEnvName" .) "valueFrom" (dict "secretKeyRef" (dict "name" (include "wso2-amp-gateway-extension.tokenSecretName" .) "key" .Values.gateway.tokenSecret.key))) }}
 {{- end }}
 {{- if $env }}

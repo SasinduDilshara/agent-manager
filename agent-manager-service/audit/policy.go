@@ -175,6 +175,8 @@ var coalesceWindows = map[string]time.Duration{
 	// per window says which gateway was delivering and when, without writing
 	// an audit record about every batch of audit records.
 	"/audit/gateway-events": 5 * time.Minute,
+	// The traffic-log feed's deliveries, coalesced for the same reason.
+	"/audit/traffic-events": 5 * time.Minute,
 }
 
 var sensitiveReadPaths = map[string]bool{
@@ -353,6 +355,7 @@ var actionOverrides = map[string]Action{
 	"GET /llm-proxies/api-keys":           "api-key:sync",
 	"GET /apis/api-keys":                  "api-key:sync",
 	"POST /audit/gateway-events":          "audit-log:ingest",
+	"POST /audit/traffic-events":          "audit-log:ingest",
 
 	// Reads expressed as POST because they carry a request body.
 	// The score-publish route carries no rbac.Permission at all — it is gated

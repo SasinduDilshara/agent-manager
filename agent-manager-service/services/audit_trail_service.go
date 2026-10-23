@@ -65,7 +65,36 @@ type AuditTrailQuery struct {
 	Agents        []string
 	RequestIDs    []string
 	EventIDs      []string
-	Search        string
+	// Sources selects the pipelines records came through (AuditSource*); none
+	// means all of this service's records.
+	Sources []string
+	Search  string
+}
+
+// The sources a record can come from: this service's own operations, or agent
+// activity relayed from the AI gateways by one of the two gateway feeds.
+const (
+	AuditSourcePlatform          = "platform"
+	AuditSourceGatewayOTel       = "gateway-otel"
+	AuditSourceGatewayTrafficLog = "gateway-traffic-log"
+)
+
+// auditSourceProducers maps each source onto the producer its records carry.
+var auditSourceProducers = map[string]string{
+	AuditSourcePlatform:          audit.OpenChoreoProducer,
+	AuditSourceGatewayOTel:       audit.OpenChoreoProducerGatewayOTel,
+	AuditSourceGatewayTrafficLog: audit.OpenChoreoProducerGatewayTrafficLog,
+}
+
+// auditSourceOf is the source of a record's producer, false for a producer
+// this service does not write.
+func auditSourceOf(producer string) (string, bool) {
+	for source, p := range auditSourceProducers {
+		if p == producer {
+			return source, true
+		}
+	}
+	return "", false
 }
 
 // AuditTrailService reads the audit trail of an organization.
@@ -168,7 +197,18 @@ func (s *auditTrailService) FilterValues(
 	}
 	values := make([]spec.AuditLogFilterValue, 0, len(resp.Values))
 	for _, v := range resp.Values {
-		values = append(values, spec.AuditLogFilterValue{Value: v.Value, Count: v.Count})
+		value := v.Value
+		// Faceting on the producer, the Observer lifts the producer filter for
+		// that field, so other producers' values arrive here (and totalValues
+		// counts them); they are dropped. The namespace filter still holds.
+		if filter == "source" {
+			source, ok := auditSourceOf(value)
+			if !ok {
+				continue // not one of this service's producers
+			}
+			value = source
+		}
+		values = append(values, spec.AuditLogFilterValue{Value: value, Count: v.Count})
 	}
 	out := &spec.AuditLogFilterValuesResponse{Filter: filter, Values: values}
 	out.TotalValues = &resp.TotalValues
@@ -393,9 +433,13 @@ var auditFilterFields = map[string]string{
 	"project":      "resource.project",
 	"environment":  "resource.environment",
 	"agent":        "resource.component",
+	"source":       "producer",
 }
 
 var (
+	auditSources = map[string]bool{
+		AuditSourcePlatform: true, AuditSourceGatewayOTel: true, AuditSourceGatewayTrafficLog: true,
+	}
 	auditResults    = map[string]bool{"success": true, "failure": true, "denied": true}
 	auditCategories = map[string]bool{"management": true, "authorization": true, "access": true}
 	auditActorTypes = map[string]bool{
@@ -445,6 +489,7 @@ func validateAuditTrailQuery(q AuditTrailQuery, withPaging bool) error {
 		{"agent", q.Agents, auditMaxFilterValues, nil},
 		{"requestId", q.RequestIDs, auditMaxFilterValues, nil},
 		{"eventId", q.EventIDs, auditMaxFilterValues, nil},
+		{"source", q.Sources, len(auditSources), auditSources},
 	}
 	for _, l := range lists {
 		if len(l.values) > l.max {
@@ -468,7 +513,8 @@ func validateAuditTrailQuery(q AuditTrailQuery, withPaging bool) error {
 // toObserverQuery builds the Observer request. The organization and producer
 // filters are set here and only here, from the caller's identity — never from
 // the query — so no combination of query parameters can widen a read beyond
-// the caller's own organization's records.
+// the caller's own organization's records. A source narrows the producers to
+// that feed's; it can never name a producer outside this service's own.
 func toObserverQuery(ouID string, q AuditTrailQuery) (ocauditsvc.QueryRequest, error) {
 	if ouID == "" {
 		return ocauditsvc.QueryRequest{}, fmt.Errorf("audit trail: no organization to confine the read to")
@@ -485,7 +531,7 @@ func toObserverQuery(ouID string, q AuditTrailQuery) (ocauditsvc.QueryRequest, e
 			Environments: q.Environments,
 			Components:   q.Agents,
 		},
-		Producers:    []string{audit.OpenChoreoProducer},
+		Producers:    producersFor(q.Sources),
 		Actions:      q.Actions,
 		Results:      q.Results,
 		Categories:   q.Categories,
@@ -495,6 +541,29 @@ func toObserverQuery(ouID string, q AuditTrailQuery) (ocauditsvc.QueryRequest, e
 		Limit:        q.Limit,
 		SortOrder:    q.SortOrder,
 	}, nil
+}
+
+// noAuditProducer matches no record: no workload writes it. An empty producer
+// list would drop the filter, so a query naming no known source gets this.
+const noAuditProducer = audit.OpenChoreoProducer + ".no-source"
+
+// producersFor is the producer filter of a query: the sources asked for, or
+// every producer this service writes. Sources are validated beforehand; one
+// that is not known still cannot widen the read, it only matches nothing.
+func producersFor(sources []string) []string {
+	if len(sources) == 0 {
+		return audit.OpenChoreoProducers()
+	}
+	out := make([]string, 0, len(sources))
+	for _, source := range sources {
+		if p, ok := auditSourceProducers[source]; ok {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return []string{noAuditProducer}
+	}
+	return out
 }
 
 // mapClientError maps a store error onto the service's sentinels. A query the
@@ -562,6 +631,7 @@ func describeAuditFilters(q AuditTrailQuery) []string {
 	add("agent", q.Agents)
 	add("requestId", q.RequestIDs)
 	add("eventId", q.EventIDs)
+	add("source", q.Sources)
 	if q.Search != "" {
 		out = append(out, "search="+q.Search)
 	}
@@ -587,7 +657,8 @@ func (s *auditTrailService) toRecords(ouID string, recs []ocauditsvc.Record) []s
 // excludes those, so one arriving here is a fault worth logging, never data to
 // show.
 func (s *auditTrailService) toRecord(ouID string, rec ocauditsvc.Record) (spec.AuditLogRecord, bool) {
-	if rec.Producer != audit.OpenChoreoProducer || rec.Resource == nil || rec.Resource.Namespace != ouID {
+	source, ours := auditSourceOf(rec.Producer)
+	if !ours || rec.Resource == nil || rec.Resource.Namespace != ouID {
 		s.logger.Error("audit trail returned a record outside the requested organization; dropped",
 			"eventId", rec.EventID, "producer", rec.Producer)
 		return spec.AuditLogRecord{}, false
@@ -618,6 +689,7 @@ func (s *auditTrailService) toRecord(ouID string, rec ocauditsvc.Record) (spec.A
 		Result:     result,
 		Actor:      spec.AuditLogActor{Type: rec.Actor.Type, Id: rec.Actor.ID},
 		Producer:   rec.Producer,
+		Source:     source,
 	}
 	out.Category = stringPtrIfNotEmpty(rec.Category)
 	out.ActionClass = stringPtrIfNotEmpty(str("actionClass"))

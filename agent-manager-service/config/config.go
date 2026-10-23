@@ -268,8 +268,40 @@ type AuditConfig struct {
 	// GatewayIngest relays agent activity reported by AI gateways into the trail.
 	GatewayIngest GatewayAuditIngestConfig
 
+	// GatewayTrafficIngest relays agent activity from the AI gateways' traffic
+	// log — a second, separate gateway feed, evaluated against GatewayIngest.
+	GatewayTrafficIngest GatewayTrafficAuditIngestConfig
+
 	// Reader reads the trail back through the OpenChoreo Observer's audit API.
 	Reader AuditReaderConfig
+}
+
+// GatewayTrafficAuditIngestConfig controls the internal endpoint AI gateways
+// deliver their traffic log to (NDJSON batches from the gateway's traffic-log
+// HTTP sink). Independent of GatewayAuditIngestConfig: either feed can run
+// alone, and either can be removed without touching the other.
+type GatewayTrafficAuditIngestConfig struct {
+	// Enabled serves the endpoint. Requires OpenChoreoSinkEnabled, for the same
+	// reason as the OTel feed.
+	Enabled bool
+	// MaxBodyBytes bounds one delivered batch. Traffic-log lines can carry
+	// request and response bodies, so the default is larger than the OTel feed's.
+	MaxBodyBytes int64
+	// ResolverCacheTTLSeconds is how long a resolved agent is reused.
+	ResolverCacheTTLSeconds int
+	// KeepBodyExcerpts keeps the first BodyExcerptBytes of each captured
+	// request and response body (prompts and completions) in the record. Off
+	// by default, as for the OTel feed.
+	KeepBodyExcerpts bool
+	BodyExcerptBytes int
+}
+
+// ExcerptBytes is how much of each body a record keeps: 0 when excerpts are off.
+func (c GatewayTrafficAuditIngestConfig) ExcerptBytes() int {
+	if !c.KeepBodyExcerpts {
+		return 0
+	}
+	return c.BodyExcerptBytes
 }
 
 // GatewayAuditIngestConfig controls the internal endpoint AI gateways deliver
@@ -284,6 +316,20 @@ type GatewayAuditIngestConfig struct {
 	// ResolverCacheTTLSeconds bounds how long a resolved gateway id (an agent's
 	// application handle, a proxy handle) is reused before being looked up again.
 	ResolverCacheTTLSeconds int
+	// KeepBodyExcerpts keeps the first BodyExcerptBytes of the request and
+	// response bodies the publisher sends (prompts and completions) in the
+	// record. Off by default: it makes prompt content audit data. The bodies
+	// are sent only when the gateway's collector captures them.
+	KeepBodyExcerpts bool
+	BodyExcerptBytes int
+}
+
+// ExcerptBytes is how much of each body a record keeps: 0 when excerpts are off.
+func (c GatewayAuditIngestConfig) ExcerptBytes() int {
+	if !c.KeepBodyExcerpts {
+		return 0
+	}
+	return c.BodyExcerptBytes
 }
 
 // AuditReaderConfig configures reads of the trail through the OpenChoreo

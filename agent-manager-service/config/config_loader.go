@@ -358,6 +358,15 @@ func loadEnvs() {
 			Enabled:                 r.readOptionalBool("AUDIT_GATEWAY_INGEST_ENABLED", false),
 			MaxBodyBytes:            r.readOptionalInt64("AUDIT_GATEWAY_INGEST_MAX_BODY_BYTES", 4<<20),
 			ResolverCacheTTLSeconds: int(r.readOptionalInt64("AUDIT_GATEWAY_INGEST_RESOLVER_CACHE_TTL_SECONDS", 60)),
+			KeepBodyExcerpts:        r.readOptionalBool("AUDIT_GATEWAY_INGEST_KEEP_BODY_EXCERPTS", false),
+			BodyExcerptBytes:        int(r.readOptionalInt64("AUDIT_GATEWAY_INGEST_BODY_EXCERPT_BYTES", 8192)),
+		},
+		GatewayTrafficIngest: GatewayTrafficAuditIngestConfig{
+			Enabled:                 r.readOptionalBool("AUDIT_TRAFFIC_INGEST_ENABLED", false),
+			MaxBodyBytes:            r.readOptionalInt64("AUDIT_TRAFFIC_INGEST_MAX_BODY_BYTES", 8<<20),
+			ResolverCacheTTLSeconds: int(r.readOptionalInt64("AUDIT_TRAFFIC_INGEST_RESOLVER_CACHE_TTL_SECONDS", 60)),
+			KeepBodyExcerpts:        r.readOptionalBool("AUDIT_TRAFFIC_INGEST_KEEP_BODY_EXCERPTS", false),
+			BodyExcerptBytes:        int(r.readOptionalInt64("AUDIT_TRAFFIC_INGEST_BODY_EXCERPT_BYTES", 8192)),
 		},
 		Reader: AuditReaderConfig{
 			ObserverURL: r.readOptionalString("AUDIT_OBSERVER_URL", ""),
@@ -803,6 +812,11 @@ func validateFileMountLimitsConfig(cfg *Config, r *configReader) {
 	}
 }
 
+// maxAuditBodyExcerptBytes bounds one body excerpt. Two of them fit an
+// OpenChoreo audit line unless the text escapes heavily (quotes, backslashes),
+// in which case the line keeps its other details and drops the excerpts.
+const maxAuditBodyExcerptBytes = 16 * 1024
+
 // validateAuditConfig rejects malformed audit tuning at startup.
 //
 // The recorder silently substitutes a default for any non-positive value, so a
@@ -853,6 +867,40 @@ func validateAuditConfig(cfg AuditConfig) []error {
 	if cfg.GatewayIngest.ResolverCacheTTLSeconds < 0 {
 		errs = append(errs, fmt.Errorf("AUDIT_GATEWAY_INGEST_RESOLVER_CACHE_TTL_SECONDS must not be negative, got %d",
 			cfg.GatewayIngest.ResolverCacheTTLSeconds))
+	}
+	if cfg.GatewayTrafficIngest.Enabled && !cfg.OpenChoreoSinkEnabled {
+		errs = append(errs, fmt.Errorf(
+			"AUDIT_TRAFFIC_INGEST_ENABLED requires AUDIT_OPENCHOREO_SINK_ENABLED"))
+	}
+	if cfg.GatewayTrafficIngest.Enabled && !cfg.Enabled {
+		errs = append(errs, fmt.Errorf("AUDIT_TRAFFIC_INGEST_ENABLED requires AUDIT_ENABLED"))
+	}
+	if cfg.GatewayTrafficIngest.MaxBodyBytes <= 0 {
+		errs = append(errs, fmt.Errorf("AUDIT_TRAFFIC_INGEST_MAX_BODY_BYTES must be a positive integer, got %d",
+			cfg.GatewayTrafficIngest.MaxBodyBytes))
+	}
+	if cfg.GatewayTrafficIngest.ResolverCacheTTLSeconds < 0 {
+		errs = append(errs, fmt.Errorf("AUDIT_TRAFFIC_INGEST_RESOLVER_CACHE_TTL_SECONDS must not be negative, got %d",
+			cfg.GatewayTrafficIngest.ResolverCacheTTLSeconds))
+	}
+	// Checked only where excerpts are kept. A record whose escaped excerpts
+	// still overflow an OpenChoreo audit line (64 KiB) loses its excerpts, not
+	// its other details (see renderOpenChoreoLine).
+	for _, excerpt := range []struct {
+		name  string
+		keep  bool
+		bytes int
+	}{
+		{"AUDIT_GATEWAY_INGEST_BODY_EXCERPT_BYTES", cfg.GatewayIngest.KeepBodyExcerpts, cfg.GatewayIngest.BodyExcerptBytes},
+		{
+			"AUDIT_TRAFFIC_INGEST_BODY_EXCERPT_BYTES", cfg.GatewayTrafficIngest.KeepBodyExcerpts,
+			cfg.GatewayTrafficIngest.BodyExcerptBytes,
+		},
+	} {
+		if excerpt.keep && (excerpt.bytes < 1 || excerpt.bytes > maxAuditBodyExcerptBytes) {
+			errs = append(errs, fmt.Errorf("%s must be between 1 and %d, got %d",
+				excerpt.name, maxAuditBodyExcerptBytes, excerpt.bytes))
+		}
 	}
 
 	// Reading is configured by AUDIT_OBSERVER_URL; once it is set, the identity

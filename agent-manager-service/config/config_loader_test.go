@@ -703,8 +703,11 @@ func TestLoadEnvs_ObserverConfig(t *testing.T) {
 func TestValidateAuditConfig(t *testing.T) {
 	valid := AuditConfig{
 		Enabled: true, BufferSize: 4096, BatchSize: 200, FlushIntervalMs: 1000,
-		GatewayIngest: GatewayAuditIngestConfig{MaxBodyBytes: 4 << 20, ResolverCacheTTLSeconds: 60},
-		Reader:        AuditReaderConfig{ExportMaxRecords: 500000, ExportSettleSeconds: 60},
+		GatewayIngest: GatewayAuditIngestConfig{MaxBodyBytes: 4 << 20, ResolverCacheTTLSeconds: 60, BodyExcerptBytes: 8192},
+		GatewayTrafficIngest: GatewayTrafficAuditIngestConfig{
+			MaxBodyBytes: 8 << 20, ResolverCacheTTLSeconds: 60, BodyExcerptBytes: 8192,
+		},
+		Reader: AuditReaderConfig{ExportMaxRecords: 500000, ExportSettleSeconds: 60},
 	}
 
 	tests := []struct {
@@ -716,6 +719,37 @@ func TestValidateAuditConfig(t *testing.T) {
 		{
 			name:       "defaults are valid",
 			mutate:     func(*AuditConfig) {},
+			wantErrors: 0,
+		},
+		{
+			name: "traffic-log ingest needs the OpenChoreo sink, like the OTel feed",
+			mutate: func(c *AuditConfig) {
+				c.GatewayTrafficIngest.Enabled = true
+			},
+			wantErrors:  1,
+			errContains: "AUDIT_TRAFFIC_INGEST_ENABLED requires AUDIT_OPENCHOREO_SINK_ENABLED",
+		},
+		{
+			name: "both gateway feeds may run together",
+			mutate: func(c *AuditConfig) {
+				c.OpenChoreoSinkEnabled = true
+				c.GatewayIngest.Enabled = true
+				c.GatewayTrafficIngest.Enabled = true
+			},
+			wantErrors: 0,
+		},
+		{
+			name: "a kept body excerpt is bounded",
+			mutate: func(c *AuditConfig) {
+				c.GatewayTrafficIngest.KeepBodyExcerpts = true
+				c.GatewayTrafficIngest.BodyExcerptBytes = 64 * 1024
+			},
+			wantErrors:  1,
+			errContains: "AUDIT_TRAFFIC_INGEST_BODY_EXCERPT_BYTES",
+		},
+		{
+			name:       "an excerpt size is not checked while excerpts are off",
+			mutate:     func(c *AuditConfig) { c.GatewayIngest.BodyExcerptBytes = 0 },
 			wantErrors: 0,
 		},
 		{

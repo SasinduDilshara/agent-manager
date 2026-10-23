@@ -59,6 +59,7 @@ function rec(id: string, occurredAt: string): AuditLogRecord {
     result: "success",
     actor: { type: "agent", id: "support-agent" },
     producer: "agent-manager-service",
+    source: "gateway-otel",
   };
 }
 

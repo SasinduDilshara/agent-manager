@@ -26,17 +26,13 @@ import {
   IconButton,
   InputAdornment,
   Stack,
+  Tab,
+  Tabs,
   TextField,
   Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
-import {
-  RefreshCcw,
-  ScrollText,
-  Search,
-  SortAsc,
-  SortDesc,
-} from "@wso2/oxygen-ui-icons-react";
+import { RefreshCcw, ScrollText, Search, SortAsc, SortDesc } from "@wso2/oxygen-ui-icons-react";
 import {
   PageLayout,
   TimeRangeSelector,
@@ -54,18 +50,16 @@ import type {
   AuditLogFilterField,
   AuditLogRecord,
   AuditLogResult,
+  AuditLogSource,
   QueryAuditLogsQuery,
 } from "@agent-management-platform/types";
 import { AuditLogTable } from "./subComponents/AuditLogTable";
+import { AgentActivityTable } from "./subComponents/AgentActivityTable";
+import { FeedComparison } from "./subComponents/FeedComparison";
+import { DEFAULT_VIEW, isAuditLogView, isGatewayView, VIEWS, type AuditLogView } from "./feeds";
 import { AuditLogDetailDrawer } from "./subComponents/AuditLogDetailDrawer";
-import {
-  MultiSelectFilter,
-  type MultiSelectFilterOption,
-} from "./subComponents/MultiSelectFilter";
-import {
-  ExportAuditLogsButton,
-  type ExportOutcome,
-} from "./subComponents/ExportAuditLogsButton";
+import { MultiSelectFilter, type MultiSelectFilterOption } from "./subComponents/MultiSelectFilter";
+import { ExportAuditLogsButton, type ExportOutcome } from "./subComponents/ExportAuditLogsButton";
 import {
   ACTOR_TYPE_OPTIONS,
   CATEGORY_OPTIONS,
@@ -82,24 +76,18 @@ import {
 const SEARCH_DEBOUNCE_MS = 600;
 
 /** Filters kept in the URL, so a filtered view can be shared as a link. */
-const URL_FILTERS = [
-  "action",
-  "result",
-  "category",
-  "actorType",
-  "agent",
-  "project",
-] as const;
+const URL_FILTERS = ["action", "result", "category", "actorType", "agent", "project"] as const;
 type UrlFilter = (typeof URL_FILTERS)[number];
 
 function useFilterValueOptions(
   orgName: string | undefined,
   filter: AuditLogFilterField,
   timeWindow: { startTime: string; endTime: string } | undefined,
+  source: AuditLogSource[] | undefined,
 ): MultiSelectFilterOption[] {
   const { data } = useQueryAuditLogFilterValues(
     { orgName },
-    timeWindow ? { filter, ...timeWindow } : undefined,
+    timeWindow ? { filter, ...timeWindow, source } : undefined,
   );
   return useMemo(
     () => (data?.values ?? []).map((v) => ({ value: v.value, count: v.count })),
@@ -107,13 +95,7 @@ function useFilterValueOptions(
   );
 }
 
-function ExportOutcomeAlert({
-  outcome,
-  onClose,
-}: {
-  outcome: ExportOutcome;
-  onClose: () => void;
-}) {
+function ExportOutcomeAlert({ outcome, onClose }: { outcome: ExportOutcome; onClose: () => void }) {
   if (outcome.kind === "error") {
     const { severity, title, message } = describeAuditError(outcome.error, "export");
     return (
@@ -128,8 +110,8 @@ function ExportOutcomeAlert({
     return (
       <Alert severity="error" onClose={onClose}>
         <AlertTitle>Export cut off</AlertTitle>
-        {filename} has no manifest line, so the export ended early and the file is
-        incomplete. Export again.
+        {filename} has no manifest line, so the export ended early and the file is incomplete.
+        Export again.
       </Alert>
     );
   }
@@ -137,18 +119,17 @@ function ExportOutcomeAlert({
     return (
       <Alert severity="warning" onClose={onClose}>
         <AlertTitle>Export incomplete</AlertTitle>
-        {filename} holds {manifest.exportedCount} of {manifest.storeCount} matching
-        records{manifest.reason ? `: ${manifest.reason}` : "."} Narrow the filters
-        and export again.
+        {filename} holds {manifest.exportedCount} of {manifest.storeCount} matching records
+        {manifest.reason ? `: ${manifest.reason}` : "."} Narrow the filters and export again.
       </Alert>
     );
   }
   return (
     <Alert severity="success" onClose={onClose}>
       <AlertTitle>Export complete</AlertTitle>
-      {filename}: {manifest.exportedCount} records, matching the audit store&apos;s
-      count. The window ends at {new Date(manifest.endTime).toLocaleString()} so
-      records still in transit are not counted. SHA-256{" "}
+      {filename}: {manifest.exportedCount} records, matching the audit store&apos;s count. The
+      window ends at {new Date(manifest.endTime).toLocaleString()} so records still in transit are
+      not counted. SHA-256{" "}
       <Box component="span" sx={{ fontFamily: "monospace", wordBreak: "break-all" }}>
         {manifest.sha256}
       </Box>
@@ -190,6 +171,18 @@ const AuditLogsPage: React.FC = () => {
     return out;
   }, [searchParams]);
   const search = searchParams.get("search") ?? "";
+  const view: AuditLogView = useMemo(() => {
+    const raw = searchParams.get("view");
+    return isAuditLogView(raw) ? raw : DEFAULT_VIEW;
+  }, [searchParams]);
+  // The comparison reads both gateway feeds; every other view its own sources.
+  const viewSources = useMemo<AuditLogSource[] | undefined>(
+    () =>
+      view === "compare"
+        ? ["gateway-otel", "gateway-traffic-log"]
+        : VIEWS.find((v) => v.value === view)?.sources,
+    [view],
+  );
   const sortOrder = searchParams.get("sortOrder") === "asc" ? "asc" : "desc";
 
   const [searchDraft, setSearchDraft] = useState(search);
@@ -230,11 +223,12 @@ const AuditLogsPage: React.FC = () => {
       actorType: selected.actorType as AuditLogActorType[],
       agent: selected.agent,
       project: selected.project,
+      source: viewSources,
       search: search || undefined,
       limit: PAGE_SIZE,
       sortOrder,
     }),
-    [timeWindow, selected, search, sortOrder],
+    [timeWindow, selected, search, sortOrder, viewSources],
   );
   const exportQuery = useMemo(() => {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -253,11 +247,17 @@ const AuditLogsPage: React.FC = () => {
     loadMore,
     isLoadingMore,
     loadMoreError,
-  } = useAuditLogTrail({ orgName: orgId }, query);
+  } = useAuditLogTrail({ orgName: orgId }, view === "compare" ? undefined : query);
 
-  const actionOptions = useFilterValueOptions(orgId, "action", timeWindow);
-  const agentOptions = useFilterValueOptions(orgId, "agent", timeWindow);
-  const projectOptions = useFilterValueOptions(orgId, "project", timeWindow);
+  const actionOptions = useFilterValueOptions(orgId, "action", timeWindow, viewSources);
+  const agentOptions = useFilterValueOptions(orgId, "agent", timeWindow, viewSources);
+  const projectOptions = useFilterValueOptions(orgId, "project", timeWindow, viewSources);
+  // The comparison takes the same window and filters, and sets the source itself.
+  const comparisonFilters = useMemo(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { source: _source, ...rest } = exportQuery;
+    return rest;
+  }, [exportQuery]);
 
   const [selectedRecord, setSelectedRecord] = useState<AuditLogRecord | null>(null);
   const [exportOutcome, setExportOutcome] = useState<ExportOutcome | null>(null);
@@ -267,8 +267,7 @@ const AuditLogsPage: React.FC = () => {
     else setAnchor(Date.now());
   };
 
-  const filtersActive =
-    URL_FILTERS.some((k) => selected[k].length > 0) || !!search;
+  const filtersActive = URL_FILTERS.some((k) => selected[k].length > 0) || !!search;
   const readError = error ? describeAuditError(error, "read") : null;
 
   return (
@@ -300,6 +299,22 @@ const AuditLogsPage: React.FC = () => {
       }
     >
       <Stack spacing={2}>
+        <Tabs
+          value={view}
+          onChange={(_, value: AuditLogView) =>
+            updateParams((next) => {
+              if (value === DEFAULT_VIEW) next.delete("view");
+              else next.set("view", value);
+            })
+          }
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{ borderBottom: 1, borderColor: "divider" }}
+        >
+          {VIEWS.map((v) => (
+            <Tab key={v.value} value={v.value} label={v.label} />
+          ))}
+        </Tabs>
         <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
           <TimeRangeSelector
             preset={preset}
@@ -374,9 +389,7 @@ const AuditLogsPage: React.FC = () => {
             <IconButton
               size="small"
               onClick={() =>
-                updateParams((next) =>
-                  next.set("sortOrder", sortOrder === "desc" ? "asc" : "desc"),
-                )
+                updateParams((next) => next.set("sortOrder", sortOrder === "desc" ? "asc" : "desc"))
               }
               aria-label={sortOrder === "desc" ? "Sort oldest first" : "Sort newest first"}
             >
@@ -400,13 +413,12 @@ const AuditLogsPage: React.FC = () => {
         </Stack>
 
         {exportOutcome && (
-          <ExportOutcomeAlert
-            outcome={exportOutcome}
-            onClose={() => setExportOutcome(null)}
-          />
+          <ExportOutcomeAlert outcome={exportOutcome} onClose={() => setExportOutcome(null)} />
         )}
 
-        {readError ? (
+        {view === "compare" ? (
+          <FeedComparison orgName={orgId} filters={comparisonFilters} />
+        ) : readError ? (
           <Alert severity={readError.severity}>
             <AlertTitle>{readError.title}</AlertTitle>
             {readError.message}
@@ -423,11 +435,15 @@ const AuditLogsPage: React.FC = () => {
           </Stack>
         ) : (
           <>
-            <AuditLogTable
-              records={records}
-              isLoading={isLoading}
-              onSelect={setSelectedRecord}
-            />
+            {isGatewayView(view) ? (
+              <AgentActivityTable
+                records={records}
+                isLoading={isLoading}
+                onSelect={setSelectedRecord}
+              />
+            ) : (
+              <AuditLogTable records={records} isLoading={isLoading} onSelect={setSelectedRecord} />
+            )}
             {!isLoading && (
               <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
                 <Typography variant="caption" color="text.secondary">
@@ -447,18 +463,13 @@ const AuditLogsPage: React.FC = () => {
               </Stack>
             )}
             {loadMoreError !== null && (
-              <Alert severity="error">
-                {describeAuditError(loadMoreError, "read").message}
-              </Alert>
+              <Alert severity="error">{describeAuditError(loadMoreError, "read").message}</Alert>
             )}
           </>
         )}
       </Stack>
 
-      <AuditLogDetailDrawer
-        record={selectedRecord}
-        onClose={() => setSelectedRecord(null)}
-      />
+      <AuditLogDetailDrawer record={selectedRecord} onClose={() => setSelectedRecord(null)} />
     </PageLayout>
   );
 };
@@ -471,9 +482,9 @@ export const AuditLogsOrganization: React.FC = () => {
       <PageLayout title={PAGE_TITLE} description={PAGE_DESCRIPTION} disableIcon>
         <Alert severity="info">
           <AlertTitle>Audit trail not enabled</AlertTitle>
-          This deployment does not read the audit trail back. Ask your platform
-          administrator to set <code>AUDIT_OBSERVER_URL</code> on the agent-manager
-          service (Helm: <code>agentManagerService.config.audit.reader</code>).
+          This deployment does not read the audit trail back. Ask your platform administrator to set{" "}
+          <code>AUDIT_OBSERVER_URL</code> on the agent-manager service (Helm:{" "}
+          <code>agentManagerService.config.audit.reader</code>).
         </Alert>
       </PageLayout>
     );

@@ -47,6 +47,7 @@ type GatewayInternalController interface {
 	GetApplications(w http.ResponseWriter, r *http.Request)
 	PushGatewayManifest(w http.ResponseWriter, r *http.Request)
 	IngestAuditEvents(w http.ResponseWriter, r *http.Request)
+	IngestTrafficAuditEvents(w http.ResponseWriter, r *http.Request)
 }
 
 type gatewayInternalController struct {
@@ -57,12 +58,22 @@ type gatewayInternalController struct {
 	// auditIngest is nil when gateway audit ingest is disabled.
 	auditIngest             services.GatewayAuditIngestService
 	auditIngestMaxBodyBytes int64
+	// trafficAuditIngest is nil when the traffic-log feed is disabled.
+	trafficAuditIngest             services.GatewayTrafficAuditIngestService
+	trafficAuditIngestMaxBodyBytes int64
 }
 
 // GatewayAuditIngest is the gateway audit ingest a GatewayInternalController
 // serves. A nil Service turns the endpoint off.
 type GatewayAuditIngest struct {
 	Service      services.GatewayAuditIngestService
+	MaxBodyBytes int64
+}
+
+// GatewayTrafficAuditIngest is the traffic-log feed a GatewayInternalController
+// serves. A nil Service turns the endpoint off.
+type GatewayTrafficAuditIngest struct {
+	Service      services.GatewayTrafficAuditIngestService
 	MaxBodyBytes int64
 }
 
@@ -73,6 +84,7 @@ func NewGatewayInternalController(
 	apiKeyRepo repositories.APIKeyRepository,
 	aiApplicationRepo repositories.AIApplicationRepository,
 	auditIngest GatewayAuditIngest,
+	trafficAuditIngest GatewayTrafficAuditIngest,
 ) GatewayInternalController {
 	return &gatewayInternalController{
 		gatewayService:          gatewayService,
@@ -81,6 +93,9 @@ func NewGatewayInternalController(
 		aiApplicationRepo:       aiApplicationRepo,
 		auditIngest:             auditIngest.Service,
 		auditIngestMaxBodyBytes: auditIngest.MaxBodyBytes,
+
+		trafficAuditIngest:             trafficAuditIngest.Service,
+		trafficAuditIngestMaxBodyBytes: trafficAuditIngest.MaxBodyBytes,
 	}
 }
 

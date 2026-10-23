@@ -45,6 +45,11 @@ const (
 	// credential in its own syntax — userinfo, or a token in the query — so
 	// this kind is enforced rather than descriptive: see sanitizeURL.
 	KindURL FieldKind = "url"
+	// KindText is free text longer than a name — a captured request or response
+	// body excerpt. Like every string it is stripped of control characters and
+	// has credential-shaped substrings masked, but it is bounded by maxTextLen
+	// rather than maxStringLen. Enforced, like KindURL.
+	KindText FieldKind = "text"
 )
 
 // baseFields are permitted on every action. They describe the request rather

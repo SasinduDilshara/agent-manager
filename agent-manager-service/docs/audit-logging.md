@@ -157,9 +157,37 @@ Records are written synchronously before the batch is acknowledged. A batch that
 
 The gateway's own traffic log is separate from this: when enabled (`apiGateway.trafficLog.enabled`), the gateway writes request/response metadata to a file in the gateway-runtime pod (`/var/log/wso2/traffic/traffic.log` by default). That file is for operators and never enters the audit trail. Header and body capture are off by default. The gateway captures them once for every consumer, so with the audit feed on, whatever the traffic log captures also travels — unmasked, since `maskedHeaders` applies to the log file only — in the records sent here. This service never reads those attributes (step 1), but credentials should not make the trip: turn header capture on only where it is needed.
 
+## Agent activity from the gateway's traffic log
+
+A second gateway feed, kept apart from the OTel one so the two can be compared and either removed: the gateway's traffic logging writes one JSON line per request, and its `http` sink POSTs the lines in NDJSON batches to `POST /api/internal/v1/audit/traffic-events`, authenticated with the same gateway token. The two feeds never share records: each is written with its own producer (below), so either can be read, exported or turned off on its own.
+
+Each line becomes one record with the same action, resource and agent attribution as the OTel feed — the classification and the agent resolver are shared. What differs is what a line carries:
+
+| | OTel feed | Traffic-log feed |
+|---|---|---|
+| Model, token usage, cost | Reported by the gateway | Model and tokens read from the captured bodies; no cost |
+| MCP method and tool | Reported by the gateway | Read from the captured JSON-RPC body, including `isError` tool failures |
+| Guardrail outcome | Reported | Not available |
+| Request path | The requested path | The API's route template |
+| Application | Its id | Its id, name and key type |
+| Latency | Total and backend | Total, backend, and the gateway's own request and response mediation |
+| Needs body capture for LLM/MCP fields | No | Yes (`apiGateway.trafficAudit.captureBodies`) |
+
+Fields read from a body are marked `details.derivedFromBody`. Responses are read as plain JSON or as server-sent events (streamed completions, MCP Streamable HTTP), in the OpenAI chat, OpenAI Responses and Anthropic shapes. A body that is absent, cut by `apiGateway.trafficAudit.maxPayloadSize` or not the expected shape yields no fields; the record is kept without them. A streamed completion reports its usage in its last events, so a long stream cut by that limit has a model but no token counts. Headers are never decoded.
+
+The feed requires `AUDIT_ENABLED` and `AUDIT_OPENCHOREO_SINK_ENABLED`, like the OTel feed, and is independent of it: either runs alone.
+
+**Body capture is shared.** The gateway captures bodies once for every consumer of its collector: turning it on for either feed also sends bodies to the other (the OTel publisher as `wso2.request.body` / `wso2.response.body`) and writes them to the local traffic log file when that is enabled.
+
+**Body excerpts are opt-in, per feed.** With `AUDIT_GATEWAY_INGEST_KEEP_BODY_EXCERPTS` or `AUDIT_TRAFFIC_INGEST_KEEP_BODY_EXCERPTS` the record keeps the first `*_BODY_EXCERPT_BYTES` (default 8 KiB, at most 16 KiB) of the request and response bodies — the prompt and the completion — as `details.requestBodyExcerpt` / `responseBodyExcerpt`, with `bodyExcerptTruncated` when cut. They are scrubbed like every other string (control characters removed, credential-shaped text masked), but otherwise kept as sent: **with excerpts on, prompt content is audit data**, visible to every reader of the trail and in every export. Both are off by default. A record whose excerpts would take it past the store's 64 KiB record size keeps its other details and drops the excerpts, marked `bodyExcerptsOmitted`.
+
 ## The OpenChoreo audit store
 
 With `AUDIT_OPENCHOREO_SINK_ENABLED=true` every control-plane record is also written to stdout as an OpenChoreo audit line (schema `1.0`, `"msg":"AUDIT-LOG"`, `producer: agent-manager-service`), alongside the `log_type=audit` record described above, so an existing log pipeline keeps working. Gateway-observed records are written **only** as OpenChoreo audit lines: a pipeline that collects `log_type=audit` alone does not see agent activity. The observability plane's log collector routes the audit lines from this service's pods to the `audit-logs-*` index, the same store OpenChoreo's own API and Observer write to.
+
+Each record names the pipeline that produced it in `producer`: `agent-manager-service` for this service's own operations, `agent-manager-service.gateway-otel` and `agent-manager-service.gateway-traffic-log` for the two gateway feeds. The logs module routes audit lines by the container that emits them and does not read the producer, so the feed producers need no allowlist entry of their own.
+
+Gateway records written before the feeds had producers of their own carry `agent-manager-service`, so they are read as `platform` records. The source is the producer as stored; no record is relabelled when read.
 
 In that line the organization (OU id) is `resource.namespace`, and everything specific to Agent Manager sits under `metadata.amp`. Because every organization shares one OpenChoreo namespace, the reader below always forces both `resource.namespace` and `producer` server-side.
 
@@ -174,6 +202,8 @@ Organization administrators read the trail from **Audit Logs** in the console, o
 | `GET /orgs/{orgName}/audit-logs` | `audit-log:read` | Records in a window (at most 366 days), filtered and searched, newest first; at most 1000 per call with the exact `total` |
 | `GET /orgs/{orgName}/audit-logs/filter-values` | `audit-log:read` | Distinct values of one field, with counts, for filter pickers |
 | `GET /orgs/{orgName}/audit-logs/export` | `audit-log:export` | Every matching record as NDJSON, oldest first, ending with a manifest line |
+
+Every route takes `source` (repeatable): `platform`, `gateway-otel` or `gateway-traffic-log`, and every record says which it is. The console shows each as its own view, plus a comparison that lines the two gateway feeds up request by request (both carry the gateway's correlation id as `requestId`) and shows which fields each reported. A source only narrows the producers to that feed's; a query can never reach a producer this service does not write.
 
 The organization is always the caller's token's, never the path's or the query's. Records that belong to no organization — `system:startup` and `system:audit-dropped` — are in the store but never returned by these routes; operators find them in the `log_type=audit` output or the store itself. The service reads the store through OpenChoreo's Observer using its own client credential (`amp-audit-reader-client`, granted only `auditlogs:view`), so the reader cannot write and a user's token is never forwarded.
 
@@ -310,6 +340,11 @@ The buffer is flushed on shutdown **after both HTTP servers stop**, so in-flight
 | `AUDIT_GATEWAY_INGEST_ENABLED` | `false` | Accept gateway-observed agent activity. Requires the OpenChoreo sink. |
 | `AUDIT_GATEWAY_INGEST_MAX_BODY_BYTES` | `4194304` | Largest batch accepted (after gzip decoding). |
 | `AUDIT_GATEWAY_INGEST_RESOLVER_CACHE_TTL_SECONDS` | `60` | How long an agent lookup is cached. |
+| `AUDIT_GATEWAY_INGEST_KEEP_BODY_EXCERPTS` / `_BODY_EXCERPT_BYTES` | `false` / `8192` | Keep excerpts of the bodies the OTel feed sends. |
+| `AUDIT_TRAFFIC_INGEST_ENABLED` | `false` | Accept the traffic-log feed. Requires the OpenChoreo sink. Independent of the OTel feed. |
+| `AUDIT_TRAFFIC_INGEST_MAX_BODY_BYTES` | `8388608` | Largest traffic-log batch accepted. |
+| `AUDIT_TRAFFIC_INGEST_RESOLVER_CACHE_TTL_SECONDS` | `60` | How long an agent lookup is cached. |
+| `AUDIT_TRAFFIC_INGEST_KEEP_BODY_EXCERPTS` / `_BODY_EXCERPT_BYTES` | `false` / `8192` | Keep excerpts of the captured bodies in traffic-log records. |
 | `AUDIT_OBSERVER_URL` | — | OpenChoreo Observer the trail is read from. Unset means the read routes answer `503`. |
 | `AUDIT_READER_TOKEN_URL` | the IdP token URL | Token endpoint for the reader credential. |
 | `AUDIT_READER_CLIENT_ID` / `AUDIT_READER_CLIENT_SECRET` | — | The reader credential; required once `AUDIT_OBSERVER_URL` is set. |

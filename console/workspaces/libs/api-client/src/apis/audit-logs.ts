@@ -43,6 +43,7 @@ const REPEATABLE_FILTERS = [
   "agent",
   "requestId",
   "eventId",
+  "source",
 ] as const;
 
 /**

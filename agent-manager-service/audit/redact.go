@@ -33,6 +33,7 @@ import (
 const (
 	maxUserAgentLen = 512
 	maxStringLen    = 1024
+	maxTextLen      = 16 * 1024
 	maxErrorLen     = 512
 	maxDetailKeys   = 32
 	maxListLen      = 64
@@ -156,6 +157,12 @@ func redactDetails(action Action, details map[string]any) map[string]any {
 		if kind == KindURL {
 			if s, isString := v.(string); isString {
 				v = sanitizeURL(s)
+			}
+		}
+		if kind == KindText {
+			if s, isString := v.(string); isString {
+				out[k] = maskSecretShaped(clean(s, maxTextLen))
+				continue
 			}
 		}
 		out[k] = scrubValue(v)

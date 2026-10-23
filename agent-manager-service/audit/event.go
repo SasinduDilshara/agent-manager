@@ -160,6 +160,10 @@ type Event struct {
 	// AgentName is the agent the event concerns, when that is not the resource
 	// itself — the agent that called an LLM proxy through the gateway.
 	AgentName string `json:"agentName,omitempty"`
+	// Producer names the pipeline that produced a relayed record (see
+	// OpenChoreoProducerGateway*). Empty for this service's own records, which
+	// are produced as OpenChoreoProducer.
+	Producer string `json:"producer,omitempty"`
 
 	// Result.
 	Outcome      Outcome `json:"outcome"`

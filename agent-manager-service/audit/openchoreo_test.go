@@ -313,3 +313,43 @@ func TestOpenChoreoLineCarriesWhatTheReaderRequires(t *testing.T) {
 	require.NoError(t, json.Unmarshal(line, &decoded))
 	assert.Equal(t, "8c1f04b2", decoded.Actor.ID, "a known actor keeps its id")
 }
+
+// TestOpenChoreoLineDropsExcerptsBeforeDetails: body excerpts that push a line
+// past the limit are dropped first, so model, tokens and attribution survive.
+func TestOpenChoreoLineDropsExcerptsBeforeDetails(t *testing.T) {
+	e := sampleEvent()
+	// Quotes double when escaped: two 16 KiB excerpts of them exceed 64 KiB.
+	heavy := strings.Repeat(`"`, 16*1024)
+	e.Details = map[string]any{
+		"requestModel":        "gpt-4o",
+		"inputTokens":         int64(1840),
+		"requestBodyExcerpt":  heavy,
+		"responseBodyExcerpt": heavy,
+	}
+	line, err := renderOpenChoreoLine(&e, time.Now())
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(line), maxOpenChoreoLineBytes+1)
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(line, &decoded))
+	amp := decoded["metadata"].(map[string]any)["amp"].(map[string]any)
+	details := amp["details"].(map[string]any)
+	assert.Equal(t, "gpt-4o", details["requestModel"])
+	assert.Equal(t, float64(1840), details["inputTokens"])
+	assert.Equal(t, true, details["bodyExcerptsOmitted"])
+	assert.NotContains(t, details, "requestBodyExcerpt")
+	assert.NotContains(t, amp, "detailsOmitted")
+}
+
+// TestOpenChoreoLineKeepsExcerptsThatFit: HTML in a body is not escaped into
+// six-byte sequences, so ordinary excerpts fit and are kept.
+func TestOpenChoreoLineKeepsExcerptsThatFit(t *testing.T) {
+	e := sampleEvent()
+	html := strings.Repeat(`<a href="/x">&nbsp;</a>`, 600) // ~14 KiB of HTML
+	e.Details = map[string]any{"requestBodyExcerpt": html, "responseBodyExcerpt": html}
+	line, err := renderOpenChoreoLine(&e, time.Now())
+	require.NoError(t, err)
+	assert.Contains(t, string(line), `<a href=\"/x\">&nbsp;</a>`, "no \\u003c escapes")
+	assert.NotContains(t, string(line), "bodyExcerptsOmitted")
+	assert.True(t, json.Valid(bytes.TrimSpace(line)))
+}

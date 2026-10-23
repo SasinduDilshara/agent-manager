@@ -139,10 +139,70 @@ func TestAuditTrail_ReadsAreConfinedToTheCallersOrganization(t *testing.T) {
 
 	for _, req := range store.requests {
 		assert.Equal(t, []string{"ou-acme"}, req.Resource.Namespaces)
-		assert.Equal(t, []string{audit.OpenChoreoProducer}, req.Producers)
+		assert.Equal(t, audit.OpenChoreoProducers(), req.Producers, "only this service's own producers")
 		assert.Equal(t, []string{"customer-care"}, req.Resource.Projects)
 		assert.Equal(t, []string{"support-agent"}, req.Resource.Components)
 	}
+}
+
+// TestAuditTrail_SourceNarrowsTheProducers: a source selects one feed's
+// producer, and never any producer outside this service's own.
+func TestAuditTrail_SourceNarrowsTheProducers(t *testing.T) {
+	cases := []struct {
+		sources []string
+		want    []string
+	}{
+		{[]string{AuditSourcePlatform}, []string{audit.OpenChoreoProducer}},
+		{[]string{AuditSourceGatewayOTel}, []string{audit.OpenChoreoProducerGatewayOTel}},
+		{[]string{AuditSourceGatewayTrafficLog}, []string{audit.OpenChoreoProducerGatewayTrafficLog}},
+		{
+			[]string{AuditSourceGatewayOTel, AuditSourceGatewayTrafficLog},
+			[]string{audit.OpenChoreoProducerGatewayOTel, audit.OpenChoreoProducerGatewayTrafficLog},
+		},
+	}
+	for _, c := range cases {
+		store := &fakeAuditStore{}
+		q := baseTrailQuery()
+		q.Sources = c.sources
+		_, err := newTrailService(store.mock()).Query(auditableCtx(t), "ou-acme", q)
+		require.NoError(t, err, "sources %v", c.sources)
+		require.Len(t, store.requests, 1)
+		assert.Equal(t, c.want, store.requests[0].Producers, "sources %v", c.sources)
+	}
+
+	q := baseTrailQuery()
+	q.Sources = []string{"openchoreo-api"}
+	_, err := newTrailService((&fakeAuditStore{}).mock()).Query(auditableCtx(t), "ou-acme", q)
+	require.ErrorIs(t, err, utils.ErrInvalidAuditQuery, "an unknown source is refused, not passed through")
+	assert.Equal(t, []string{noAuditProducer}, producersFor([]string{"openchoreo-api"}),
+		"even unvalidated, an unknown source matches nothing rather than widening the read")
+}
+
+// TestAuditTrail_RecordsCarryTheirSource: each record says which feed it came
+// from, and a record from a producer this service does not write is dropped.
+func TestAuditTrail_RecordsCarryTheirSource(t *testing.T) {
+	platform := trailRecord("e1", trailT0, "ou-acme")
+	platform.Producer = audit.OpenChoreoProducer
+	otel := trailRecord("e2", trailT0.Add(time.Millisecond), "ou-acme")
+	otel.Producer = audit.OpenChoreoProducerGatewayOTel
+	traffic := trailRecord("e3", trailT0.Add(2*time.Millisecond), "ou-acme")
+	traffic.Producer = audit.OpenChoreoProducerGatewayTrafficLog
+	foreign := trailRecord("e4", trailT0.Add(3*time.Millisecond), "ou-acme")
+	foreign.Producer = "openchoreo-api"
+
+	store := &fakeAuditStore{records: []ocauditsvc.Record{platform, otel, traffic, foreign}}
+	q := baseTrailQuery()
+	q.SortOrder = "asc"
+	resp, err := newTrailService(store.mock()).Query(auditableCtx(t), "ou-acme", q)
+	require.NoError(t, err)
+	require.Len(t, resp.Records, 3)
+	got := map[string]string{}
+	for _, r := range resp.Records {
+		got[r.EventId] = r.Source
+	}
+	assert.Equal(t, map[string]string{
+		"e1": AuditSourcePlatform, "e2": AuditSourceGatewayOTel, "e3": AuditSourceGatewayTrafficLog,
+	}, got)
 }
 
 // TestAuditTrail_DropsRecordsOutsideTheOrganization: the query excludes them,

@@ -178,6 +178,26 @@ agentManagerService:
         maxBodyBytes: 4194304
         # How long a resolved agent (from an application id or AgentID subject) is reused.
         resolverCacheTTLSeconds: 60
+        # Keep the first bodyExcerptBytes of the request and response bodies the
+        # gateway sends (prompts and completions) in each record. Off by default:
+        # it makes prompt content audit data. The gateway sends bodies only when
+        # its collector captures them (gateway extension apiGateway.audit.captureBodies).
+        keepBodyExcerpts: false
+        bodyExcerptBytes: 8192
+      # Relay agent activity from the AI gateways' traffic log — a second feed
+      # beside gatewayIngest, for comparing the two. Served on the internal server
+      # at /api/internal/v1/audit/traffic-events; the gateway extension chart's
+      # apiGateway.trafficAudit points the gateway's traffic-log HTTP sink at it.
+      # Requires openchoreoSink.
+      gatewayTrafficIngest:
+        enabled: false
+        # Largest batch accepted. Traffic-log lines can carry bodies.
+        maxBodyBytes: 8388608
+        resolverCacheTTLSeconds: 60
+        # As for gatewayIngest. The bodies are captured with the gateway
+        # extension's apiGateway.trafficAudit.captureBodies.
+        keepBodyExcerpts: false
+        bodyExcerptBytes: 8192
       # Read the trail back (GET /orgs/{orgName}/audit-logs, filter-values,
       # export) through the OpenChoreo Observer's audit API. Off while
       # observerUrl is empty. The identity below must hold auditlogs:view in

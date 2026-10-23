@@ -11433,6 +11433,7 @@ paths:
         - $ref: "#/components/parameters/AuditLogAgent"
         - $ref: "#/components/parameters/AuditLogRequestId"
         - $ref: "#/components/parameters/AuditLogEventId"
+        - $ref: "#/components/parameters/AuditLogSource"
         - $ref: "#/components/parameters/AuditLogSearch"
       responses:
         "200":
@@ -11501,6 +11502,7 @@ paths:
               - project
               - environment
               - agent
+              - source
         - name: valueSearch
           in: query
           description: Only values containing this text (case-sensitive).
@@ -11528,6 +11530,7 @@ paths:
         - $ref: "#/components/parameters/AuditLogProject"
         - $ref: "#/components/parameters/AuditLogEnvironment"
         - $ref: "#/components/parameters/AuditLogAgent"
+        - $ref: "#/components/parameters/AuditLogSource"
         - $ref: "#/components/parameters/AuditLogSearch"
       responses:
         "200":
@@ -11604,6 +11607,7 @@ paths:
         - $ref: "#/components/parameters/AuditLogAgent"
         - $ref: "#/components/parameters/AuditLogRequestId"
         - $ref: "#/components/parameters/AuditLogEventId"
+        - $ref: "#/components/parameters/AuditLogSource"
         - $ref: "#/components/parameters/AuditLogSearch"
       responses:
         "200":
@@ -11810,6 +11814,22 @@ components:
         maxItems: 20
         items:
           type: string
+    AuditLogSource:
+      name: source
+      in: query
+      description: |
+        Only records from these sources (repeatable): `platform` (operations
+        performed through Agent Manager), `gateway-otel` (agent activity relayed
+        from the gateways' OTel analytics feed) or `gateway-traffic-log` (agent
+        activity relayed from the gateways' traffic-log feed).
+      style: form
+      explode: true
+      schema:
+        type: array
+        maxItems: 3
+        items:
+          type: string
+          enum: [platform, gateway-otel, gateway-traffic-log]
     AuditLogSearch:
       name: search
       in: query
@@ -19781,7 +19801,7 @@ components:
 
     AuditLogRecord:
       type: object
-      required: [eventId, occurredAt, action, result, actor, producer]
+      required: [eventId, occurredAt, action, result, actor, producer, source]
       properties:
         eventId:
           type: string
@@ -19845,6 +19865,13 @@ components:
         producer:
           type: string
           example: agent-manager-service
+        source:
+          type: string
+          description: |
+            Where the record came from: `platform` (an operation performed through
+            Agent Manager), or agent activity relayed from the gateways by the OTel
+            feed (`gateway-otel`) or the traffic-log feed (`gateway-traffic-log`).
+          enum: [platform, gateway-otel, gateway-traffic-log]
         details:
           type: object
           description: |

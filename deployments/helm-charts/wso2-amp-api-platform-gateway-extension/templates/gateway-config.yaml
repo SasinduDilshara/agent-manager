@@ -95,16 +95,20 @@ data:
           {{- $policyConfigs | toYaml | nindent 10 }}
         {{- $audit := .Values.apiGateway.audit }}
         {{- $tl := .Values.apiGateway.trafficLog }}
-        {{- if or $audit.enabled $tl.enabled }}
-        # Shared capture pipeline feeding both the analytics publisher (audit) and
-        # traffic logging. Headers and bodies are captured only when the traffic
-        # log asks for them. The audit feed never needs either, but whatever is
-        # captured also travels in its records, unmasked.
+        {{- $ta := .Values.apiGateway.trafficAudit }}
+        {{- /* Bodies are captured once for every consumer of the collector. */}}
+        {{- $captureBodies := or (and $audit.enabled $audit.captureBodies) (and $ta.enabled $ta.captureBodies) }}
+        {{- if or $audit.enabled $tl.enabled $ta.enabled }}
+        # Shared capture pipeline feeding the analytics publisher (audit), the
+        # traffic-log audit feed and the local traffic log. Headers are captured
+        # only when the local traffic log asks for them; bodies when it or either
+        # audit feed does. Whatever is captured reaches every consumer, and the
+        # analytics publisher sends it unmasked.
         collector:
           request_headers: {{ and $tl.enabled $tl.requestHeaders }}
           response_headers: {{ and $tl.enabled $tl.responseHeaders }}
-          request_body: {{ and $tl.enabled $tl.requestBody }}
-          response_body: {{ and $tl.enabled $tl.responseBody }}
+          request_body: {{ or (and $tl.enabled $tl.requestBody) $captureBodies }}
+          response_body: {{ or (and $tl.enabled $tl.responseBody) $captureBodies }}
           {{- with $audit.ignorePathPrefixes }}
           ignore_path_prefixes:
             {{- toYaml . | nindent 12 }}
@@ -136,22 +140,60 @@ data:
               queue_capacity: {{ $audit.queueCapacity }}
               on_queue_full: "drop_new"
         {{- end }}
-        {{- if $tl.enabled }}
-        # Local traffic log: one JSON line per request, written inside the
-        # gateway-runtime pod for an operator to read (kubectl exec).
+        {{- if or $tl.enabled $ta.enabled }}
+        # Traffic logging: one JSON line per request, written to the local file
+        # (trafficLog) and/or POSTed to Agent Manager (trafficAudit). Both outputs
+        # carry the same line: what one asks for, the other gets too.
         traffic_logging:
           enabled: true
           outputs:
+            {{- if $tl.enabled }}
             - file
-          request_headers: {{ $tl.requestHeaders }}
-          response_headers: {{ $tl.responseHeaders }}
-          request_body: {{ $tl.requestBody }}
-          response_body: {{ $tl.responseBody }}
+            {{- end }}
+            {{- if $ta.enabled }}
+            - http
+            {{- end }}
+          request_headers: {{ and $tl.enabled $tl.requestHeaders }}
+          response_headers: {{ and $tl.enabled $tl.responseHeaders }}
+          request_body: {{ or (and $tl.enabled $tl.requestBody) (and $ta.enabled $ta.captureBodies) }}
+          response_body: {{ or (and $tl.enabled $tl.responseBody) (and $ta.enabled $ta.captureBodies) }}
+          {{- if $ta.enabled }}
+          max_payload_size: {{ $ta.maxPayloadSize | int64 }}
+          # The line carries no auth fields of its own; the token subject names
+          # the agent on AgentID-authenticated routes.
+          properties:
+            authSubject: "$ctx:auth.subject"
+            authType: "$ctx:auth.type"
+          {{- end }}
           masked_headers:
             {{- toYaml $tl.maskedHeaders | nindent 12 }}
+          {{- if $tl.enabled }}
           file:
             path: {{ $tl.path | quote }}
             max_size_mb: {{ $tl.maxSizeMB }}
+          {{- end }}
+          {{- if $ta.enabled }}
+          http:
+            endpoint: {{ include "wso2-amp-gateway-extension.trafficAuditEndpoint" . | quote }}
+            content_type: "application/x-ndjson"
+            {{- if not .Values.apiGateway.controlPlane.tls.enabled }}
+            allow_insecure_transport: true
+            {{- end }}
+            batch_max_events: {{ $ta.batchMaxEvents | int64 }}
+            batch_max_bytes: {{ $ta.batchMaxBytes | int64 }}
+            flush_interval: {{ $ta.flushInterval | quote }}
+            queue_capacity: {{ $ta.queueCapacity | int64 }}
+            on_queue_full: "drop_new"
+            auth:
+              type: "header"
+              header:
+                name: "api-key"
+                value: {{ printf "{{ env \"%s\" }}" (include "wso2-amp-gateway-extension.auditTokenEnvName" .) | quote }}
+            {{- if and .Values.apiGateway.controlPlane.tls.enabled .Values.apiGateway.controlPlane.tls.insecureSkipVerify }}
+            tls:
+              insecure_skip_verify: true
+            {{- end }}
+          {{- end }}
         {{- end }}
 
       controller:

@@ -9,9 +9,6 @@ package wiring
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"time"
-
 	"github.com/google/wire"
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/observersvc"
@@ -31,6 +28,8 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 	"github.com/wso2/agent-manager/agent-manager-service/websocket"
 	"gorm.io/gorm"
+	"log/slog"
+	"time"
 )
 
 // Injectors from wire.go:
@@ -163,7 +162,8 @@ func InitializeAppParamsWithEnvThunderEndpoints(cfg *config.Config, db *gorm.DB,
 	webSocketController := ProvideWebSocketController(manager, eventHub, platformGatewayService, deploymentAckHandler, configConfig)
 	gatewayInternalAPIService := services.NewGatewayInternalAPIService(llmProviderRepository, llmProxyRepository, deploymentRepository, gatewayRepository, infraResourceManager, v)
 	gatewayAuditIngest := ProvideGatewayAuditIngest(configConfig, openChoreoAuditSink, aiApplicationRepository, agentThunderClientRepository, logger)
-	gatewayInternalController := controllers.NewGatewayInternalController(platformGatewayService, gatewayInternalAPIService, apiKeyRepository, aiApplicationRepository, gatewayAuditIngest)
+	gatewayTrafficAuditIngest := ProvideGatewayTrafficAuditIngest(configConfig, openChoreoAuditSink, aiApplicationRepository, agentThunderClientRepository, logger)
+	gatewayInternalController := controllers.NewGatewayInternalController(platformGatewayService, gatewayInternalAPIService, apiKeyRepository, aiApplicationRepository, gatewayAuditIngest, gatewayTrafficAuditIngest)
 	auditTrailService, err := ProvideAuditTrailService(configConfig, logger)
 	if err != nil {
 		return nil, err
@@ -371,7 +371,8 @@ func InitializeTestAppParamsWithClientMocks(cfg *config.Config, db *gorm.DB, aut
 	webSocketController := ProvideWebSocketController(manager, eventHub, platformGatewayService, deploymentAckHandler, configConfig)
 	gatewayInternalAPIService := services.NewGatewayInternalAPIService(llmProviderRepository, llmProxyRepository, deploymentRepository, gatewayRepository, infraResourceManager, v)
 	gatewayAuditIngest := ProvideGatewayAuditIngest(configConfig, openChoreoAuditSink, aiApplicationRepository, agentThunderClientRepository, logger)
-	gatewayInternalController := controllers.NewGatewayInternalController(platformGatewayService, gatewayInternalAPIService, apiKeyRepository, aiApplicationRepository, gatewayAuditIngest)
+	gatewayTrafficAuditIngest := ProvideGatewayTrafficAuditIngest(configConfig, openChoreoAuditSink, aiApplicationRepository, agentThunderClientRepository, logger)
+	gatewayInternalController := controllers.NewGatewayInternalController(platformGatewayService, gatewayInternalAPIService, apiKeyRepository, aiApplicationRepository, gatewayAuditIngest, gatewayTrafficAuditIngest)
 	auditTrailService, err := ProvideAuditTrailService(configConfig, logger)
 	if err != nil {
 		return nil, err
@@ -486,7 +487,9 @@ var instrumentationProviderSet = wire.NewSet(
 	ProvideDefaultPythonVersion,
 )
 
-var controllerProviderSet = wire.NewSet(controllers.NewAgentController, controllers.NewAgentKindController, controllers.NewInfraResourceController, controllers.NewAgentTokenController, controllers.NewRepositoryController, controllers.NewEnvironmentController, controllers.NewGatewayController, controllers.NewLLMController, controllers.NewLLMDeploymentController, controllers.NewLLMProviderAPIKeyController, controllers.NewLLMProxyAPIKeyController, controllers.NewAgentAPIKeyController, controllers.NewA2AAgentCardController, controllers.NewA2AProxyController, controllers.NewLLMProxyDeploymentController, controllers.NewMCPProxyController, ProvideWebSocketController, controllers.NewGatewayInternalController, ProvideGatewayAuditIngest, controllers.NewAuditLogController, ProvideAuditTrailService, controllers.NewMonitorController, controllers.NewMonitorScoresController, controllers.NewMonitorScoresPublisherController, controllers.NewEvaluatorController, controllers.NewCatalogController, ProvideAgentBuildOptionsController, controllers.NewAgentConfigurationController, controllers.NewGitSecretController, controllers.NewIdentityController, controllers.NewMCPProxyScopeController, controllers.NewAgentIdentityController)
+var controllerProviderSet = wire.NewSet(controllers.NewAgentController, controllers.NewAgentKindController, controllers.NewInfraResourceController, controllers.NewAgentTokenController, controllers.NewRepositoryController, controllers.NewEnvironmentController, controllers.NewGatewayController, controllers.NewLLMController, controllers.NewLLMDeploymentController, controllers.NewLLMProviderAPIKeyController, controllers.NewLLMProxyAPIKeyController, controllers.NewAgentAPIKeyController, controllers.NewA2AAgentCardController, controllers.NewA2AProxyController, controllers.NewLLMProxyDeploymentController, controllers.NewMCPProxyController, ProvideWebSocketController, controllers.NewGatewayInternalController, ProvideGatewayAuditIngest,
+	ProvideGatewayTrafficAuditIngest, controllers.NewAuditLogController, ProvideAuditTrailService, controllers.NewMonitorController, controllers.NewMonitorScoresController, controllers.NewMonitorScoresPublisherController, controllers.NewEvaluatorController, controllers.NewCatalogController, ProvideAgentBuildOptionsController, controllers.NewAgentConfigurationController, controllers.NewGitSecretController, controllers.NewIdentityController, controllers.NewMCPProxyScopeController, controllers.NewAgentIdentityController,
+)
 
 var testClientProviderSet = wire.NewSet(
 	ProvideTestOpenChoreoClient,
@@ -735,7 +738,26 @@ func ProvideGatewayAuditIngest(
 		return controllers.GatewayAuditIngest{}
 	}
 	return controllers.GatewayAuditIngest{
-		Service:      services.NewGatewayAuditIngestService(oc.Sink, apps, identities, time.Duration(ingest.ResolverCacheTTLSeconds)*time.Second, logger),
+		Service:      services.NewGatewayAuditIngestService(oc.Sink, apps, identities, time.Duration(ingest.ResolverCacheTTLSeconds)*time.Second, ingest.ExcerptBytes(), logger),
+		MaxBodyBytes: ingest.MaxBodyBytes,
+	}
+}
+
+// ProvideGatewayTrafficAuditIngest builds the traffic-log feed, or a disabled
+// one. It writes to the same OpenChoreo audit sink as the OTel feed.
+func ProvideGatewayTrafficAuditIngest(
+	cfg config.Config,
+	oc OpenChoreoAuditSink,
+	apps repositories.AIApplicationRepository,
+	identities repositories.AgentThunderClientRepository,
+	logger *slog.Logger,
+) controllers.GatewayTrafficAuditIngest {
+	ingest := cfg.Audit.GatewayTrafficIngest
+	if !ingest.Enabled || oc.Sink == nil {
+		return controllers.GatewayTrafficAuditIngest{}
+	}
+	return controllers.GatewayTrafficAuditIngest{
+		Service:      services.NewGatewayTrafficAuditIngestService(oc.Sink, apps, identities, time.Duration(ingest.ResolverCacheTTLSeconds)*time.Second, ingest.ExcerptBytes(), logger),
 		MaxBodyBytes: ingest.MaxBodyBytes,
 	}
 }

@@ -278,6 +278,38 @@ apiGateway:
     # /otel is the agents' trace export route: telemetry, not an agent action.
     ignorePathPrefixes:
       - "/otel"
+    # Capture request/response bodies so the publisher sends them, for Agent
+    # Manager's opt-in body excerpts (agentManagerService.config.audit.
+    # gatewayIngest.keepBodyExcerpts). The publisher's model, token and MCP
+    # fields do not need bodies. Capture is shared by every consumer of the
+    # gateway's collector: see trafficAudit.captureBodies.
+    captureBodies: false
+
+  # Agent audit feed from the traffic log: a second, separate feed beside
+  # audit (OTel), for comparing the two. The traffic log's "http" sink POSTs its
+  # lines (NDJSON) to Agent Manager's traffic-log ingest, authenticating with
+  # this gateway's registration token. Memory-queued and best effort, like audit.
+  trafficAudit:
+    enabled: false
+    # Full URL of the ingest. Empty derives it from controlPlane:
+    # <scheme>://<controlPlane.host>/api/internal/v1/audit/traffic-events.
+    endpoint: ""
+    # The traffic log has no LLM or MCP fields of its own: Agent Manager reads
+    # the model, token usage and MCP method/tool from the bodies, so this feed
+    # shows them only with captureBodies on. Bodies are then captured for every
+    # consumer of the gateway's collector: they also reach the OTel publisher
+    # (when audit is on) and the local traffic log file (when trafficLog is on).
+    captureBodies: false
+    # Bytes of each body kept in a traffic-log line. A streamed completion
+    # reports its token usage at the end, so a body longer than this loses it.
+    # Not unlimited: one oversized line would push its whole batch past Agent
+    # Manager's batch limit, and a refused batch is dropped by the gateway.
+    maxPayloadSize: 262144
+    queueCapacity: 10000
+    batchMaxEvents: 100
+    # Must stay below Agent Manager's AUDIT_TRAFFIC_INGEST_MAX_BODY_BYTES (8 MiB).
+    batchMaxBytes: 4194304
+    flushInterval: "5s"
 
   # Local traffic log: one JSON line per request written to a file inside the
   # gateway-runtime pod, for an operator to read directly

@@ -253,6 +253,12 @@ func Agent(name string) Option {
 	return func(e *Event) { e.AgentName = name }
 }
 
+// ProducedBy names the pipeline a relayed record came through — one of the
+// OpenChoreoProducerGateway* feeds — so the trail can be read one feed at a time.
+func ProducedBy(producer string) Option {
+	return func(e *Event) { e.Producer = producer }
+}
+
 // OccurredAt overrides the event time. For records of something observed
 // elsewhere — a request a gateway handled — the time is when it happened
 // there, not when this service learned of it.
