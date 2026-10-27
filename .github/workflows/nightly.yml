@@ -35,8 +35,9 @@ on:
         type: string
       e2e_runner_type:
         description: >-
-          "self-hosted" installs the tools on the VM, cleans it before and
-          after, and checks its size (needs 8 vCPU / 16 GiB / 60 GiB free).
+          "self-hosted" installs nothing (the tools must already be on the
+          VM), cleans it before and after, and checks its size (needs
+          8 vCPU / 13 GiB / 60 GiB free).
           Choose "github-hosted" together with e2e_runner=ubuntu-24.04.
         required: false
         default: self-hosted
@@ -236,27 +237,13 @@ jobs:
       # DEFAULT RUNNER (schedule): empty input means self-hosted.
       SELF_HOSTED: ${{ (inputs.e2e_runner_type || 'self-hosted') == 'self-hosted' }}
     steps:
-      # --- self-hosted runner only (skipped on GitHub-hosted) ----------------
-      # git must exist before checkout; without it checkout downloads a
-      # tarball with no .git and the test reporter fails at the very end.
-      - name: Bootstrap git (self-hosted)
-        if: env.SELF_HOSTED == 'true'
-        run: |
-          command -v git >/dev/null && { git --version; exit 0; }
-          sudo -n true 2>/dev/null || { echo "::error::git is not installed and this runner has no passwordless sudo. Install git once on the VM."; exit 1; }
-          sudo -n DEBIAN_FRONTEND=noninteractive apt-get update -qq
-          sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git
-          echo "✅ Installed $(git --version)"
-
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # Installs docker/k3d/yq/kubectl/helm if missing (same versions as the
-      # hosted path) and raises the kernel limits OpenSearch needs.
-      - name: Install tools (self-hosted)
-        if: env.SELF_HOSTED == 'true'
-        uses: ./.github/actions/setup-self-hosted-tools
-        with:
-          tools: docker,k3d,yq,kubectl,helm,sysctl
+      # --- self-hosted runner only (skipped on GitHub-hosted) ----------------
+      # Nothing is installed on the self-hosted VM. It must already have, on
+      # the runner user's PATH: git, docker (usable without sudo), k3d, yq,
+      # kubectl and helm, plus the kernel limits OpenSearch needs
+      # (vm.max_map_count >= 262144). Check with nightly-vm-check.sh.
 
       # Remove yesterday's cluster, otherwise install.sh would reuse it.
       - name: Clean leftover state from a previous run (self-hosted)
@@ -297,7 +284,7 @@ jobs:
         uses: ./.github/actions/preflight-k3d
         with:
           min-cpus: ${{ env.SELF_HOSTED == 'true' && '8' || '4' }}
-          min-memory-gb: '16'
+          min-memory-gb: '13'
           min-disk-gb: '60'
           enforce-capacity: ${{ env.SELF_HOSTED }}
 
