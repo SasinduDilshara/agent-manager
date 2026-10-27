@@ -1,17 +1,23 @@
 name: Nightly Dev Build
 
-run-name: Nightly Dev Build #${{ github.run_number }}
+run-name: Nightly Dev Build #${{ github.run_number }}${{ inputs.dry_run && ' (dry run)' || '' }}
 
 # Job order:
 #
-#   compute-version ─┬─> build-images ─> package-charts ─> e2e ─┬─> publish-dev-tag    (only if e2e passed)
-#   load-config ─────┘                                          ├─> cleanup-images     (only if e2e passed)
-#                                                               └─> notify-google-chat (always)
+#   compute-version ─┬─> build-images ─> package-charts ─> e2e ─┬─> publish-dev-tag    (only if e2e passed; never on a dry run)
+#   load-config ─────┘                                          ├─> cleanup-images     (only if e2e passed; always on a dry run)
+#                                                               └─> notify-google-chat (always; never on a dry run)
 #
 # Old images and the git tag are cleaned up / moved only AFTER e2e passes.
 # Before, they were removed before the build; when the build then failed
 # (run #108) the registry had no nightly images and the tag pointed at a
 # broken commit. Now a red night keeps yesterday's good images and tag.
+#
+# Dry run (manual runs only, ticked by default): images and charts are pushed
+# under a throwaway 0.0.0-dryrun-<date>-<run id> version, e2e runs against
+# them, and cleanup-images then deletes exactly that version, pass or fail.
+# No git tag is deleted or created, no real nightly image is touched, and no
+# Chat message is posted. Scheduled runs are never dry runs.
 #
 # Build, package, cleanup and notify always run on GitHub-hosted runners.
 # Only the e2e job runs on the dedicated self-hosted VM (runner label
@@ -22,6 +28,13 @@ on:
     - cron: '0 0 * * *' # midnight UTC
   workflow_dispatch:
     inputs:
+      dry_run:
+        description: >-
+          Dry run: test only. Pushes throwaway images/charts, runs E2E, then
+          deletes them. No git tag, no nightly image cleanup, no Chat message.
+        required: false
+        default: true
+        type: boolean
       ginkgo_procs:
         description: >-
           How many test suites run at the same time.
@@ -44,19 +57,31 @@ env:
 
 jobs:
   # Compute the dated version string once; all jobs consume it via needs.
+  # A dry run gets its own version so its cleanup can never delete the real
+  # nightly's images (which share today's 0.0.0-dev-<date> tag).
   compute-version:
     name: Compute Version
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       dev-version: ${{ steps.version.outputs.dev-version }}
+      dry-run: ${{ steps.version.outputs.dry-run }}
     steps:
       - name: Compute dev version
         id: version
+        env:
+          # Inputs are empty on a schedule, so scheduled runs are never dry runs.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: |
-          DEV_VERSION="0.0.0-dev-$(date -u +%Y%m%d)"
+          if [ "$DRY_RUN" = "true" ]; then
+            DEV_VERSION="0.0.0-dryrun-$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
+          else
+            DRY_RUN=false
+            DEV_VERSION="0.0.0-dev-$(date -u +%Y%m%d)"
+          fi
           echo "dev-version=$DEV_VERSION" >> "$GITHUB_OUTPUT"
-          echo "✅ Dev version: $DEV_VERSION"
+          echo "dry-run=$DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "✅ Dev version: $DEV_VERSION (dry run: $DRY_RUN)"
 
   # Load release-config.json and emit job matrices (mirrors release.yml pattern).
   load-config:
@@ -454,10 +479,11 @@ jobs:
 
   # Only after e2e passed: delete the older amp/v0.0.0-dev-* tags and tag
   # today's commit. So the tag always points at a fully green commit.
+  # Never on a dry run.
   publish-dev-tag:
     name: Publish Nightly Git Tag
     needs: [compute-version, e2e]
-    if: ${{ needs.e2e.result == 'success' }}
+    if: ${{ needs.e2e.result == 'success' && needs.compute-version.outputs.dry-run != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -504,14 +530,21 @@ jobs:
           git push origin "$TAG"
           echo "✅ Created tag $TAG at ${COMMIT_SHA:0:7}"
 
-  # Only after e2e passed: delete older 0.0.0-dev-* image tags, never today's.
+  # Real run: only after e2e passed, delete older 0.0.0-dev-* image tags,
+  # never today's.
+  # Dry run: always (also after a failure or cancel), delete exactly this
+  # run's 0.0.0-dryrun-* images and charts. Real nightly tags are untouched.
   # Housekeeping only; it can never fail the nightly.
   cleanup-images:
-    name: Cleanup Previous Nightly Images
+    name: Cleanup Nightly Images
     needs: [compute-version, e2e]
     # Talks to the GHCR packages API directly, so it only applies when the
     # registry is GHCR. A build publishing elsewhere has nothing to clean here.
-    if: ${{ needs.e2e.result == 'success' && (vars.AMP_REGISTRY == '' || vars.AMP_REGISTRY == 'ghcr.io') }}
+    if: >-
+      ${{ (vars.AMP_REGISTRY == '' || vars.AMP_REGISTRY == 'ghcr.io') && (
+        (always() && needs.compute-version.outputs.dry-run == 'true') ||
+        (needs.e2e.result == 'success' && needs.compute-version.outputs.dry-run != 'true')
+      ) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     continue-on-error: true
@@ -556,25 +589,26 @@ jobs:
             exit 1
           fi
 
-      # Today's tag is kept (exclude-tags), so GHCR's "cannot delete the last
-      # tagged version" error cannot happen.
-      - name: Delete previous 0.0.0-dev-* tags for ${{ matrix.package }}
+      # Real run: today's tag is kept (exclude-tags), so GHCR's "cannot
+      # delete the last tagged version" error cannot happen. Dry run: only
+      # this run's version is deleted; the real nightly tags remain.
+      - name: Delete nightly tags for ${{ matrix.package }}
         if: steps.check-package.outputs.exists == 'true'
         uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           owner: ${{ env.REGISTRY_ORG }}
           package: ${{ matrix.package }}
-          delete-tags: '0.0.0-dev-*'
-          exclude-tags: ${{ needs.compute-version.outputs.dev-version }}
+          delete-tags: ${{ needs.compute-version.outputs.dry-run == 'true' && needs.compute-version.outputs.dev-version || '0.0.0-dev-*' }}
+          exclude-tags: ${{ needs.compute-version.outputs.dry-run != 'true' && needs.compute-version.outputs.dev-version || '' }}
           delete-untagged: false
 
   # Posts after every run: 🔴 with the earliest failed stage, 🟢 one-liner
-  # otherwise. Quiet only on a manual cancel.
+  # otherwise. Quiet on a manual cancel and on a dry run.
   notify-google-chat:
     name: Notify Google Chat
     needs: [compute-version, load-config, build-images, package-charts, e2e, publish-dev-tag]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.compute-version.outputs.dry-run != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
