@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # Custom label of the dedicated VM that runs the nightly E2E job.
+  labels:
+    - amp-nightly-e2e

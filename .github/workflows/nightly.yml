@@ -14,41 +14,17 @@ run-name: Nightly Dev Build #${{ github.run_number }}
 # broken commit. Now a red night keeps yesterday's good images and tag.
 #
 # Build, package, cleanup and notify always run on GitHub-hosted runners.
-# Only the e2e job runs on the self-hosted VM (default) or, via the inputs
-# below, on a GitHub-hosted runner.
+# Only the e2e job runs on the dedicated self-hosted VM (runner label
+# `amp-nightly-e2e`), on every run.
 
 on:
-  # Scheduled runs use the defaults below (inputs are empty on a schedule):
-  # the E2E job goes to the self-hosted VM. To move it back to GitHub-hosted,
-  # change the two `default:` values here and the two fallbacks marked
-  # "DEFAULT RUNNER" in the e2e job.
   schedule:
     - cron: '0 0 * * *' # midnight UTC
   workflow_dispatch:
     inputs:
-      e2e_runner:
-        description: >-
-          Runner label for the E2E job only. Default is the self-hosted VM;
-          use "ubuntu-24.04" to run on a GitHub-hosted runner instead.
-        required: false
-        default: self-hosted
-        type: string
-      e2e_runner_type:
-        description: >-
-          "self-hosted" installs nothing (the tools must already be on the
-          VM), cleans it before and after, and checks its size (needs
-          8 vCPU / 13 GiB / 60 GiB free).
-          Choose "github-hosted" together with e2e_runner=ubuntu-24.04.
-        required: false
-        default: self-hosted
-        type: choice
-        options:
-          - self-hosted
-          - github-hosted
       ginkgo_procs:
         description: >-
-          How many test suites run at the same time. Keep 1 on a 4-vCPU
-          runner; raise only together with a bigger e2e_runner.
+          How many test suites run at the same time.
         required: false
         default: '1'
         type: string
@@ -222,7 +198,11 @@ jobs:
   e2e:
     name: E2E
     needs: [compute-version, package-charts]
-    runs-on: ${{ inputs.e2e_runner || 'self-hosted' }}  # DEFAULT RUNNER (schedule)
+    # Always the dedicated nightly VM. Nothing is installed on it; it must
+    # already have, on the runner user's PATH: git, docker (usable without
+    # sudo), k3d, yq, kubectl and helm, plus the kernel limits OpenSearch
+    # needs (vm.max_map_count >= 262144). Check with nightly-vm-check.sh.
+    runs-on: [self-hosted, amp-nightly-e2e]
     # Each long step below has its own timeout (install 60 + tests 120 +
     # security 60). This job timeout is larger than their sum on purpose: if a
     # step hangs, the step fails and the log-dump/upload steps still run. A job
@@ -233,60 +213,26 @@ jobs:
       checks: write
     outputs:
       summary: ${{ steps.test-summary.outputs.summary }}
-    env:
-      # DEFAULT RUNNER (schedule): empty input means self-hosted.
-      SELF_HOSTED: ${{ (inputs.e2e_runner_type || 'self-hosted') == 'self-hosted' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # --- self-hosted runner only (skipped on GitHub-hosted) ----------------
-      # Nothing is installed on the self-hosted VM. It must already have, on
-      # the runner user's PATH: git, docker (usable without sudo), k3d, yq,
-      # kubectl and helm, plus the kernel limits OpenSearch needs
-      # (vm.max_map_count >= 262144). Check with nightly-vm-check.sh.
-
       # Remove yesterday's cluster, otherwise install.sh would reuse it.
-      - name: Clean leftover state from a previous run (self-hosted)
-        if: env.SELF_HOSTED == 'true'
+      - name: Clean leftover state from a previous run
         uses: ./.github/actions/teardown-self-hosted
 
-      # --- GitHub-hosted runner only -----------------------------------------
-      - name: Install k3d
-        if: env.SELF_HOSTED != 'true'
-        env:
-          K3D_VERSION: v5.8.3
-          K3D_SHA256: dbaa79a76ace7f4ca230a1ff41dc7d8a5036a8ad0309e9c54f9bf3836dbe853e
-        run: |
-          curl -fsSL -o /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
-          echo "${K3D_SHA256}  /tmp/k3d" | sha256sum -c -
-          sudo install /tmp/k3d /usr/local/bin/k3d
-          k3d version
-
-      - name: Install yq
-        if: env.SELF_HOSTED != 'true'
-        env:
-          YQ_VERSION: v4.45.4
-          YQ_SHA256: b96de04645707e14a12f52c37e6266832e03c29e95b9b139cddcae7314466e69
-        run: |
-          curl -fsSL -o /tmp/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
-          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
-          sudo install /tmp/yq /usr/local/bin/yq
-
-      # --- both ----------------------------------------------------------------
       - name: Setup Go
         uses: ./.github/actions/setup-go
 
       # Quick checks before the long install: Docker works for k3d, the k3d
-      # ports are free, and the machine size is printed to the log. On a
-      # self-hosted VM a too-small machine fails here (1 min) instead of after
-      # a 2-hour run.
+      # ports are free, and the machine size is printed to the log. A
+      # too-small machine fails here (1 min) instead of after a 2-hour run.
       - name: Preflight
         uses: ./.github/actions/preflight-k3d
         with:
-          min-cpus: ${{ env.SELF_HOSTED == 'true' && '8' || '4' }}
+          min-cpus: '8'
           min-memory-gb: '13'
           min-disk-gb: '60'
-          enforce-capacity: ${{ env.SELF_HOSTED }}
+          enforce-capacity: 'true'
 
       - name: Install platform
         id: install-platform
@@ -502,8 +448,8 @@ jobs:
           echo "Test summary: $SUMMARY"
 
       # Last step on purpose: the steps above still read the cluster.
-      - name: Teardown (self-hosted)
-        if: ${{ always() && env.SELF_HOSTED == 'true' }}
+      - name: Teardown
+        if: ${{ always() }}
         uses: ./.github/actions/teardown-self-hosted
 
   # Only after e2e passed: delete the older amp/v0.0.0-dev-* tags and tag
