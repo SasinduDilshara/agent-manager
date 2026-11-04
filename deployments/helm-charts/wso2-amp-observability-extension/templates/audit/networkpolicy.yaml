@@ -1,0 +1,29 @@
+{{- if and .Values.audit.enabled .Values.audit.networkPolicy.allowAgentManager }}
+# Lets the Agent Manager API reach OpenSearch for the audit query API. The
+# observability plane otherwise admits only its own namespace. Additive: it
+# opens the one port to the one workload and changes nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: amp-audit-opensearch-from-agent-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "amp-observability-extension.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audit-log-collection
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml .Values.audit.networkPolicy.openSearchPodLabels | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.audit.sources.controlPlane.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.audit.networkPolicy.agentManagerPodLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.audit.networkPolicy.openSearchPort }}
+{{- end }}

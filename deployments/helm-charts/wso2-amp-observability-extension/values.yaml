@@ -132,3 +132,88 @@ networkPolicy:
   otelCollector:
     # No-op on clusters whose CNI doesn't enforce NetworkPolicy.
     enabled: true
+
+# AMP audit log collection. Ships gateway traffic records and Agent Manager
+# control-plane audit records to dedicated amp-audit-* indices through the
+# OpenChoreo logs module's Fluent Bit, and prepares those indices. Needs the
+# observability-logs-opensearch module, with its Fluent Bit switched to this
+# configuration (fluent-bit.existingConfigMap=amp-fluent-bit). See
+# deployments/AUDIT_LOGS.md.
+audit:
+  enabled: true
+  # Indices are <indexPrefix>-YYYY-MM-DD.
+  indexPrefix: amp-audit
+  fluentBit:
+    # ConfigMap name to pass as fluent-bit.existingConfigMap.
+    configMapName: amp-fluent-bit
+    # Where Fluent Bit ships to. Must match the logs module's fluent-bit.openSearch*
+    # values (deployments/values/observability-logs-opensearch.yaml): both the
+    # existing container-logs output and the audit output use them. Releases
+    # that ship straight to the in-namespace service use host "opensearch",
+    # port 9200 and vhost "opensearch".
+    openSearchHost: gateway-default.openchoreo-observability-plane.svc.cluster.local
+    openSearchPort: 11443
+    openSearchVHost: opensearch.observability.openchoreo.localhost
+    # Disk buffer for undelivered audit records (per node); the oldest chunks
+    # are dropped beyond it.
+    storageTotalLimitSize: 2G
+    # Memory the audit emitter may hold before it pauses (it buffers to disk).
+    emitterMemBufLimit: 64M
+    # Memory used to replay the disk backlog after a restart.
+    backlogMemLimit: 32M
+  # Which workloads may produce audit records. A line that looks like one but
+  # comes from anywhere else is not copied.
+  sources:
+    gateway:
+      containerName: gateway-runtime
+      podLabelKey: openchoreo.dev/system-component
+      podLabelValue: gateway-runtime
+    controlPlane:
+      containerName: agent-manager-service
+      # Namespace Agent Manager is installed in.
+      namespace: wso2-amp
+  openSearch:
+    # In-cluster URL the setup Job uses.
+    url: https://opensearch:9200
+    # Admin credentials Secret created by the logs module.
+    adminSecretName: opensearch-admin-credentials
+  retention:
+    # Days an audit index is kept. At least 186 (six calendar months).
+    days: 186
+    # Optional: make indices read-only after this age (e.g. "7d"). Off by
+    # default: Fluent Bit writes a record to the index of the day it collected
+    # it, so after a long store outage its backlog targets older indices, and a
+    # read-only index would refuse it.
+    readOnlyAfter: ""
+  # Read-only OpenSearch identity for the Agent Manager audit query API.
+  reader:
+    # Create the role and user. When false, no user is created and the query
+    # API needs other credentials (see AUDIT_LOGS.md).
+    create: true
+    username: amp_audit_reader
+    # Use this Secret (keys: username, password) instead of generating one.
+    # The quick-start installer creates it in this namespace and in Agent
+    # Manager's, with the same password.
+    existingSecret: ""
+    # Name of the generated Secret when existingSecret is empty.
+    secretName: amp-audit-opensearch-reader
+  networkPolicy:
+    # Admit the Agent Manager API to OpenSearch (the observability plane's own
+    # policy admits only this namespace).
+    allowAgentManager: true
+    openSearchPort: 9200
+    openSearchPodLabels:
+      app.kubernetes.io/name: opensearch
+    agentManagerPodLabels:
+      app.kubernetes.io/component: agent-manager-service
+  setupJob:
+    image: alpine/k8s:1.32.3
+    backoffLimit: 6
+    ttlSecondsAfterFinished: 86400
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi

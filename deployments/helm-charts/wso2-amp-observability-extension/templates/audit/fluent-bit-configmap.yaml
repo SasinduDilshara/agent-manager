@@ -1,0 +1,171 @@
+{{- if .Values.audit.enabled }}
+{{- $fb := .Values.audit.fluentBit }}
+{{- $gw := .Values.audit.sources.gateway }}
+{{- $cp := .Values.audit.sources.controlPlane }}
+# Fluent Bit configuration for the OpenChoreo logs module's DaemonSet, selected
+# with `fluent-bit.existingConfigMap=amp-fluent-bit` on the
+# observability-logs-opensearch release (the installer does this).
+#
+# It is the module's own configuration (templates/fluent-bit/config.yaml,
+# chart 0.5.x) kept verbatim, with additions that copy two kinds of line into
+# the amp-audit-* indices as well:
+#   - API gateway traffic records (gateway-runtime stdout, {"component":"pol",...})
+#   - Agent Manager control-plane audit records (log_type=audit)
+# Every line still goes to container-logs-* exactly as before (keep=true).
+# See deployments/AUDIT_LOGS.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fb.configMapName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "amp-observability-extension.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audit-log-collection
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush         1
+        Daemon        Off
+        Log_Level     info
+        Parsers_File  parsers.conf
+        Plugins_File  plugins.conf
+        HTTP_Server   On
+        HTTP_Listen   0.0.0.0
+        HTTP_Port     2020
+        # AMP audit: a filesystem buffer, on the hostPath the module already
+        # mounts, so audit records survive an OpenSearch outage and a Fluent
+        # Bit restart.
+        storage.path              /var/lib/fluent-bit/db/storage
+        storage.sync              normal
+        storage.backlog.mem_limit {{ $fb.backlogMemLimit }}
+
+    [INPUT]
+        Name tail
+        Buffer_Chunk_Size 32KB
+        Buffer_Max_Size 2MB
+        DB /var/lib/fluent-bit/db/tail-container-logs.db
+        Exclude_Path /var/log/containers/fluent-bit-*.log
+        Inotify_Watcher false
+        Mem_Buf_Limit 100MB
+        Path /var/log/containers/*.log
+        multiline.parser docker, cri
+        Read_from_Head On
+        Refresh_Interval 5
+        Skip_Long_Lines On
+        Tag kube.*
+
+    [FILTER]
+        Name kubernetes
+        Buffer_Size 15MB
+        K8S-Logging.Parser On
+        K8S-Logging.Exclude On
+        Keep_Log On
+        Match kube.*
+        Merge_Log Off
+        tls.verify Off
+        Use_Kubelet true
+
+    # --- AMP audit -----------------------------------------------------------
+    # Copy candidate lines to audit.* tags; keep=true leaves the original on
+    # kube.* for container-logs. The first matching rule wins. Gateway traffic
+    # records start {"component":"pol", (followed by "timestamp" on the stock
+    # gateway and by "eventId" on gateways with audit fields). A rule token must
+    # not start with a double quote: Fluent Bit reads that as a quoted string.
+    [FILTER]
+        Name                  rewrite_tag
+        Match                 kube.*
+        Rule                  $log ^\{"component":"pol", audit.gw true
+        Rule                  $log msg":"audit","log_type":"audit" audit.amp true
+        Emitter_Name          amp_audit_emitter
+        Emitter_Storage.type  filesystem
+        Emitter_Mem_Buf_Limit {{ $fb.emitterMemBufLimit }}
+
+    # Only the components that write these records may produce them: any pod
+    # can print a line that looks like one.
+    [FILTER]
+        Name       grep
+        Match      audit.gw
+        Logical_Op and
+        Regex      $kubernetes['container_name'] ^{{ $gw.containerName }}$
+        Regex      $kubernetes['labels']['{{ $gw.podLabelKey }}'] ^{{ $gw.podLabelValue }}$
+
+    [FILTER]
+        Name       grep
+        Match      audit.amp
+        Logical_Op and
+        Regex      $kubernetes['container_name'] ^{{ $cp.containerName }}$
+        Regex      $kubernetes['namespace_name'] ^{{ $cp.namespace }}$
+
+    # Lift the JSON line into the record. On success the raw "log" field is
+    # dropped (Preserve_Key Off); a line that fails to parse keeps it.
+    [FILTER]
+        Name         parser
+        Match        audit.*
+        Key_Name     log
+        Parser       amp_audit_json
+        Reserve_Data On
+
+    # Set, not Add: the source is decided here, never by the line's content.
+    [FILTER]
+        Name  modify
+        Match audit.gw
+        Set   audit_source gateway
+
+    [FILTER]
+        Name  modify
+        Match audit.amp
+        Set   audit_source control-plane
+
+    [OUTPUT]
+        Name opensearch
+        Host {{ $fb.openSearchHost }}
+        Port {{ $fb.openSearchPort }}
+        Generate_ID On
+        HTTP_Passwd ${OPENSEARCH_PASSWORD}
+        HTTP_User ${OPENSEARCH_USERNAME}
+        Logstash_Format On
+        Logstash_DateFormat %Y-%m-%d
+        Logstash_Prefix container-logs
+        Match kube.*
+        Replace_Dots On
+        Suppress_Type_Name On
+        tls On
+        tls.verify Off
+        tls.vhost {{ $fb.openSearchVHost }}
+
+    # AMP audit: retried until delivered, buffered on disk up to
+    # storage.total_limit_size (oldest chunks are dropped beyond it).
+    [OUTPUT]
+        Name opensearch
+        Host {{ $fb.openSearchHost }}
+        Port {{ $fb.openSearchPort }}
+        Generate_ID On
+        HTTP_Passwd ${OPENSEARCH_PASSWORD}
+        HTTP_User ${OPENSEARCH_USERNAME}
+        Logstash_Format On
+        Logstash_DateFormat %Y-%m-%d
+        Logstash_Prefix {{ .Values.audit.indexPrefix }}
+        Match audit.*
+        Replace_Dots On
+        Suppress_Type_Name On
+        Retry_Limit no_limits
+        storage.total_limit_size {{ $fb.storageTotalLimitSize }}
+        Trace_Error On
+        tls On
+        tls.verify Off
+        tls.vhost {{ $fb.openSearchVHost }}
+
+  parsers.conf: |
+    [PARSER]
+        Name docker_no_time
+        Format json
+        Time_Keep Off
+        Time_Key time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L
+
+    # AMP audit: the record's own timestamp stays a field (gateway "timestamp",
+    # control plane "event.occurredAt"); @timestamp is the collection time.
+    [PARSER]
+        Name amp_audit_json
+        Format json
+{{- end }}

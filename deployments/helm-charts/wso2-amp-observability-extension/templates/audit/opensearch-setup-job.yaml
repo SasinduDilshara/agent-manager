@@ -1,0 +1,88 @@
+{{- if .Values.audit.enabled }}
+{{- $job := .Values.audit.setupJob }}
+# Creates the amp-audit index template, the retention policy and (unless
+# audit.reader.create is false) a read-only OpenSearch user for the Agent
+# Manager audit query API. Runs after every install and upgrade; idempotent.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "amp-observability-extension.fullname" . }}-audit-setup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "amp-observability-extension.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audit-log-collection
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ $job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ $job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "amp-observability-extension.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: audit-log-collection
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: audit-setup
+          image: {{ $job.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "/config/setup.sh"]
+          env:
+            - name: OPENSEARCH_URL
+              value: {{ .Values.audit.openSearch.url | quote }}
+            - name: OPENSEARCH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.openSearch.adminSecretName }}
+                  key: username
+            - name: OPENSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.audit.openSearch.adminSecretName }}
+                  key: password
+            {{- if .Values.audit.reader.create }}
+            - name: READER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "amp-observability-extension.auditReaderSecretName" . }}
+                  key: username
+            - name: READER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "amp-observability-extension.auditReaderSecretName" . }}
+                  key: password
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $job.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "amp-observability-extension.fullname" . }}-audit-setup
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+{{- end }}

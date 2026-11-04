@@ -1,0 +1,213 @@
+{{- if .Values.audit.enabled }}
+{{- $days := include "amp-observability-extension.auditRetentionDays" . }}
+{{- $prefix := .Values.audit.indexPrefix }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "amp-observability-extension.fullname" . }}-audit-setup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "amp-observability-extension.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audit-log-collection
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  # Mappings for the fields the audit query API filters, sorts and aggregates
+  # on. Any other string is a keyword (exact match), never analysed text.
+  # Free-form objects are flat_object so their keys cannot grow the mapping
+  # without bound, and a type clash inside them cannot reject a record.
+  index-template.json: |
+    {
+      "index_patterns": [{{ printf "%s-*" $prefix | quote }}],
+      "priority": 200,
+      "template": {
+        "settings": {
+          "index.mapping.ignore_malformed": true,
+          "index.mapping.total_fields.limit": 2000
+        },
+        "mappings": {
+          "date_detection": false,
+          "numeric_detection": false,
+          "dynamic_templates": [
+            {"strings_as_keyword": {"match_mapping_type": "string", "mapping": {"type": "keyword", "ignore_above": 1024}}}
+          ],
+          "properties": {
+            "@timestamp": {"type": "date"},
+            "audit_source": {"type": "keyword"},
+            "log": {"type": "keyword", "ignore_above": 8192},
+            "eventId": {"type": "keyword"},
+            "seq": {"type": "long"},
+            "correlationId": {"type": "keyword"},
+            "status": {"type": "integer"},
+            "errorType": {"type": "keyword"},
+            "error": {"properties": {"errorCode": {"type": "integer"}, "errorMessage": {"type": "keyword"}}},
+            "api": {"properties": {
+              "id": {"type": "keyword"}, "name": {"type": "keyword"}, "kind": {"type": "keyword"},
+              "version": {"type": "keyword"}, "context": {"type": "keyword"}, "projectId": {"type": "keyword"}
+            }},
+            "operation": {"properties": {"method": {"type": "keyword"}, "path": {"type": "keyword", "ignore_above": 2048}}},
+            "gateway": {"properties": {"id": {"type": "keyword"}, "organization": {"type": "keyword"}, "environment": {"type": "keyword"}}},
+            "auth": {"properties": {
+              "subject": {"type": "keyword"}, "type": {"type": "keyword"}, "issuer": {"type": "keyword"},
+              "clientId": {"type": "keyword"}, "tokenId": {"type": "keyword"},
+              "audience": {"type": "keyword"}, "scopes": {"type": "keyword"},
+              "authenticated": {"type": "boolean"}, "authorized": {"type": "boolean"},
+              "claims": {"type": "flat_object"}
+            }},
+            "ai": {"properties": {
+              "provider": {"type": "keyword"}, "providerVersion": {"type": "keyword"},
+              "model": {"type": "keyword"}, "requestModel": {"type": "keyword"},
+              "promptTokens": {"type": "long"}, "completionTokens": {"type": "long"},
+              "totalTokens": {"type": "long"}, "cost": {"type": "double"}
+            }},
+            "mcp": {"properties": {
+              "method": {"type": "keyword"}, "id": {"type": "keyword"}, "capability": {"type": "keyword"},
+              "name": {"type": "keyword"}, "resourceUri": {"type": "keyword"}, "sessionId": {"type": "keyword"},
+              "isError": {"type": "boolean"}, "errorCode": {"type": "keyword"}, "resultType": {"type": "keyword"},
+              "clientInfo": {"type": "flat_object"}, "serverInfo": {"type": "flat_object"}
+            }},
+            "a2a": {"properties": {"operation": {"type": "keyword"}, "requestType": {"type": "keyword"}}},
+            "guardrail": {"properties": {"hit": {"type": "boolean"}, "name": {"type": "keyword"}}},
+            "decision": {"properties": {
+              "terminalReason": {"type": "keyword"},
+              "deniedBy": {"properties": {"policy": {"type": "keyword"}, "version": {"type": "keyword"}, "phase": {"type": "keyword"}}}
+            }},
+            "properties": {"type": "flat_object"},
+            "event": {"properties": {
+              "eventId": {"type": "keyword"}, "schemaVersion": {"type": "integer"},
+              "occurredAt": {"type": "date"}, "durationMs": {"type": "long"},
+              "action": {"type": "keyword"}, "actionClass": {"type": "keyword"}, "severity": {"type": "integer"},
+              "actorType": {"type": "keyword"}, "actorId": {"type": "keyword"}, "actorDisplay": {"type": "keyword"},
+              "actorOuId": {"type": "keyword"}, "authMethod": {"type": "keyword"}, "actorTokenId": {"type": "keyword"},
+              "onBehalfOf": {"type": "keyword"}, "surface": {"type": "keyword"},
+              "sourceIp": {"type": "keyword"}, "userAgent": {"type": "keyword"},
+              "correlationId": {"type": "keyword"}, "requestMethod": {"type": "keyword"}, "requestPath": {"type": "keyword"},
+              "ouId": {"type": "keyword"}, "orgHandle": {"type": "keyword"},
+              "resourceType": {"type": "keyword"}, "resourceId": {"type": "keyword"}, "resourceName": {"type": "keyword"},
+              "projectName": {"type": "keyword"}, "environment": {"type": "keyword"},
+              "outcome": {"type": "keyword"}, "statusCode": {"type": "integer"},
+              "errorCode": {"type": "keyword"}, "errorMessage": {"type": "keyword"},
+              "requiredPermission": {"type": "keyword"},
+              "details": {"type": "flat_object"}
+            }},
+            "kubernetes": {"properties": {
+              "namespace_name": {"type": "keyword"}, "pod_name": {"type": "keyword"},
+              "container_name": {"type": "keyword"}, "host": {"type": "keyword"},
+              "labels": {"type": "flat_object"}, "annotations": {"type": "flat_object"}
+            }}
+          }
+        }
+      }
+    }
+  ism-policy.json: |
+    {
+      "policy": {
+        "description": "AMP audit records: keep {{ $days }} days, then delete.",
+        "default_state": "hot",
+        "states": [
+          {
+            "name": "hot",
+            "actions": [],
+            "transitions": [
+              {{- if .Values.audit.retention.readOnlyAfter }}
+              {"state_name": "read_only", "conditions": {"min_index_age": {{ .Values.audit.retention.readOnlyAfter | quote }}}}
+              {{- else }}
+              {"state_name": "delete", "conditions": {"min_index_age": "{{ $days }}d"}}
+              {{- end }}
+            ]
+          },
+          {{- if .Values.audit.retention.readOnlyAfter }}
+          {
+            "name": "read_only",
+            "actions": [{"read_only": {}}],
+            "transitions": [{"state_name": "delete", "conditions": {"min_index_age": "{{ $days }}d"}}]
+          },
+          {{- end }}
+          {
+            "name": "delete",
+            "actions": [{"retry": {"count": 3, "backoff": "exponential", "delay": "1m"}, "delete": {}}],
+            "transitions": []
+          }
+        ],
+        "ism_template": [{"index_patterns": [{{ printf "%s-*" $prefix | quote }}], "priority": 200}]
+      }
+    }
+  reader-role.json: |
+    {
+      "description": "Read-only access to the AMP audit indices, for the Agent Manager audit query API.",
+      "cluster_permissions": ["cluster_composite_ops_ro"],
+      "index_permissions": [
+        {"index_patterns": [{{ printf "%s-*" $prefix | quote }}], "allowed_actions": ["read", "search"]}
+      ]
+    }
+  reader-rolesmapping.json: |
+    {"users": [{{ .Values.audit.reader.username | quote }}]}
+  setup.sh: |
+    #!/bin/sh
+    # Idempotent: every step is a PUT of the desired state, so re-running it on
+    # upgrade converges the cluster to the chart's values.
+    set -eu
+
+    OS="${OPENSEARCH_URL%/}"
+    POLICY="amp-audit-retention"
+    PATTERN={{ printf "%s-*" $prefix | quote }}
+    AUTH=$(printf '%s:%s' "$OPENSEARCH_USERNAME" "$OPENSEARCH_PASSWORD" | base64 | tr -d '\n')
+    # The bundled OpenSearch serves a self-signed certificate (as for Fluent Bit).
+    oscurl() { curl -sS -k --connect-timeout 10 --max-time 60 -H "Authorization: Basic $AUTH" "$@"; }
+
+    # call <method> <path> [body-file] -> prints the body, fails on HTTP >= 400
+    call() {
+      method="$1"; path="$2"; body="${3:-}"
+      if [ -n "$body" ]; then
+        code=$(oscurl -o /tmp/resp -w '%{http_code}' -X "$method" -H 'Content-Type: application/json' \
+          --data-binary "@$body" "$OS$path")
+      else
+        code=$(oscurl -o /tmp/resp -w '%{http_code}' -X "$method" "$OS$path")
+      fi
+      if [ "$code" -ge 400 ]; then
+        echo "$method $path -> HTTP $code: $(head -c 2000 /tmp/resp)" >&2
+        return 1
+      fi
+      cat /tmp/resp
+    }
+
+    echo "Waiting for OpenSearch at $OS ..."
+    i=0
+    until oscurl -o /dev/null -f "$OS/_cluster/health?wait_for_status=yellow&timeout=5s" 2>/dev/null; do
+      i=$((i + 1))
+      if [ "$i" -ge 60 ]; then echo "OpenSearch did not become ready" >&2; exit 1; fi
+      sleep 5
+    done
+
+    echo "Index template amp-audit"
+    call PUT /_index_template/amp-audit /config/index-template.json >/dev/null
+
+    echo "ISM policy $POLICY"
+    if oscurl -o /tmp/policy -f "$OS/_plugins/_ism/policies/$POLICY" 2>/dev/null; then
+      seq=$(jq -r '._seq_no' /tmp/policy)
+      term=$(jq -r '._primary_term' /tmp/policy)
+      call PUT "/_plugins/_ism/policies/$POLICY?if_seq_no=$seq&if_primary_term=$term" /config/ism-policy.json >/dev/null
+    else
+      call PUT "/_plugins/_ism/policies/$POLICY" /config/ism-policy.json >/dev/null
+    fi
+    # Indices created before the policy existed (or under an older version of
+    # it) are attached / moved to the current version. Both are no-ops when
+    # there is nothing to change.
+    printf '{"policy_id":"%s"}' "$POLICY" > /tmp/add.json
+    call POST "/_plugins/_ism/add/$PATTERN" /tmp/add.json >/dev/null || true
+    call POST "/_plugins/_ism/change_policy/$PATTERN" /tmp/add.json >/dev/null || true
+
+    {{- if .Values.audit.reader.create }}
+    echo "Read-only role and user {{ .Values.audit.reader.username }}"
+    call PUT /_plugins/_security/api/roles/amp_audit_reader /config/reader-role.json >/dev/null
+    jq -n --arg p "$READER_PASSWORD" \
+      '{password: $p, backend_roles: [], description: "Agent Manager audit query API (read-only)"}' > /tmp/user.json
+    call PUT "/_plugins/_security/api/internalusers/${READER_USERNAME}" /tmp/user.json >/dev/null
+    rm -f /tmp/user.json
+    call PUT /_plugins/_security/api/rolesmapping/amp_audit_reader /config/reader-rolesmapping.json >/dev/null
+    {{- end }}
+
+    echo "AMP audit indices are set up."
+{{- end }}

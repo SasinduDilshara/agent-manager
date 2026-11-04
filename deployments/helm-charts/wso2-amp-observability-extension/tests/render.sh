@@ -155,6 +155,56 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+# --- AMP audit log collection ----------------------------------------------------
+# check <label> <expect: yes|no> <pattern> [helm --set args...]: whether the
+# rendered chart contains a fixed string. A render failure is a FAIL, not "no".
+check() {
+  local label="$1" expect="$2" pattern="$3" rendered got=no
+  shift 3
+  if ! rendered="$(helm template test-release "$CHART_DIR" -n openchoreo-observability-plane "$@" 2>&1)"; then
+    printf 'FAIL - %s: helm template failed: %s\n' "$label" "$rendered"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+  grep -qF -- "$pattern" <<<"$rendered" && got=yes
+  if [[ "$got" == "$expect" ]]; then
+    printf 'ok   - %s\n' "$label"
+  else
+    printf 'FAIL - %s (expected %s to be %s)\n' "$label" "$pattern" "$expect"
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+check "the amp-fluent-bit ConfigMap is rendered by default" yes "name: amp-fluent-bit"
+check "container logs keep their upstream output" yes "Logstash_Prefix container-logs"
+check "audit records go to amp-audit indices" yes "Logstash_Prefix amp-audit"
+check "audit delivery is retried until it succeeds" yes "Retry_Limit no_limits"
+check "audit records are buffered on disk" yes "storage.path              /var/lib/fluent-bit/db/storage"
+check "the rewrite keeps the original line" yes 'Rule                  $log ^\{"component":"pol", audit.gw true'
+# Fluent Bit reads a rule token that starts with a double quote as a quoted
+# string, which silently breaks the match; the AMS rule must not start with one.
+check "the control-plane rule does not start with a quote" yes 'Rule                  $log msg":"audit","log_type":"audit" audit.amp true'
+check "gateway records must come from the gateway runtime" yes "Regex      \$kubernetes['labels']['openchoreo.dev/system-component'] ^gateway-runtime\$"
+check "control-plane records must come from the Agent Manager namespace" yes "Regex      \$kubernetes['namespace_name'] ^wso2-amp\$"
+check "the source is set, not added" yes "Set   audit_source control-plane"
+check "the Agent Manager namespace is configurable" yes "Regex      \$kubernetes['namespace_name'] ^amp-prod\$" \
+  --set audit.sources.controlPlane.namespace=amp-prod
+check "retention defaults to 186 days" yes '"min_index_age": "186d"'
+check "a reader Secret is generated when none is given" yes "name: amp-audit-opensearch-reader"
+check "an existing reader Secret is used, not generated" no "templates/audit/reader-secret.yaml" \
+  --set audit.reader.existingSecret=amp-audit-opensearch-reader
+check "the setup Job is a post-install/upgrade hook" yes "helm.sh/hook: post-install,post-upgrade"
+check "Agent Manager may reach OpenSearch" yes "name: amp-audit-opensearch-from-agent-manager"
+for name in amp-fluent-bit audit-setup amp-audit-opensearch; do
+  check "audit.enabled=false renders no $name" no "$name" --set audit.enabled=false
+done
+if helm template test-release "$CHART_DIR" --set audit.retention.days=90 >/dev/null 2>&1; then
+  printf 'FAIL - retention under 186 days rendered\n'
+  FAILURES=$((FAILURES + 1))
+else
+  printf 'ok   - retention under 186 days is refused\n'
+fi
+
 if ((FAILURES > 0)); then
   printf '\n%d assertion(s) failed\n' "$FAILURES"
   exit 1

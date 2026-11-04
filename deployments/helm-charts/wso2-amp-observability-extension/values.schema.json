@@ -277,6 +277,294 @@
       "title": "amObserver",
       "type": "object"
     },
+    "audit": {
+      "additionalProperties": false,
+      "description": "AMP audit log collection: copies gateway traffic records and Agent Manager control-plane audit records into amp-audit-* indices through the logs module Fluent Bit. See deployments/AUDIT_LOGS.md.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Render the audit ConfigMap, setup Job and related resources.",
+          "title": "enabled",
+          "type": "boolean"
+        },
+        "indexPrefix": {
+          "default": "amp-audit",
+          "description": "Audit indices are <indexPrefix>-YYYY-MM-DD.",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "indexPrefix",
+          "type": "string"
+        },
+        "fluentBit": {
+          "additionalProperties": false,
+          "description": "Fluent Bit configuration (ConfigMap passed as fluent-bit.existingConfigMap).",
+          "properties": {
+            "configMapName": {
+              "default": "amp-fluent-bit",
+              "description": "ConfigMap name.",
+              "minLength": 1,
+              "title": "configMapName",
+              "type": "string"
+            },
+            "openSearchHost": {
+              "default": "gateway-default.openchoreo-observability-plane.svc.cluster.local",
+              "description": "OpenSearch host Fluent Bit ships to; must match the logs module fluent-bit.openSearchHost.",
+              "minLength": 1,
+              "title": "openSearchHost",
+              "type": "string"
+            },
+            "openSearchPort": {
+              "default": 11443,
+              "description": "OpenSearch port; must match fluent-bit.openSearchPort.",
+              "minimum": 1,
+              "maximum": 65535,
+              "title": "openSearchPort",
+              "type": "integer"
+            },
+            "openSearchVHost": {
+              "default": "opensearch.observability.openchoreo.localhost",
+              "description": "TLS SNI host; must match fluent-bit.openSearchVHost.",
+              "minLength": 1,
+              "title": "openSearchVHost",
+              "type": "string"
+            },
+            "storageTotalLimitSize": {
+              "default": "2G",
+              "description": "Disk buffer for undelivered audit records per node.",
+              "pattern": "^[0-9]+[KMG]?$",
+              "title": "storageTotalLimitSize",
+              "type": "string"
+            },
+            "emitterMemBufLimit": {
+              "default": "64M",
+              "description": "Memory the audit emitter may hold.",
+              "pattern": "^[0-9]+[KMG]?$",
+              "title": "emitterMemBufLimit",
+              "type": "string"
+            },
+            "backlogMemLimit": {
+              "default": "32M",
+              "description": "Memory used to replay the disk backlog.",
+              "pattern": "^[0-9]+[KMG]?$",
+              "title": "backlogMemLimit",
+              "type": "string"
+            }
+          },
+          "title": "fluentBit",
+          "type": "object"
+        },
+        "sources": {
+          "additionalProperties": false,
+          "description": "Workloads allowed to produce audit records.",
+          "properties": {
+            "gateway": {
+              "additionalProperties": false,
+              "description": "API gateway runtime.",
+              "properties": {
+                "containerName": {
+                  "default": "gateway-runtime",
+                  "description": "Container name.",
+                  "minLength": 1,
+                  "title": "containerName",
+                  "type": "string"
+                },
+                "podLabelKey": {
+                  "default": "openchoreo.dev/system-component",
+                  "description": "Pod label key the gateway runtime carries.",
+                  "minLength": 1,
+                  "title": "podLabelKey",
+                  "type": "string"
+                },
+                "podLabelValue": {
+                  "default": "gateway-runtime",
+                  "description": "Value of that label.",
+                  "minLength": 1,
+                  "title": "podLabelValue",
+                  "type": "string"
+                }
+              },
+              "title": "gateway",
+              "type": "object"
+            },
+            "controlPlane": {
+              "additionalProperties": false,
+              "description": "Agent Manager API.",
+              "properties": {
+                "containerName": {
+                  "default": "agent-manager-service",
+                  "description": "Container name.",
+                  "minLength": 1,
+                  "title": "containerName",
+                  "type": "string"
+                },
+                "namespace": {
+                  "default": "wso2-amp",
+                  "description": "Namespace Agent Manager is installed in.",
+                  "minLength": 1,
+                  "title": "namespace",
+                  "type": "string"
+                }
+              },
+              "title": "controlPlane",
+              "type": "object"
+            }
+          },
+          "title": "sources",
+          "type": "object"
+        },
+        "openSearch": {
+          "additionalProperties": false,
+          "description": "OpenSearch access for the setup Job.",
+          "properties": {
+            "url": {
+              "default": "https://opensearch:9200",
+              "description": "In-cluster OpenSearch URL.",
+              "pattern": "^https?://",
+              "title": "url",
+              "type": "string"
+            },
+            "adminSecretName": {
+              "default": "opensearch-admin-credentials",
+              "description": "Admin credentials Secret (keys username, password).",
+              "minLength": 1,
+              "title": "adminSecretName",
+              "type": "string"
+            }
+          },
+          "title": "openSearch",
+          "type": "object"
+        },
+        "retention": {
+          "additionalProperties": false,
+          "description": "Retention of the audit indices.",
+          "properties": {
+            "days": {
+              "default": 186,
+              "description": "Days an audit index is kept; at least 186 (six calendar months).",
+              "minimum": 186,
+              "title": "days",
+              "type": "integer"
+            },
+            "readOnlyAfter": {
+              "default": "",
+              "description": "Optional age after which an index is made read-only, e.g. 7d. Empty disables.",
+              "pattern": "^([0-9]+[dh])?$",
+              "title": "readOnlyAfter",
+              "type": "string"
+            }
+          },
+          "title": "retention",
+          "type": "object"
+        },
+        "reader": {
+          "additionalProperties": false,
+          "description": "Read-only OpenSearch identity for the Agent Manager audit query API.",
+          "properties": {
+            "create": {
+              "default": true,
+              "description": "Create the amp_audit_reader role and user.",
+              "title": "create",
+              "type": "boolean"
+            },
+            "username": {
+              "default": "amp_audit_reader",
+              "description": "OpenSearch username.",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "username",
+              "type": "string"
+            },
+            "existingSecret": {
+              "default": "",
+              "description": "Secret (keys username, password) to use instead of generating one.",
+              "title": "existingSecret",
+              "type": "string"
+            },
+            "secretName": {
+              "default": "amp-audit-opensearch-reader",
+              "description": "Name of the generated Secret.",
+              "minLength": 1,
+              "title": "secretName",
+              "type": "string"
+            }
+          },
+          "title": "reader",
+          "type": "object"
+        },
+        "networkPolicy": {
+          "additionalProperties": false,
+          "description": "Admit the Agent Manager API to OpenSearch.",
+          "properties": {
+            "allowAgentManager": {
+              "default": true,
+              "description": "Render the NetworkPolicy.",
+              "title": "allowAgentManager",
+              "type": "boolean"
+            },
+            "openSearchPort": {
+              "default": 9200,
+              "description": "OpenSearch HTTP port.",
+              "minimum": 1,
+              "maximum": 65535,
+              "title": "openSearchPort",
+              "type": "integer"
+            },
+            "openSearchPodLabels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object",
+              "title": "openSearchPodLabels",
+              "description": "Labels selecting the OpenSearch pods."
+            },
+            "agentManagerPodLabels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object",
+              "title": "agentManagerPodLabels",
+              "description": "Labels selecting the Agent Manager API pods."
+            }
+          },
+          "title": "networkPolicy",
+          "type": "object"
+        },
+        "setupJob": {
+          "additionalProperties": false,
+          "description": "OpenSearch setup Job.",
+          "properties": {
+            "image": {
+              "default": "alpine/k8s:1.32.3",
+              "description": "Image with sh, curl and jq.",
+              "minLength": 1,
+              "title": "image",
+              "type": "string"
+            },
+            "backoffLimit": {
+              "default": 6,
+              "description": "Job retries.",
+              "minimum": 0,
+              "title": "backoffLimit",
+              "type": "integer"
+            },
+            "ttlSecondsAfterFinished": {
+              "default": 86400,
+              "description": "Seconds a finished Job is kept.",
+              "minimum": 0,
+              "title": "ttlSecondsAfterFinished",
+              "type": "integer"
+            },
+            "resources": {
+              "description": "Container resources.",
+              "title": "resources",
+              "type": "object"
+            }
+          },
+          "title": "setupJob",
+          "type": "object"
+        }
+      },
+      "title": "audit",
+      "type": "object"
+    },
     "global": {
       "additionalProperties": false,
       "description": "Values shared with the other AMP charts",
