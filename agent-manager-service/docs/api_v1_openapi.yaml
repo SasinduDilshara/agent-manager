@@ -11848,6 +11848,173 @@ paths:
         "404":
           description: Environment not found
 
+  /orgs/{orgName}/audit/events:
+    parameters:
+      - name: orgName
+        in: path
+        required: true
+        description: Organization name/handle. Routing only; the organization is taken from the caller's token.
+        schema:
+          type: string
+          pattern: "^[a-z0-9-]+$"
+          minLength: 1
+          maxLength: 64
+    get:
+      tags:
+        - Audit
+      summary: Query the organization's audit trail
+      description: |
+        Returns gateway traffic records and control-plane audit records for the caller's
+        organization, normalised to one shape, newest first by default. Requires
+        `observability:log-read`. Reading the audit trail is itself recorded in the audit trail.
+        The organization is always the caller's own, taken from the token.
+
+        `categoryCounts` is computed over every filter except `category`, so the
+        per-category counts stay meaningful while one category is selected; `total`
+        and `events` honour all filters, including `category`.
+
+        Actor semantics for gateway records: a token carrying an RFC 8693 `act`
+        claim yields the acting party as the actor and
+        `onBehalfOf = {subject: <token sub>, chain: [act.sub, act.act.sub, ...]}`
+        (outermost first, so `chain[0]` is the current actor). API-key callers are
+        reported as actor type `ANONYMOUS` with `authMethod` and `tokenId` (the
+        key's protected fingerprint) set; when the key belongs to an agent, that
+        agent is reported in `agent`.
+      operationId: listAuditEvents
+      parameters:
+        - name: startTime
+          in: query
+          description: Start of the time range (RFC3339). Defaults to 24 hours before endTime.
+          schema:
+            type: string
+            format: date-time
+        - name: endTime
+          in: query
+          description: End of the time range (RFC3339). Defaults to now. The range may not exceed 186 days.
+          schema:
+            type: string
+            format: date-time
+        - name: category
+          in: query
+          description: Event category. Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 5
+            items:
+              $ref: "#/components/schemas/AuditEventCategory"
+        - name: agent
+          in: query
+          description: Agent name, either `project/agent` or `agent` (any project). Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 20
+            items:
+              type: string
+              maxLength: 128
+        - name: project
+          in: query
+          description: Project name.
+          schema:
+            type: string
+            maxLength: 128
+        - name: environment
+          in: query
+          description: Environment name.
+          schema:
+            type: string
+            maxLength: 128
+        - name: outcome
+          in: query
+          description: Outcome. Repeatable.
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 3
+            items:
+              $ref: "#/components/schemas/AuditEventOutcome"
+        - name: actor
+          in: query
+          description: Case-insensitive substring of the actor's subject, actor id or client id.
+          schema:
+            type: string
+            maxLength: 256
+        - name: search
+          in: query
+          description: Case-insensitive free text over action, API name, MCP tool name, model, resource name and denying policy.
+          schema:
+            type: string
+            maxLength: 256
+        - name: limit
+          in: query
+          description: Maximum number of events to return.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: cursor
+          in: query
+          description: Opaque cursor from a previous response's nextCursor.
+          schema:
+            type: string
+            maxLength: 1024
+        - name: sort
+          in: query
+          description: Sort order by timestamp.
+          schema:
+            type: string
+            enum: [desc, asc]
+            default: desc
+      responses:
+        "200":
+          description: Audit events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEventListResponse"
+        "400":
+          description: Bad request - invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized - invalid or missing authentication
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden - the caller lacks observability:log-read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: The audit log store could not be queried
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Audit log query is not enabled on this deployment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -11903,6 +12070,303 @@ components:
         minimum: 1
         maximum: 100
   schemas:
+    AuditEventCategory:
+      type: string
+      description: Event category.
+      enum: [OPERATIONAL, LLM, MCP, A2A, OTHER]
+    AuditEventOutcome:
+      type: string
+      description: Normalised outcome.
+      enum: [SUCCESS, DENIED, FAILED]
+    AuditEventListResponse:
+      type: object
+      required: [events, nextCursor, total, totalRelation, categoryCounts]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+        nextCursor:
+          type: string
+          nullable: true
+          description: Cursor for the next page, or null when there are no more events.
+        total:
+          type: integer
+          format: int64
+          description: Number of events matching the filters (exact when totalRelation is eq, a lower bound when gte).
+        totalRelation:
+          type: string
+          enum: [eq, gte]
+        categoryCounts:
+          $ref: "#/components/schemas/AuditCategoryCounts"
+    AuditCategoryCounts:
+      type: object
+      description: Matching events per category, computed with every filter except category.
+      required: [OPERATIONAL, LLM, MCP, A2A, OTHER]
+      properties:
+        OPERATIONAL:
+          type: integer
+          format: int64
+        LLM:
+          type: integer
+          format: int64
+        MCP:
+          type: integer
+          format: int64
+        A2A:
+          type: integer
+          format: int64
+        OTHER:
+          type: integer
+          format: int64
+    AuditEvent:
+      type: object
+      description: One audit record, normalised to the same shape for gateway and control-plane sources.
+      required:
+        - id
+        - timestamp
+        - source
+        - category
+        - action
+        - outcome
+        - statusCode
+        - summary
+        - actor
+        - onBehalfOf
+        - agent
+        - project
+        - environment
+        - resource
+        - decision
+        - llm
+        - mcp
+        - a2a
+        - guardrail
+        - error
+        - network
+        - correlationId
+        - gateway
+        - raw
+      properties:
+        id:
+          type: string
+          description: The record's event id.
+        timestamp:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum: [GATEWAY, CONTROL_PLANE]
+        category:
+          $ref: "#/components/schemas/AuditEventCategory"
+        action:
+          type: string
+          description: "What happened, e.g. agent:create, llm:chat, mcp:tools/call, a2a:SendMessage, agent:invoke, telemetry:export."
+        outcome:
+          $ref: "#/components/schemas/AuditEventOutcome"
+        statusCode:
+          type: integer
+          format: int32
+          nullable: true
+        summary:
+          type: string
+          description: One-line human-readable description.
+        actor:
+          $ref: "#/components/schemas/AuditActor"
+        onBehalfOf:
+          $ref: "#/components/schemas/AuditOnBehalfOf"
+        agent:
+          $ref: "#/components/schemas/AuditAgentRef"
+        project:
+          type: string
+        environment:
+          type: string
+        resource:
+          $ref: "#/components/schemas/AuditResource"
+        decision:
+          $ref: "#/components/schemas/AuditDecision"
+        llm:
+          $ref: "#/components/schemas/AuditLLM"
+        mcp:
+          $ref: "#/components/schemas/AuditMCP"
+        a2a:
+          $ref: "#/components/schemas/AuditA2A"
+        guardrail:
+          $ref: "#/components/schemas/AuditGuardrail"
+        error:
+          $ref: "#/components/schemas/AuditError"
+        network:
+          $ref: "#/components/schemas/AuditNetwork"
+        correlationId:
+          type: string
+        gateway:
+          $ref: "#/components/schemas/AuditGateway"
+        raw:
+          type: object
+          additionalProperties: true
+          description: The stored document as indexed.
+    AuditActor:
+      type: object
+      required: [type, id, display, authMethod, clientId, tokenId]
+      properties:
+        type:
+          type: string
+          enum: [USER, AGENT, SERVICE, GATEWAY, SYSTEM, ANONYMOUS]
+        id:
+          type: string
+        display:
+          type: string
+        authMethod:
+          type: string
+        clientId:
+          type: string
+        tokenId:
+          type: string
+    AuditOnBehalfOf:
+      type: object
+      nullable: true
+      required: [subject, chain]
+      properties:
+        subject:
+          type: string
+        chain:
+          type: array
+          description: Acting party ids from the delegation (act) claim, outermost first.
+          items:
+            type: string
+    AuditAgentRef:
+      type: object
+      nullable: true
+      required: [name, project, uuid]
+      properties:
+        name:
+          type: string
+        project:
+          type: string
+        uuid:
+          type: string
+          description: The agent's id when known, otherwise empty.
+    AuditResource:
+      type: object
+      required: [type, name, id]
+      properties:
+        type:
+          type: string
+        name:
+          type: string
+        id:
+          type: string
+    AuditDecision:
+      type: object
+      nullable: true
+      required: [terminalReason, deniedBy]
+      properties:
+        terminalReason:
+          type: string
+        deniedBy:
+          $ref: "#/components/schemas/AuditDeniedBy"
+    AuditDeniedBy:
+      type: object
+      nullable: true
+      required: [policy, version, phase]
+      properties:
+        policy:
+          type: string
+        version:
+          type: string
+        phase:
+          type: string
+    AuditLLM:
+      type: object
+      nullable: true
+      required: [provider, requestModel, model, promptTokens, completionTokens, totalTokens, cost]
+      properties:
+        provider:
+          type: string
+        requestModel:
+          type: string
+        model:
+          type: string
+        promptTokens:
+          type: integer
+          format: int64
+        completionTokens:
+          type: integer
+          format: int64
+        totalTokens:
+          type: integer
+          format: int64
+        cost:
+          type: number
+          format: double
+          nullable: true
+    AuditMCP:
+      type: object
+      nullable: true
+      required: [server, method, tool, sessionId, jsonRpcId, isError]
+      properties:
+        server:
+          type: string
+        method:
+          type: string
+        tool:
+          type: string
+        sessionId:
+          type: string
+        jsonRpcId:
+          type: string
+        isError:
+          type: boolean
+    AuditA2A:
+      type: object
+      nullable: true
+      description: The A2A block as logged by the gateway.
+      properties:
+        requestType:
+          type: string
+        operation:
+          type: string
+      additionalProperties: true
+    AuditGuardrail:
+      type: object
+      nullable: true
+      required: [hit, name]
+      properties:
+        hit:
+          type: boolean
+        name:
+          type: string
+    AuditError:
+      type: object
+      nullable: true
+      required: [type, code, message]
+      properties:
+        type:
+          type: string
+        code:
+          type: integer
+          format: int32
+        message:
+          type: string
+    AuditNetwork:
+      type: object
+      required: [clientIp, userAgent]
+      properties:
+        clientIp:
+          type: string
+        userAgent:
+          type: string
+    AuditGateway:
+      type: object
+      nullable: true
+      required: [id, organization, environment]
+      properties:
+        id:
+          type: string
+        organization:
+          type: string
+        environment:
+          type: string
     MCPProxyScopeRequest:
       type: object
       required: [action]
