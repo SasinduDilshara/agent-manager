@@ -179,6 +179,11 @@ export type FeatureFlags = {
    * section on the agent overview.
    */
   enableAgentIdentity?: boolean;
+  /**
+   * Shows the organization Audit Logs page and its navigation entry. Off by
+   * default until the audit query API is deployed alongside the console.
+   */
+  enableAuditLogs?: boolean;
 };
 
 export type GuardrailCapabilities = {

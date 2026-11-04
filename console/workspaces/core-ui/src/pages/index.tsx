@@ -189,6 +189,13 @@ export const LazyGatewaysOrg = lazy(() =>
   }))
 );
 
+// Audit Logs
+export const LazyAuditLogsOrg = lazy(() =>
+  import("@agent-management-platform/audit-logs").then((m) => ({
+    default: m.metaData.levels!.organization as ComponentType,
+  }))
+);
+
 // Settings
 export const LazySettingsOrg = lazy(() =>
   import("@agent-management-platform/settings").then((m) => ({
