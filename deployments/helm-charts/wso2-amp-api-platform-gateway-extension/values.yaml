@@ -258,6 +258,28 @@ apiGateway:
     #           key: subscription-key
     systemExtraEnv: []
 
+# AMP audit trail. When enabled, the gateway writes one JSON traffic record per
+# request to stdout (no headers or bodies), which the observability
+# extension's Fluent Bit configuration copies into the amp-audit indices. The
+# chart appends the [collector] and [traffic_logging] tables to config_toml, so
+# config_toml must not define them itself. See deployments/AUDIT_LOGS.md.
+# Disabled, the rendered gateway configuration is unchanged.
+audit:
+  trafficLogging:
+    enabled: true
+    # Token claims copied into auth.claims. Claims are personal data: list only
+    # what the trail needs. "act" is the RFC 8693 delegation chain.
+    auditClaims: ["act"]
+    # Request headers masked in any header capture.
+    maskedHeaders: ["authorization", "x-api-key", "x-jwt-assertion", "x-amp-api-key"]
+    # Env var the gateway reads token_fingerprint_key from.
+    fingerprintKeyEnvVar: AMP_TRAFFIC_LOG_FINGERPRINT_KEY
+    # Secret (in apiGateway.namespace) holding the fingerprint key, at least 32
+    # bytes. Empty name: the chart generates one per gateway and keeps it.
+    fingerprintKeySecret:
+      name: ""
+      key: "fingerprint-key"
+
 # Bootstrap Job configuration
 #
 # The job runs as a pre-install, pre-upgrade AND pre-rollback hook, so `helm rollback` now

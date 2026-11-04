@@ -440,6 +440,81 @@
       "title": "apiGateway",
       "type": "object"
     },
+    "audit": {
+      "additionalProperties": false,
+      "description": "AMP audit trail settings.",
+      "properties": {
+        "trafficLogging": {
+          "additionalProperties": false,
+          "description": "Gateway traffic logging for the AMP audit trail. Appends [collector] and [traffic_logging] to config_toml; disabled, the rendered configuration is unchanged.",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "Render the traffic-logging configuration.",
+              "title": "enabled",
+              "type": "boolean"
+            },
+            "auditClaims": {
+              "default": [
+                "act"
+              ],
+              "description": "Token claims copied into auth.claims.",
+              "items": {
+                "type": "string"
+              },
+              "title": "auditClaims",
+              "type": "array"
+            },
+            "maskedHeaders": {
+              "default": [
+                "authorization",
+                "x-api-key",
+                "x-jwt-assertion",
+                "x-amp-api-key"
+              ],
+              "description": "Request headers masked in any header capture.",
+              "items": {
+                "type": "string"
+              },
+              "title": "maskedHeaders",
+              "type": "array"
+            },
+            "fingerprintKeyEnvVar": {
+              "default": "AMP_TRAFFIC_LOG_FINGERPRINT_KEY",
+              "description": "Env var the gateway reads token_fingerprint_key from.",
+              "pattern": "^[A-Z_][A-Z0-9_]*$",
+              "title": "fingerprintKeyEnvVar",
+              "type": "string"
+            },
+            "fingerprintKeySecret": {
+              "additionalProperties": false,
+              "description": "Secret in apiGateway.namespace holding the fingerprint key (at least 32 bytes). Empty name generates one.",
+              "properties": {
+                "name": {
+                  "default": "",
+                  "description": "Secret name.",
+                  "title": "name",
+                  "type": "string"
+                },
+                "key": {
+                  "default": "fingerprint-key",
+                  "description": "Key in the Secret.",
+                  "minLength": 1,
+                  "title": "key",
+                  "type": "string"
+                }
+              },
+              "title": "fingerprintKeySecret",
+              "type": "object"
+            }
+          },
+          "title": "trafficLogging",
+          "type": "object"
+        }
+      },
+      "title": "audit",
+      "type": "object"
+    },
     "bootstrap": {
       "additionalProperties": false,
       "description": "Bootstrap Job configuration The job runs as a pre-install, pre-upgrade AND pre-rollback hook, so `helm rollback` now runs it too and can fail (leaving the release in pending-rollback) when Agent Manager is unreachable \u2014 rollbacks could not fail before. Recovery: re-run `helm rollback`, or `helm rollback --no-hooks` to skip the job entirely.",

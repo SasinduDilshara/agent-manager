@@ -18,9 +18,10 @@ data:
   values.yaml: |
     gateway:
       developmentMode: {{ .Values.developmentMode }}
-      {{- if .Values.apiGateway.config.config_toml }}
+      {{- $configToml := include "wso2-amp-gateway-extension.configToml" . }}
+      {{- if $configToml }}
       config_toml: |
-        {{- .Values.apiGateway.config.config_toml | nindent 8 }}
+        {{- $configToml | nindent 8 }}
       {{- end }}
       config:
         controller:
@@ -149,18 +150,18 @@ data:
             capabilities:
               drop:
                 - ALL
-          {{- if .Values.apiGateway.config.systemExtraEnv }}
+          {{- with include "wso2-amp-gateway-extension.extraEnv" . }}
           extraEnv:
-            {{- .Values.apiGateway.config.systemExtraEnv | toYaml | nindent 12 }}
+            {{- . | nindent 12 }}
           {{- end }}
 
       gatewayRuntime:
         deployment:
           podLabels:
             openchoreo.dev/system-component: gateway-runtime
-          {{- if .Values.apiGateway.config.systemExtraEnv }}
+          {{- with include "wso2-amp-gateway-extension.extraEnv" . }}
           extraEnv:
-            {{- .Values.apiGateway.config.systemExtraEnv | toYaml | nindent 12 }}
+            {{- . | nindent 12 }}
           {{- end }}
         service:
           type: ClusterIP
