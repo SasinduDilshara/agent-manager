@@ -22,3 +22,12 @@ still needs.
 {{- end -}}
 {{- $days -}}
 {{- end }}
+
+{{/*
+Name of the setup Job and its ConfigMap. Kept to 63 characters: a Job's name
+becomes the job-name label on its pods, and the installer's release name plus
+the chart name is already 57.
+*/}}
+{{- define "amp-observability-extension.auditSetupName" -}}
+{{- printf "%s-audit-setup" (.Release.Name | trunc 50 | trimSuffix "-") -}}
+{{- end }}

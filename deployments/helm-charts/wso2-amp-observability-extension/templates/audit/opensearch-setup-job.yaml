@@ -6,7 +6,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "amp-observability-extension.fullname" . }}-audit-setup
+  name: {{ include "amp-observability-extension.auditSetupName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "amp-observability-extension.labels" . | nindent 4 }}
@@ -81,7 +81,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "amp-observability-extension.fullname" . }}-audit-setup
+            name: {{ include "amp-observability-extension.auditSetupName" . }}
         - name: tmp
           emptyDir:
             sizeLimit: 16Mi

@@ -4,7 +4,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "amp-observability-extension.fullname" . }}-audit-setup
+  name: {{ include "amp-observability-extension.auditSetupName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "amp-observability-extension.labels" . | nindent 4 }}

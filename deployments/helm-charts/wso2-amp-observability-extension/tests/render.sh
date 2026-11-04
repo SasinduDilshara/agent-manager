@@ -198,6 +198,16 @@ check "Agent Manager may reach OpenSearch" yes "name: amp-audit-opensearch-from-
 for name in amp-fluent-bit audit-setup amp-audit-opensearch; do
   check "audit.enabled=false renders no $name" no "$name" --set audit.enabled=false
 done
+# The installer's release name is long; a Job name over 63 characters is
+# rejected because it becomes the pods' job-name label.
+job_name="$(helm template amp-observability-traces "$CHART_DIR" -n openchoreo-observability-plane |
+  awk '/^kind: Job/ {j = 1} j && /^  name:/ {print $2; exit}')"
+if [[ -n "$job_name" && ${#job_name} -le 63 ]]; then
+  printf 'ok   - the setup Job name fits in 63 characters (%s)\n' "$job_name"
+else
+  printf 'FAIL - setup Job name %q is empty or longer than 63 characters\n' "$job_name"
+  FAILURES=$((FAILURES + 1))
+fi
 if helm template test-release "$CHART_DIR" --set audit.retention.days=90 >/dev/null 2>&1; then
   printf 'FAIL - retention under 186 days rendered\n'
   FAILURES=$((FAILURES + 1))
