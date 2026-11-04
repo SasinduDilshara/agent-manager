@@ -42,6 +42,7 @@ import {
   Gauge,
   Layers,
   MonitorCheck,
+  ScrollText,
 } from "@wso2/oxygen-ui-icons-react";
 import {
   generatePath,
@@ -51,6 +52,7 @@ import {
 } from "react-router-dom";
 import {
   absoluteRouteMap,
+  AUDIT_READ_SCOPE,
   globalConfig,
   isAgentIdentityEnabled,
 } from "@agent-management-platform/types";
@@ -146,6 +148,7 @@ export function useNavigationItems(): Array<
       identityRoles: true,
       identityGroups: true,
       agentIdentities: true,
+      auditLogs: true,
     };
     if (!enforced) return showAll;
     // An unresolved token is handled below by rendering no navigation at all,
@@ -181,6 +184,8 @@ export function useNavigationItems(): Array<
       // the org scopes and gate the Settings tabs; these pages read the
       // agent-identity API and belong to its scope.
       agentIdentities: s.has("amp:agent-identity:read"),
+      // The audit query API is authorized by observability:log-read.
+      auditLogs: s.has(AUDIT_READ_SCOPE),
     };
   }, [enforced, scopes]);
 
@@ -230,6 +235,7 @@ export function useNavigationItems(): Array<
     >
   ).environments;
   const evaluatorsOrgRoute = absoluteRouteMap.children.org.children.evaluators;
+  const auditOrgRoute = absoluteRouteMap.children.org.children.audit;
 
   // Security section shared by the internal-agent menus below: Agent ID, plus
   // gateway credentials for agent-api agents. Spread as a section only when it
@@ -932,6 +938,26 @@ export function useNavigationItems(): Array<
                     deploymentPipelinesOrgRoute.wildPath,
                     pathname,
                   ),
+                },
+              ],
+            },
+          ]
+        : []),
+      ...(globalConfig.featureFlags?.enableAuditLogs === true &&
+      navVisibility.auditLogs
+        ? [
+            {
+              title: "Governance",
+              type: "section" as const,
+              icon: <ShieldCheck />,
+              collapsible: true,
+              items: [
+                {
+                  label: "Audit Logs",
+                  type: "item" as const,
+                  icon: <ScrollText size={20} />,
+                  href: generatePath(auditOrgRoute.path, { orgId }),
+                  isActive: !!matchPath(auditOrgRoute.wildPath, pathname),
                 },
               ],
             },

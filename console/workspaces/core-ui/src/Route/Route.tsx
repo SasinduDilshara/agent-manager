@@ -45,6 +45,7 @@ import {
   LazyAddLLMProvidersOrg,
   LazyViewMCPServerComponent,
   LazyGatewaysOrg,
+  LazyAuditLogsOrg,
   LazyThunderInstancesOrg,
   LazySettingsOrg,
   LazyDeploymentPipelinesOrg,
@@ -75,6 +76,7 @@ import {
   relativeRouteMap,
   absoluteRouteMap,
   getBasePath,
+  globalConfig,
   isAgentIdentityEnabled,
 } from "@agent-management-platform/types";
 import {
@@ -295,6 +297,16 @@ export function RootRouter() {
               path={relativeRouteMap.children.org.children.gateways.path + "/*"}
               element={<LazyGatewaysOrg />}
             />
+            {globalConfig.featureFlags?.enableAuditLogs === true && (
+              <Route
+                path={relativeRouteMap.children.org.children.audit.path + "/*"}
+                element={
+                  <Suspense fallback={<LoadingFallback />}>
+                    <LazyAuditLogsOrg />
+                  </Suspense>
+                }
+              />
+            )}
             <Route
               path={
                 relativeRouteMap.children.org.children.settings.path + "/*"

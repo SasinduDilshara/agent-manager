@@ -100,6 +100,11 @@ export const rootRouteMap: AppRoute = {
                         },
                     },
                 },
+                audit: {
+                    path: 'audit',
+                    index: true,
+                    children: {},
+                },
                 llmProviders: {
                     path: 'llm-providers',
                     index: true,

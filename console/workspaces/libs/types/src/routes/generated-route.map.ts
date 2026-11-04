@@ -81,6 +81,11 @@ export const generatedRouteMap =  {
             }
           }
         },
+        "audit": {
+          "path": "/org/:orgId/audit",
+          "wildPath": "/org/:orgId/audit/*",
+          "children": {}
+        },
         "llmProviders": {
           "path": "/org/:orgId/llm-providers",
           "wildPath": "/org/:orgId/llm-providers/*",

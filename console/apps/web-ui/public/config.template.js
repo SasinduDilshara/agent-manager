@@ -100,6 +100,7 @@ window.__RUNTIME_CONFIG__ = {
     enableProfileManagement: '$FEATURE_FLAG_ENABLE_PROFILE_MANAGEMENT' === 'true',
     enableUserManagement: '$FEATURE_FLAG_ENABLE_USER_MANAGEMENT' === 'true',
     enableAgentIdentity: true,
+    enableAuditLogs: '$FEATURE_FLAG_ENABLE_AUDIT_LOGS' === 'true',
   },
   maxRequestBodyBytes: '$MAX_REQUEST_BODY_BYTES',
   fileMountMaxFileBytes: '$FILE_MOUNT_MAX_FILE_BYTES',
