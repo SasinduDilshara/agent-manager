@@ -116,11 +116,13 @@ SECRET=amp-audit-opensearch-reader
    done
    ```
 
+Use `--reset-then-reuse-values` when the chart version changes: `--reuse-values` keeps the old values and ignores new chart defaults such as `audit.*` (Helm 3.14+).
+
 2. **Observability extension.** This creates the ConfigMap, the index template, the retention policy and the reader user:
 
    ```bash
    helm upgrade amp-observability-traces oci://ghcr.io/wso2/helm-charts/wso2-amp-observability-extension \
-     -n "$OBS_NS" --version <version> --reuse-values \
+     -n "$OBS_NS" --version <version> --reset-then-reuse-values \
      --set audit.reader.existingSecret="$SECRET" --set audit.sources.controlPlane.namespace="$AMP_NS"
    # Releases whose Fluent Bit ships to opensearch:9200 directly (no TLS passthrough route):
    #   --set audit.fluentBit.openSearchHost=opensearch --set audit.fluentBit.openSearchPort=9200 \
@@ -144,7 +146,7 @@ SECRET=amp-audit-opensearch-reader
 5. **Agent Manager:**
 
    ```bash
-   helm upgrade amp oci://ghcr.io/wso2/helm-charts/wso2-agent-manager -n "$AMP_NS" --version <version> --reuse-values \
+   helm upgrade amp oci://ghcr.io/wso2/helm-charts/wso2-agent-manager -n "$AMP_NS" --version <version> --reset-then-reuse-values \
      --set agentManagerService.config.auditQuery.enabled=true \
      --set console.config.featureFlags.enableAuditLogs=true
    ```
