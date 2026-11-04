@@ -118,6 +118,14 @@ data:
   AUDIT_BUFFER_SIZE: {{ .Values.agentManagerService.config.audit.bufferSize | default 4096 | quote }}
   AUDIT_BATCH_SIZE: {{ .Values.agentManagerService.config.audit.batchSize | default 200 | quote }}
   AUDIT_FLUSH_INTERVAL_MS: {{ .Values.agentManagerService.config.audit.flushIntervalMs | default 1000 | quote }}
+  # Org audit trail read API. Credentials come from a Secret (deployment.yaml).
+  {{- $auditQuery := dig "auditQuery" dict .Values.agentManagerService.config }}
+  AUDIT_QUERY_ENABLED: {{ dig "enabled" false $auditQuery | quote }}
+  AUDIT_OPENSEARCH_URL: {{ dig "openSearchUrl" "https://opensearch.openchoreo-observability-plane.svc.cluster.local:9200" $auditQuery | quote }}
+  AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY: {{ dig "insecureSkipVerify" false $auditQuery | quote }}
+  AUDIT_INDEX_PATTERN: {{ dig "indexPattern" "amp-audit-*" $auditQuery | quote }}
+  AUDIT_OPENSEARCH_TIMEOUT_SECONDS: {{ dig "timeoutSeconds" 15 $auditQuery | int | quote }}
+  AUDIT_GATEWAY_NAMESPACE_FALLBACK: {{ dig "gatewayNamespaceFallback" false $auditQuery | quote }}
   # Gateway manifest cache backend. Must be "redis" whenever replicaCount > 1 — see
   # the gatewayManifestCache note in values.yaml.
   GATEWAY_MANIFEST_CACHE_BACKEND: {{ .Values.agentManagerService.config.gatewayManifestCache.backend | default "memory" | quote }}

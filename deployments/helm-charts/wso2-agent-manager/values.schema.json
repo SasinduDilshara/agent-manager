@@ -663,6 +663,92 @@
               "title": "audit",
               "type": "object"
             },
+            "auditQuery": {
+              "additionalProperties": false,
+              "description": "Org audit trail read API (GET /orgs/{orgName}/audit/events). Needs the OpenChoreo logs module and the observability extension (audit.enabled). See deployments/AUDIT_LOGS.md.",
+              "properties": {
+                "enabled": {
+                  "default": false,
+                  "description": "Serve the audit read API. Off, the route answers 503.",
+                  "title": "enabled",
+                  "type": "boolean"
+                },
+                "openSearchUrl": {
+                  "default": "https://opensearch.openchoreo-observability-plane.svc.cluster.local:9200",
+                  "description": "OpenSearch base URL. No credentials, query or fragment.",
+                  "pattern": "^https?://[^@?#]+$",
+                  "title": "openSearchUrl",
+                  "type": "string"
+                },
+                "insecureSkipVerify": {
+                  "default": true,
+                  "description": "Skip TLS verification of the OpenSearch certificate (the bundled OpenSearch serves a self-signed one).",
+                  "title": "insecureSkipVerify",
+                  "type": "boolean"
+                },
+                "indexPattern": {
+                  "default": "amp-audit-*",
+                  "description": "Indices searched.",
+                  "pattern": "^[a-z0-9][a-z0-9*._-]*$",
+                  "title": "indexPattern",
+                  "type": "string"
+                },
+                "timeoutSeconds": {
+                  "default": 15,
+                  "description": "Per-query timeout in seconds.",
+                  "minimum": 1,
+                  "maximum": 120,
+                  "title": "timeoutSeconds",
+                  "type": "integer"
+                },
+                "gatewayNamespaceFallback": {
+                  "default": false,
+                  "description": "Scope gateway records without gateway.organization by the <org>- namespace prefix. Only safe where no org handle is a hyphenated extension of another.",
+                  "title": "gatewayNamespaceFallback",
+                  "type": "boolean"
+                },
+                "existingSecret": {
+                  "default": "amp-audit-opensearch-reader",
+                  "description": "Secret in this namespace holding the read-only OpenSearch identity. Required when enabled.",
+                  "title": "existingSecret",
+                  "type": "string"
+                },
+                "usernameKey": {
+                  "default": "username",
+                  "description": "Key of the username in existingSecret.",
+                  "title": "usernameKey",
+                  "type": "string"
+                },
+                "passwordKey": {
+                  "default": "password",
+                  "description": "Key of the password in existingSecret.",
+                  "title": "passwordKey",
+                  "type": "string"
+                },
+                "fingerprintKeySecret": {
+                  "additionalProperties": false,
+                  "description": "Optional Secret holding the gateways' traffic_logging.token_fingerprint_key, to join API-key calls to their key and agent. Empty name skips the join.",
+                  "properties": {
+                    "name": {
+                      "default": "",
+                      "description": "Secret name.",
+                      "title": "name",
+                      "type": "string"
+                    },
+                    "key": {
+                      "default": "fingerprint-key",
+                      "description": "Key in the Secret.",
+                      "title": "key",
+                      "type": "string"
+                    }
+                  },
+                  "title": "fingerprintKeySecret",
+                  "type": "object"
+                }
+              },
+              "title": "auditQuery",
+              "type": "object"
+            },
             "amObserverURL": {
               "default": "http://amp-observer.openchoreo-observability-plane.svc.cluster.local:9098",
               "description": "In-cluster URL the agent-manager-service uses to query trace data server-side.",
@@ -1778,6 +1864,12 @@
                   "default": true,
                   "description": "When false, the Add User, Invite User, Create Role, and Create Group buttons on the Settings page are disabled.",
                   "title": "enableUserManagement",
+                  "type": "boolean"
+                },
+                "enableAuditLogs": {
+                  "default": false,
+                  "description": "Shows the org-level Audit Logs page. Requires agentManagerService.config.auditQuery.enabled.",
+                  "title": "enableAuditLogs",
                   "type": "boolean"
                 }
               },

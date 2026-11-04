@@ -247,6 +247,27 @@ spec:
                   key: thunder-client-secret
               {{- end }}
             {{- end }}
+            {{- $auditQuery := dig "auditQuery" dict .Values.agentManagerService.config }}
+            {{- if dig "enabled" false $auditQuery }}
+            {{- $auditSecret := required "agentManagerService.config.auditQuery.existingSecret is required when auditQuery.enabled is true" (dig "existingSecret" "" $auditQuery) }}
+            - name: AUDIT_OPENSEARCH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $auditSecret }}
+                  key: {{ dig "usernameKey" "username" $auditQuery }}
+            - name: AUDIT_OPENSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $auditSecret }}
+                  key: {{ dig "passwordKey" "password" $auditQuery }}
+            {{- with (dig "fingerprintKeySecret" "name" "" $auditQuery) }}
+            - name: AUDIT_TOKEN_FINGERPRINT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ dig "fingerprintKeySecret" "key" "fingerprint-key" $auditQuery }}
+            {{- end }}
+            {{- end }}
             {{- if or .Values.agentManagerService.config.gatewayManifestCache.redis.password .Values.agentManagerService.config.gatewayManifestCache.redis.existingSecret }}
             - name: GATEWAY_MANIFEST_CACHE_REDIS_PASSWORD
               valueFrom:

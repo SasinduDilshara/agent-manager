@@ -548,6 +548,38 @@ CM_TEMPLATE=$CONSOLE_CM assert_cm "console.config.registry wins over global.ampI
 CM_TEMPLATE=$CONSOLE_CM assert_cm "the console gets the installed chart version" CHART_VERSION \
   "$(awk '/^version:/ {print $2; exit}' "$CHART_DIR/Chart.yaml")"
 
+# --- Audit query API -----------------------------------------------------------
+# Off by default: a release without the logs module must not need its Secret.
+assert_cm "the audit query API is off by default" AUDIT_QUERY_ENABLED "false"
+assert_cm "the audit query API can be turned on" AUDIT_QUERY_ENABLED "true" \
+  --set agentManagerService.config.auditQuery.enabled=true
+assert_cm "the audit index pattern defaults to amp-audit-*" AUDIT_INDEX_PATTERN "amp-audit-*"
+CM_TEMPLATE=$CONSOLE_CM assert_cm "the Audit Logs page is hidden by default" FEATURE_FLAG_ENABLE_AUDIT_LOGS "false"
+CM_TEMPLATE=$CONSOLE_CM assert_cm "the Audit Logs page can be shown" FEATURE_FLAG_ENABLE_AUDIT_LOGS "true" \
+  --set console.config.featureFlags.enableAuditLogs=true
+
+# The OpenSearch credentials come from a Secret, never a literal, and only when
+# the API is on.
+# pipefail would fail the pipe on the expected render error; report output only.
+audit_render() { helm template test-release "$CHART_DIR" --show-only "$API_TMPL" "$@" 2>&1 || true; }
+if audit_render | grep -q AUDIT_OPENSEARCH_PASSWORD; then
+  printf 'FAIL - audit credentials are wired while the API is off\n'; FAILURES=$((FAILURES + 1))
+else
+  printf 'ok   - audit credentials are not wired while the API is off\n'
+fi
+if audit_render --set agentManagerService.config.auditQuery.enabled=true |
+  awk '/name: AUDIT_OPENSEARCH_PASSWORD/ {f=1} f && /secretKeyRef/ {ok=1} f && /name: amp-audit-opensearch-reader/ && ok {print "yes"; exit}' | grep -q yes; then
+  printf 'ok   - the audit password comes from the reader Secret\n'
+else
+  printf 'FAIL - the audit password does not come from the reader Secret\n'; FAILURES=$((FAILURES + 1))
+fi
+if audit_render --set agentManagerService.config.auditQuery.enabled=true \
+  --set agentManagerService.config.auditQuery.existingSecret= | grep -q "existingSecret is required"; then
+  printf 'ok   - enabling the audit query API without a Secret fails the render\n'
+else
+  printf 'FAIL - enabling the audit query API without a Secret rendered\n'; FAILURES=$((FAILURES + 1))
+fi
+
 if ((FAILURES > 0)); then
   printf '\n%d assertion(s) failed\n' "$FAILURES"
   exit 1

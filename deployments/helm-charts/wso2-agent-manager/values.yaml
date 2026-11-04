@@ -160,6 +160,38 @@ agentManagerService:
       bufferSize: 4096
       batchSize: 200
       flushIntervalMs: 1000
+    # Org audit trail read API (GET /orgs/{orgName}/audit/events). It queries the
+    # amp-audit-* indices that the observability extension's amp-fluent-bit
+    # configuration fills, so it needs the OpenChoreo logs module and the
+    # observability extension (audit.enabled) installed. Off by default; the
+    # quick-start installer turns it on when log collection is installed.
+    # See deployments/AUDIT_LOGS.md.
+    auditQuery:
+      enabled: false
+      # OpenSearch base URL. No credentials, query or fragment.
+      openSearchUrl: "https://opensearch.openchoreo-observability-plane.svc.cluster.local:9200"
+      # Skip TLS verification of OpenSearch's certificate. The bundled
+      # OpenSearch serves a self-signed certificate; set false where AMS can
+      # verify it.
+      insecureSkipVerify: true
+      indexPattern: "amp-audit-*"
+      timeoutSeconds: 15
+      # Scope gateway records that carry no gateway.organization by the
+      # "<org>-" namespace prefix. Only safe where no org handle is a
+      # hyphenated extension of another.
+      gatewayNamespaceFallback: false
+      # Secret (in this release's namespace) holding the read-only OpenSearch
+      # identity. Required when enabled. The observability extension creates the
+      # amp_audit_reader user with the password from its own copy of this Secret;
+      # the installer keeps the two copies identical.
+      existingSecret: "amp-audit-opensearch-reader"
+      usernameKey: "username"
+      passwordKey: "password"
+      # Optional: the gateways' traffic_logging.token_fingerprint_key, so API-key
+      # calls can be joined back to the key and its agent. Empty skips the join.
+      fingerprintKeySecret:
+        name: ""
+        key: "fingerprint-key"
     # In-cluster URL the agent-manager-service uses to query trace data server-side.
     amObserverURL: "http://amp-observer.openchoreo-observability-plane.svc.cluster.local:9098"
     # Externally reachable observer URL returned to out-of-cluster clients
@@ -626,6 +658,9 @@ console:
       # When false, the Add User, Invite User, Create Role, and Create Group
       # buttons on the Settings page are disabled.
       enableUserManagement: true
+      # Shows the org-level Audit Logs page. Requires the audit query API
+      # (agentManagerService.config.auditQuery.enabled).
+      enableAuditLogs: false
 
   # Pod-level configurations
   podAnnotations: {}
