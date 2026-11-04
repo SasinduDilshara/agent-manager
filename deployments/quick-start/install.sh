@@ -1357,6 +1357,7 @@ elif log_info "Enabling log collection with fluent-bit..." \
     # The restart: the chart's checksum/config annotation hashes an empty
     # string, so a changed Fluent Bit config never rolls the pods on its own.
     log_success "Log collection enabled with fluent-bit"
+    LOG_COLLECTION_ENABLED=true
 else
     log_error "Failed to enable log collection (non-fatal)"
 fi
@@ -1611,6 +1612,18 @@ log_info "Installing Agent Management Platform components..."
 log_info "This may take 5-8 minutes..."
 echo ""
 
+# AMP audit logs need log collection. Prepared before Agent Manager is installed
+# so its audit query API starts with its credentials; collection itself is
+# switched on after the observability extension (below).
+if [ "${LOG_COLLECTION_ENABLED:-false}" = "true" ]; then
+    log_info "Preparing AMP audit logs..."
+    if prepare_audit_logs; then
+        log_success "AMP audit logs prepared"
+    else
+        log_warning "Failed to prepare AMP audit logs (non-fatal); the Audit Logs page stays off"
+    fi
+fi
+
 # Install main platform
 log_info "Installing Agent Management Platform (PostgreSQL, API, Console)..."
 if ! install_agent_management_platform; then
@@ -1700,6 +1713,15 @@ if ! install_observability_extension; then
     echo "  2. View logs: kubectl logs -n ${OBSERVABILITY_NS} <pod-name>"
 else
     log_success "Observability Extension installed successfully"
+    if [ "${AUDIT_LOGS_PREPARED}" = "true" ]; then
+        log_info "Collecting AMP audit records (Fluent Bit -> amp-audit indices)..."
+        if enable_audit_log_collection; then
+            log_success "AMP audit log collection enabled"
+        else
+            log_warning "Failed to enable AMP audit log collection (non-fatal)"
+            echo "  Container logs are unaffected. To retry, see deployments/AUDIT_LOGS.md."
+        fi
+    fi
 fi
 echo ""
 

@@ -273,6 +273,79 @@ install_agent_management_platform() {
     return 0
 }
 
+# --- AMP audit logs --------------------------------------------------------------
+# Gateway traffic records and Agent Manager audit records are copied into
+# amp-audit-* indices by the logs module's Fluent Bit (amp-fluent-bit ConfigMap,
+# shipped by the observability extension) and read back by the Agent Manager
+# audit query API. See deployments/AUDIT_LOGS.md.
+#
+# The names below must match the chart defaults:
+# wso2-agent-manager agentManagerService.config.auditQuery.existingSecret and
+# the observability extension's audit.reader.username / audit.fluentBit.configMapName.
+AUDIT_READER_SECRET="${AUDIT_READER_SECRET:-amp-audit-opensearch-reader}"
+AUDIT_READER_USERNAME="amp_audit_reader"
+AUDIT_FLUENT_BIT_CONFIGMAP="amp-fluent-bit"
+AUDIT_LOGS_PREPARED=false
+
+# prepare_audit_logs creates the read-only OpenSearch identity's Secret in both
+# the observability namespace (where the extension's setup Job creates the
+# OpenSearch user from it) and Agent Manager's namespace (where the API reads
+# it), and turns the audit query API and the console page on. Run it before
+# Agent Manager is installed. Idempotent: an existing password is reused, so a
+# re-run never changes the credentials under a running install.
+prepare_audit_logs() {
+    local ns password=""
+    for ns in "${OBSERVABILITY_NS}" "${AMP_NS}"; do
+        password="$(kubectl get secret "${AUDIT_READER_SECRET}" -n "${ns}" \
+            -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+        [[ -n "${password}" ]] && break
+    done
+    if [[ -z "${password}" ]]; then
+        password="$(openssl rand -hex 24)" || return 1
+    fi
+    for ns in "${OBSERVABILITY_NS}" "${AMP_NS}"; do
+        kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null || return 1
+        # The password goes through stdin, never the process arguments.
+        printf '%s' "${password}" | kubectl create secret generic "${AUDIT_READER_SECRET}" -n "${ns}" \
+            --from-literal=username="${AUDIT_READER_USERNAME}" \
+            --from-file=password=/dev/stdin \
+            --dry-run=client -o yaml | kubectl apply -f - >/dev/null || return 1
+    done
+    AMP_HELM_ARGS+=(
+        --set agentManagerService.config.auditQuery.enabled=true
+        --set agentManagerService.config.auditQuery.existingSecret="${AUDIT_READER_SECRET}"
+        --set console.config.featureFlags.enableAuditLogs=true
+    )
+    OBSERVABILITY_HELM_ARGS+=(
+        --set audit.reader.existingSecret="${AUDIT_READER_SECRET}"
+        --set audit.sources.controlPlane.namespace="${AMP_NS}"
+    )
+    AUDIT_LOGS_PREPARED=true
+}
+
+# enable_audit_log_collection switches the logs module's Fluent Bit to the
+# amp-fluent-bit configuration. Run it after the observability extension is
+# installed: the ConfigMap must exist before the DaemonSet mounts it, and the
+# extension's setup Job must have created the amp-audit index template before
+# the first audit record is shipped.
+enable_audit_log_collection() {
+    if ! kubectl get configmap "${AUDIT_FLUENT_BIT_CONFIGMAP}" -n "${OBSERVABILITY_NS}" &>/dev/null; then
+        echo "ConfigMap ${AUDIT_FLUENT_BIT_CONFIGMAP} not found in ${OBSERVABILITY_NS}"
+        return 1
+    fi
+    helm upgrade observability-logs-opensearch \
+        oci://ghcr.io/openchoreo/helm-charts/observability-logs-opensearch \
+        --namespace "${OBSERVABILITY_NS}" \
+        --version "${OBSERVABILITY_LOGS_OPENSEARCH_VERSION}" \
+        --reuse-values \
+        --set fluent-bit.existingConfigMap="${AUDIT_FLUENT_BIT_CONFIGMAP}" \
+        --timeout 10m || return 1
+    # The chart's checksum/config annotation does not cover an external
+    # ConfigMap, so the pods only pick it up on a restart.
+    kubectl rollout restart daemonset/fluent-bit -n "${OBSERVABILITY_NS}" || return 1
+    kubectl rollout status daemonset/fluent-bit -n "${OBSERVABILITY_NS}" --timeout="${TIMEOUT_DEPLOYMENT}s"
+}
+
 # Install Observability Extension
 install_observability_extension() {
     local chart_ref="oci://${HELM_CHART_REGISTRY}/${OBSERVABILITY_CHART_NAME}"
