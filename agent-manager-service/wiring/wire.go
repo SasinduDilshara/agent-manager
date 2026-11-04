@@ -29,6 +29,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
+	"github.com/wso2/agent-manager/agent-manager-service/clients/auditstoresvc"
 	observersvc "github.com/wso2/agent-manager/agent-manager-service/clients/observersvc"
 	occlient "github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/secretmanagersvc"
@@ -54,6 +55,7 @@ var configProviderSet = wire.NewSet(
 
 var clientProviderSet = wire.NewSet(
 	ProvideObserverClient,
+	ProvideAuditStoreClient,
 	ProvideOCClient,
 	ProvideSecretManagementClient,
 	ProvidePublisherProvisioner,
@@ -118,6 +120,8 @@ var serviceProviderSet = wire.NewSet(
 	services.NewLLMTemplateStore,
 	services.NewGitSecretService,
 	services.NewAIApplicationService,
+	ProvideAuditAgentResolver,
+	services.NewAuditQueryService,
 )
 
 var instrumentationProviderSet = wire.NewSet(
@@ -156,10 +160,12 @@ var controllerProviderSet = wire.NewSet(
 	controllers.NewIdentityController,
 	controllers.NewMCPProxyScopeController,
 	controllers.NewAgentIdentityController,
+	controllers.NewAuditController,
 )
 
 var testClientProviderSet = wire.NewSet(
 	ProvideTestOpenChoreoClient,
+	ProvideAuditStoreClient,
 	ProvideTestObserverClient,
 	ProvideTestSecretManagementClient,
 	ProvidePublisherProvisioner,
@@ -312,6 +318,29 @@ func ProvideObserverClient(cfg config.Config, authProvider occlient.AuthProvider
 	})
 }
 
+// ProvideAuditStoreClient creates the client for the audit log store. It
+// returns nil when the audit query API is disabled, which the query service
+// treats as disabled.
+func ProvideAuditStoreClient(cfg config.Config) (auditstoresvc.AuditStoreClient, error) {
+	if !cfg.AuditQuery.Enabled {
+		return nil, nil //nolint:nilnil // a nil client is how a disabled audit query is represented
+	}
+	return auditstoresvc.NewAuditStoreClient(auditstoresvc.Config{
+		BaseURL:            cfg.AuditQuery.OpenSearchURL,
+		Username:           cfg.AuditQuery.Username,
+		Password:           cfg.AuditQuery.Password,
+		IndexPattern:       cfg.AuditQuery.IndexPattern,
+		InsecureSkipVerify: cfg.AuditQuery.InsecureSkipVerify,
+		Timeout:            time.Duration(cfg.AuditQuery.RequestTimeoutSeconds) * time.Second,
+	})
+}
+
+// ProvideAuditAgentResolver builds the attribution index source for audit
+// records, keyed by the gateway's token fingerprint key when one is set.
+func ProvideAuditAgentResolver(cfg config.Config, repo repositories.AuditAttributionRepository) services.AuditAgentResolver {
+	return services.NewAuditAgentResolver(repo, cfg.AuditQuery.TokenFingerprintKey)
+}
+
 // ProvideSecretManagementClient creates the secret management service client.
 // If the provider implements secretmanagersvc.SecretReferenceManager and
 // reports that it manages SecretReferences itself, the OpenChoreo client is
@@ -407,6 +436,7 @@ var repositoryProviderSet = wire.NewSet(
 	ProvideEnvThunderSystemClientRepository,
 	ProvideEnvThunderURLRepository,
 	repositories.NewMCPProxyScopeRepository,
+	repositories.NewAuditAttributionRepository,
 )
 
 var reconcileProviderSet = wire.NewSet(

@@ -198,6 +198,12 @@ The observability plane's default log retention is far shorter than the evidence
 
 This is the single most important thing to get right. Everything else here is already done for you.
 
+On installs that use the bundled OpenChoreo log module, the AMP observability extension does this: its `amp-fluent-bit` configuration copies these records (and the API gateway's traffic records) into dedicated `amp-audit-*` indices with a 186-day retention policy. See [`deployments/AUDIT_LOGS.md`](../../deployments/AUDIT_LOGS.md).
+
+### Reading the trail back
+
+`GET /api/v1/orgs/{orgName}/audit/events` (permission `observability:log-read`) queries those indices and returns control-plane records and gateway traffic records in one normalised shape, scoped to the caller's organization: control-plane records by `ouId`, gateway records by the organization the gateway was configured with. Records written without an organization — `system:startup`, and the gateway key-sync reads on the internal surface — are platform-level and are not returned to any organization. Reading the trail is itself recorded (the route is in `sensitiveReadPaths`). The API is off unless `AUDIT_QUERY_ENABLED` is set; see Configuration.
+
 ### Tamper evidence
 
 Agent Manager has no write path back into the log store, so the collected copy is one the service itself cannot rewrite. That is a genuine property and it is the basis for treating the pipeline copy as authoritative. It is **not** protection against someone with write access to the log store itself — for that, use write-once storage or forward to a SIEM that platform administrators do not also administer.
@@ -266,6 +272,21 @@ The buffer is flushed on shutdown **after both HTTP servers stop**, so in-flight
 | `AUDIT_FLUSH_INTERVAL_MS` | `1000` | Maximum time an event waits before being written. |
 
 Helm: `agentManagerService.config.audit.*`.
+
+The read API (`GET /orgs/{orgName}/audit/events`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AUDIT_QUERY_ENABLED` | `false` | Serve the read API. Off, it answers 503. |
+| `AUDIT_OPENSEARCH_URL` | `https://opensearch.openchoreo-observability-plane.svc.cluster.local:9200` | Log store base URL. No credentials, query or fragment. |
+| `AUDIT_OPENSEARCH_USERNAME` / `AUDIT_OPENSEARCH_PASSWORD` | — | Log store credentials; required when enabled. Use a read-only identity. |
+| `AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY` | `false` | Skip TLS verification (self-signed local clusters only). |
+| `AUDIT_INDEX_PATTERN` | `amp-audit-*` | Indices searched. |
+| `AUDIT_OPENSEARCH_TIMEOUT_SECONDS` | `15` | Per-query timeout. |
+| `AUDIT_TOKEN_FINGERPRINT_KEY` | — | The gateway's `traffic_logging.token_fingerprint_key`. When set, an API-key call's fingerprint is joined to the key and its owning agent. |
+| `AUDIT_GATEWAY_NAMESPACE_FALLBACK` | `false` | Scope gateway records that carry no `gateway.organization` by the `<org>-` namespace prefix. Only safe where no org handle is a hyphenated extension of another. |
+
+Helm: `agentManagerService.config.auditQuery.*`.
 
 ## Adding a semantic event
 

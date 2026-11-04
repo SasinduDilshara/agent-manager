@@ -150,8 +150,8 @@ var nonMutatingWritePaths = map[string]bool{
 // security configuration of the org. Reading these is worth recording even
 // though nothing changes.
 //
-// The audit trail is stored outside this service, so there is no read route for
-// it here to add to this list.
+// The audit trail is stored outside this service; its read route
+// (/orgs/{orgName}/audit/events) is listed here so that reading it is recorded.
 // coalesceWindows bound how often a route is recorded per caller.
 //
 // Gateways poll the bulk-sync endpoints on a timer, so recording every call
@@ -209,6 +209,10 @@ var sensitiveReadPaths = map[string]bool{
 	// request — statusCode tells them apart, outcome does not. Coalesced; see
 	// coalesceWindows.
 	"/platform/gateways/failure-summary": true,
+
+	// The audit trail itself. Who searched the org's records, and when, is
+	// part of the trail an auditor reviews.
+	"/orgs/{orgName}/audit/events": true,
 }
 
 // actionOverrides maps a route path to the action it actually performs, for

@@ -167,7 +167,6 @@ func TestSecurityInvariantEveryRouteIsAuthorized(t *testing.T) {
 var declaredButUnenforcedPermissions = map[string]string{
 	// --- Enforced by a different service -----------------------------------
 	"ObservabilityTraceRead":    "enforced by agent-manager-observer (its own rbac package + RequirePermission)",
-	"ObservabilityLogRead":      "enforced by agent-manager-observer",
 	"ObservabilityMetricRead":   "enforced by agent-manager-observer",
 	"ObservabilityBuildLogRead": "enforced by agent-manager-observer",
 

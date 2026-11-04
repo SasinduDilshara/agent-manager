@@ -65,6 +65,7 @@ func registerAPIRoutes(rr *middleware.RouteRegistrar, params *wiring.AppParams) 
 	registerMCPProxyScopeRoutes(rr, params.MCPProxyScopeController)
 	registerAgentIdentityRoutes(rr, params.AgentIdentityController)
 	registerTelemetryRoutes(rr)
+	registerAuditRoutes(rr, params.AuditController)
 }
 
 // MakeHTTPHandler creates a new HTTP handler with middleware and routes.
