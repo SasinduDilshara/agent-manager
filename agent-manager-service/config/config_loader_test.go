@@ -1185,3 +1185,84 @@ func TestRequirePositiveReportsEachNonPositiveField(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateAuditQueryConfig(t *testing.T) {
+	valid := AuditQueryConfig{
+		Enabled:               true,
+		OpenSearchURL:         "https://opensearch.openchoreo-observability-plane.svc.cluster.local:9200",
+		Username:              "amp_audit_reader",
+		Password:              "secret",
+		IndexPattern:          "amp-audit-*",
+		RequestTimeoutSeconds: 15,
+	}
+
+	tests := []struct {
+		name        string
+		mutate      func(*AuditQueryConfig)
+		wantErrors  int
+		errContains string
+	}{
+		{name: "valid", mutate: func(*AuditQueryConfig) {}},
+		{
+			name:   "disabled needs nothing",
+			mutate: func(c *AuditQueryConfig) { *c = AuditQueryConfig{} },
+		},
+		{
+			name:        "credentials are required when enabled",
+			mutate:      func(c *AuditQueryConfig) { c.Username, c.Password = "", "" },
+			wantErrors:  1,
+			errContains: "are required",
+		},
+		{
+			name:        "half-applied credentials are rejected",
+			mutate:      func(c *AuditQueryConfig) { c.Password = "" },
+			wantErrors:  1,
+			errContains: "set together",
+		},
+		{
+			name:        "credentials in the URL are rejected",
+			mutate:      func(c *AuditQueryConfig) { c.OpenSearchURL = "https://admin:pw@opensearch:9200" },
+			wantErrors:  1,
+			errContains: "AUDIT_OPENSEARCH_URL",
+		},
+		{
+			name:        "relative URL is rejected",
+			mutate:      func(c *AuditQueryConfig) { c.OpenSearchURL = "opensearch:9200" },
+			wantErrors:  1,
+			errContains: "AUDIT_OPENSEARCH_URL",
+		},
+		{
+			// The pattern is placed into the request path, so a comma or slash
+			// would reach a different index or endpoint.
+			name:        "index pattern naming a second index is rejected",
+			mutate:      func(c *AuditQueryConfig) { c.IndexPattern = "amp-audit-*,container-logs-*" },
+			wantErrors:  1,
+			errContains: "AUDIT_INDEX_PATTERN",
+		},
+		{
+			name:        "short fingerprint key is rejected",
+			mutate:      func(c *AuditQueryConfig) { c.TokenFingerprintKey = "short" },
+			wantErrors:  1,
+			errContains: "AUDIT_TOKEN_FINGERPRINT_KEY",
+		},
+		{
+			name:        "zero timeout is rejected",
+			mutate:      func(c *AuditQueryConfig) { c.RequestTimeoutSeconds = 0 },
+			wantErrors:  1,
+			errContains: "AUDIT_OPENSEARCH_TIMEOUT_SECONDS",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := valid
+			tt.mutate(&cfg)
+			errs := validateAuditQueryConfig(cfg)
+			if len(errs) != tt.wantErrors {
+				t.Fatalf("got %d errors (%v), want %d", len(errs), errs, tt.wantErrors)
+			}
+			if tt.errContains != "" && !strings.Contains(errs[0].Error(), tt.errContains) {
+				t.Fatalf("error %q does not mention %q", errs[0].Error(), tt.errContains)
+			}
+		})
+	}
+}

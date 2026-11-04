@@ -202,6 +202,10 @@ type Config struct {
 	// Audit configures the audit trail.
 	Audit AuditConfig
 
+	// AuditQuery configures the read side of the audit trail: the org-scoped
+	// query API over the records the platform's log pipeline indexes.
+	AuditQuery AuditQueryConfig
+
 	// GatewayManifestCache configures where the gateway-reported policy manifest
 	// cache lives. The default in-memory backend is process-local and therefore
 	// inconsistent across replicas — set Backend to "redis" in HA deployments.
@@ -289,6 +293,43 @@ type AuditConfig struct {
 	// FlushIntervalMs bounds how long an event waits before being written, so a
 	// quiet service still emits promptly.
 	FlushIntervalMs int
+}
+
+// AuditQueryConfig configures GET /orgs/{orgName}/audit/events, which reads
+// gateway traffic records and this service's own audit records back from the
+// log store (OpenSearch) the platform's Fluent Bit ships them to.
+//
+// The API is off unless Enabled is set, because it needs a log store this
+// service does not deploy and credentials for it.
+type AuditQueryConfig struct {
+	// Enabled turns the query API on. AUDIT_QUERY_ENABLED.
+	Enabled bool
+	// OpenSearchURL is the base URL of the log store. AUDIT_OPENSEARCH_URL.
+	OpenSearchURL string
+	// Username and Password authenticate to the log store. They should be a
+	// read-only identity. AUDIT_OPENSEARCH_USERNAME / AUDIT_OPENSEARCH_PASSWORD.
+	Username string
+	Password string `json:"-"`
+	// InsecureSkipVerify skips TLS verification of the log store's certificate.
+	// For local clusters with self-signed certificates only.
+	// AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY.
+	InsecureSkipVerify bool
+	// IndexPattern selects the audit indices. AUDIT_INDEX_PATTERN.
+	IndexPattern string
+	// RequestTimeoutSeconds bounds one query to the log store.
+	// AUDIT_OPENSEARCH_TIMEOUT_SECONDS.
+	RequestTimeoutSeconds int
+	// TokenFingerprintKey is the gateway's traffic_logging.token_fingerprint_key.
+	// When set, an API-key call's logged fingerprint is joined back to the key,
+	// and through it to the agent that owns it. Optional.
+	// AUDIT_TOKEN_FINGERPRINT_KEY.
+	TokenFingerprintKey string `json:"-"`
+	// GatewayNamespaceFallback scopes gateway records that carry no
+	// gateway.organization by the "<org>-" prefix of the Kubernetes namespace
+	// they were logged from. Off by default: a prefix cannot tell org "acme"
+	// from org "acme-labs", so it is only safe where no org handle is a
+	// hyphenated extension of another. AUDIT_GATEWAY_NAMESPACE_FALLBACK.
+	GatewayNamespaceFallback bool
 }
 
 type TLSConfig struct {

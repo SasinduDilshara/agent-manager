@@ -17,12 +17,14 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -369,6 +371,19 @@ func loadEnvs() {
 		FlushIntervalMs: int(r.readOptionalInt64("AUDIT_FLUSH_INTERVAL_MS", 1000)),
 	}
 	r.errors = append(r.errors, validateAuditConfig(config.Audit)...)
+
+	config.AuditQuery = AuditQueryConfig{
+		Enabled:                  r.readOptionalBool("AUDIT_QUERY_ENABLED", false),
+		OpenSearchURL:            r.readOptionalString("AUDIT_OPENSEARCH_URL", "https://opensearch.openchoreo-observability-plane.svc.cluster.local:9200"),
+		Username:                 r.readOptionalString("AUDIT_OPENSEARCH_USERNAME", ""),
+		Password:                 r.readOptionalString("AUDIT_OPENSEARCH_PASSWORD", ""),
+		InsecureSkipVerify:       r.readOptionalBool("AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY", false),
+		IndexPattern:             r.readOptionalString("AUDIT_INDEX_PATTERN", "amp-audit-*"),
+		RequestTimeoutSeconds:    int(r.readOptionalInt64("AUDIT_OPENSEARCH_TIMEOUT_SECONDS", 15)),
+		TokenFingerprintKey:      r.readOptionalString("AUDIT_TOKEN_FINGERPRINT_KEY", ""),
+		GatewayNamespaceFallback: r.readOptionalBool("AUDIT_GATEWAY_NAMESPACE_FALLBACK", false),
+	}
+	r.errors = append(r.errors, validateAuditQueryConfig(config.AuditQuery)...)
 
 	// Resource limits for agent resource configurations (operator-controlled ceilings)
 	config.PerAgentResourceLimits = ResourceLimitsConfig{
@@ -838,6 +853,47 @@ func validateFileMountLimitsConfig(cfg *Config, r *configReader) {
 	if limits.MaxTotalBytes > kubernetesObjectMaxBytes {
 		r.errors = append(r.errors, fmt.Errorf("FILE_MOUNT_MAX_TOTAL_BYTES must not exceed %d (the Kubernetes ConfigMap/Secret limit), got %d", kubernetesObjectMaxBytes, limits.MaxTotalBytes))
 	}
+}
+
+// auditIndexPatternRe admits an OpenSearch index name or wildcard pattern. It
+// excludes ',' (a second index), '/' and '?' (a different endpoint) and
+// whitespace, because the pattern is placed into the request path.
+var auditIndexPatternRe = regexp.MustCompile(`^[a-z0-9][a-z0-9*._-]*$`)
+
+// validateAuditQueryConfig rejects an unusable audit query configuration at
+// startup. Nothing is checked while the API is off, so a deployment that does
+// not use it needs no settings.
+func validateAuditQueryConfig(cfg AuditQueryConfig) []error {
+	if !cfg.Enabled {
+		return nil
+	}
+	var errs []error
+	u, err := url.Parse(cfg.OpenSearchURL)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("AUDIT_OPENSEARCH_URL must be an absolute http(s) URL, got %q", cfg.OpenSearchURL))
+	} else if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		errs = append(errs, errors.New("AUDIT_OPENSEARCH_URL must not carry credentials, a query or a fragment; "+
+			"use AUDIT_OPENSEARCH_USERNAME and AUDIT_OPENSEARCH_PASSWORD"))
+	}
+	switch {
+	case cfg.Username == "" && cfg.Password == "":
+		errs = append(errs, errors.New("AUDIT_OPENSEARCH_USERNAME and AUDIT_OPENSEARCH_PASSWORD are required when AUDIT_QUERY_ENABLED is true"))
+	case cfg.Username == "" || cfg.Password == "":
+		// One without the other is a half-applied secret.
+		errs = append(errs, errors.New("AUDIT_OPENSEARCH_USERNAME and AUDIT_OPENSEARCH_PASSWORD must be set together"))
+	}
+	if !auditIndexPatternRe.MatchString(cfg.IndexPattern) {
+		errs = append(errs, fmt.Errorf("AUDIT_INDEX_PATTERN %q is not a valid index pattern", cfg.IndexPattern))
+	}
+	if cfg.RequestTimeoutSeconds <= 0 || cfg.RequestTimeoutSeconds > 120 {
+		errs = append(errs, fmt.Errorf("AUDIT_OPENSEARCH_TIMEOUT_SECONDS must be between 1 and 120, got %d", cfg.RequestTimeoutSeconds))
+	}
+	// The gateway refuses a key shorter than 32 bytes, so a shorter one here can
+	// never match what the gateway logged.
+	if cfg.TokenFingerprintKey != "" && len(cfg.TokenFingerprintKey) < 32 {
+		errs = append(errs, fmt.Errorf("AUDIT_TOKEN_FINGERPRINT_KEY must be at least 32 bytes when set, got %d", len(cfg.TokenFingerprintKey)))
+	}
+	return errs
 }
 
 // validateAuditConfig rejects malformed audit tuning at startup.
