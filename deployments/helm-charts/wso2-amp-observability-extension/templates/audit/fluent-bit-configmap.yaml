@@ -198,7 +198,9 @@ data:
         Time_Format %Y-%m-%dT%H:%M:%S.%L
 
     # AMP audit: the record's own timestamp stays a field (gateway "timestamp",
-    # control plane "event.occurredAt"); @timestamp is the collection time.
+    # control plane "event.occurredAt"). Fluent Bit sends the collection time as
+    # @timestamp; the amp-audit-event-time ingest pipeline (setup Job) replaces
+    # it with the event time and keeps the collection time as collectedAt.
     [PARSER]
         Name amp_audit_json
         Format json

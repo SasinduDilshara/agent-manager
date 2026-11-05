@@ -86,6 +86,10 @@ With `enabled=false`, the rendered chart is byte-identical to the previous relea
 
 To join API-key calls back to their keys, give every gateway and Agent Manager the same fingerprint key. Set `audit.trafficLogging.fingerprintKeySecret.name` on each gateway release, and `agentManagerService.config.auditQuery.fingerprintKeySecret` on Agent Manager, each pointing at a copy of one Secret.
 
+## Event time
+
+The API filters and sorts on `@timestamp`. The setup Job installs an `amp-audit-event-time` ingest pipeline, the default pipeline of every `amp-audit-*` index, that sets `@timestamp` to when the event happened (the gateway's `timestamp`, the control plane's `event.occurredAt`) and keeps the Fluent Bit collection time as `collectedAt`. The time range and the order therefore match the time each row shows, also after a store outage or a Fluent Bit backlog. A record whose own time is missing or unparseable keeps the collection time. Records indexed before the pipeline existed keep the collection time as `@timestamp`, normally seconds after the event.
+
 ## Retention
 
 The `amp-audit-retention` ISM policy deletes each daily index 186 days after creation, or after the configured number of days. The policy attaches to new `amp-audit-*` indices through its ISM template. The setup Job also attaches it to existing indices and moves them to the current policy version. Container logs keep the logs module's own 30-day policy.

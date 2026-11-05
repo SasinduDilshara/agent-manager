@@ -14,6 +14,51 @@ metadata:
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: before-hook-creation
 data:
+  # @timestamp is set to when the event happened, not when Fluent Bit collected
+  # it: the API filters and sorts on @timestamp while the console shows the
+  # record's own time, and the two drift apart after a store outage or a
+  # Fluent Bit backlog. collectedAt keeps the collection time. A record whose
+  # own time is missing or unparseable keeps the collection time.
+  ingest-pipeline.json: |
+    {
+      "description": "AMP audit: @timestamp is when the event happened (gateway timestamp, control-plane event.occurredAt); collectedAt keeps the collection time.",
+      "processors": [
+        {
+          "script": {
+            "lang": "painless",
+            "if": "ctx['@timestamp'] != null",
+            "source": "ctx.collectedAt = ctx['@timestamp']",
+            "ignore_failure": true
+          }
+        },
+        {
+          "date": {
+            "if": "ctx.audit_source == 'gateway' && ctx.timestamp instanceof String",
+            "field": "timestamp",
+            "target_field": "@timestamp",
+            "formats": [
+              "strict_date_optional_time",
+              "ISO8601"
+            ],
+            "timezone": "UTC",
+            "ignore_failure": true
+          }
+        },
+        {
+          "date": {
+            "if": "ctx.audit_source == 'control-plane' && ctx.event instanceof Map && ctx.event.occurredAt instanceof String",
+            "field": "event.occurredAt",
+            "target_field": "@timestamp",
+            "formats": [
+              "strict_date_optional_time",
+              "ISO8601"
+            ],
+            "timezone": "UTC",
+            "ignore_failure": true
+          }
+        }
+      ]
+    }
   # Mappings for the fields the audit query API filters, sorts and aggregates
   # on. Any other string is a keyword (exact match), never analysed text.
   # Free-form objects are flat_object so their keys cannot grow the mapping
@@ -24,6 +69,7 @@ data:
       "priority": 200,
       "template": {
         "settings": {
+          "index.default_pipeline": "amp-audit-event-time",
           "index.mapping.ignore_malformed": true,
           "index.mapping.total_fields.limit": 2000
         },
@@ -35,6 +81,7 @@ data:
           ],
           "properties": {
             "@timestamp": {"type": "date"},
+            "collectedAt": {"type": "date"},
             "audit_source": {"type": "keyword"},
             "log": {"type": "keyword", "ignore_above": 8192},
             "eventId": {"type": "keyword"},
@@ -204,8 +251,15 @@ data:
     # From here on any failed call is reported through give_up as well.
     trap 'rc=$?; if [ "$rc" -ne 0 ]; then trap - EXIT; give_up "a setup call failed (exit $rc), see the messages above"; fi' EXIT
 
+    echo "Ingest pipeline amp-audit-event-time"
+    call PUT /_ingest/pipeline/amp-audit-event-time /config/ingest-pipeline.json >/dev/null
+
     echo "Index template amp-audit"
     call PUT /_index_template/amp-audit /config/index-template.json >/dev/null
+    # Existing audit indices (today's, while upgrading) use the pipeline from
+    # now on too; new ones get it from the template.
+    printf '{"index.default_pipeline":"amp-audit-event-time"}' > /tmp/pipeline-setting.json
+    call PUT "/$PATTERN/_settings?allow_no_indices=true" /tmp/pipeline-setting.json >/dev/null || true
 
     echo "ISM policy $POLICY"
     if oscurl -o /tmp/policy -f "$OS/_plugins/_ism/policies/$POLICY" 2>/dev/null; then

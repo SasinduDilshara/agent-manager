@@ -205,6 +205,9 @@ check "the metadata strip applies to audit records only" yes "Nested_under kuber
 check "the Agent Manager namespace is configurable" yes "Regex      \$kubernetes['namespace_name'] ^amp-prod\$" \
   --set audit.sources.controlPlane.namespace=amp-prod
 check "retention defaults to 186 days" yes '"min_index_age": "186d"'
+check "audit indices use the event-time pipeline" yes '"index.default_pipeline": "amp-audit-event-time"'
+check "the setup Job installs the event-time pipeline" yes "call PUT /_ingest/pipeline/amp-audit-event-time"
+check "the collection time is kept" yes '"collectedAt": {"type": "date"}'
 check "a reader Secret is generated when none is given" yes "name: amp-audit-opensearch-reader"
 check "an existing reader Secret is used, not generated" no "templates/audit/reader-secret.yaml" \
   --set audit.reader.existingSecret=amp-audit-opensearch-reader
