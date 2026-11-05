@@ -264,9 +264,22 @@ apiGateway:
 # chart appends the [collector] and [traffic_logging] tables to config_toml, so
 # config_toml must not define them itself. See deployments/AUDIT_LOGS.md.
 # Disabled, the rendered gateway configuration is unchanged.
+#
+# Off by default: the records go to stdout, so with the log pipeline in place
+# they also land in container-logs-* (30-day retention, broader readership),
+# and they carry subjects, client IPs and delegation claims. Turn it on
+# together with the rest of the audit pipeline (the quick-start installer does
+# this when log collection is installed).
+#
+# Gateway image: the gateway_id, organization, environment, audit_claims and
+# token_fingerprint_key keys, and the eventId/gateway/auth blocks they produce,
+# come from the audit-fields gateway change, which is not in the stock
+# 2026.09.24 image yet. On a gateway without it, records carry no
+# gateway.organization, so the audit API (which scopes gateway records by it)
+# never returns them; only AUDIT_GATEWAY_NAMESPACE_FALLBACK would.
 audit:
   trafficLogging:
-    enabled: true
+    enabled: false
     # Token claims copied into auth.claims. Claims are personal data: list only
     # what the trail needs. "act" is the RFC 8693 delegation chain.
     auditClaims: ["act"]

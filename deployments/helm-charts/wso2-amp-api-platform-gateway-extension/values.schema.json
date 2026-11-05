@@ -449,7 +449,7 @@
           "description": "Gateway traffic logging for the AMP audit trail. Appends [collector] and [traffic_logging] to config_toml; disabled, the rendered configuration is unchanged.",
           "properties": {
             "enabled": {
-              "default": true,
+              "default": false,
               "description": "Render the traffic-logging configuration.",
               "title": "enabled",
               "type": "boolean"
