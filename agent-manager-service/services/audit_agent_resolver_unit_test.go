@@ -239,3 +239,61 @@ func TestParseAgentArtifactHandle(t *testing.T) {
 		assert.False(t, ok, h)
 	}
 }
+
+// One caller going away must not fail the others waiting on the same build.
+func TestAuditAgentResolver_ACancelledCallerDoesNotFailConcurrentOnes(t *testing.T) {
+	repo := auditTestRepo()
+	inner := repo.ListAgentArtifactsFunc
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var buildCtxErr error
+	repo.ListAgentArtifactsFunc = func(ctx context.Context, ouID string) ([]repositories.AuditAgentArtifact, error) {
+		close(started)
+		<-release
+		buildCtxErr = ctx.Err()
+		return inner(ctx, ouID)
+	}
+	r := newAuditAgentResolver(repo, "", time.Minute, time.Now)
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := r.Index(firstCtx, auditTestOUID)
+		firstErr <- err
+	}()
+	<-started
+
+	type result struct {
+		idx *AuditAgentIndex
+		err error
+	}
+	second := make(chan result, 1)
+	go func() {
+		idx, err := r.Index(context.Background(), auditTestOUID)
+		second <- result{idx, err}
+	}()
+
+	cancelFirst()
+	require.ErrorIs(t, <-firstErr, context.Canceled, "the cancelled caller returns its own cancellation")
+
+	close(release)
+	got := <-second
+	require.NoError(t, got.err, "the other caller still gets the index")
+	_, ok := got.idx.LLMProxyAgent(auditTestExtProxy)
+	assert.True(t, ok)
+	assert.NoError(t, buildCtxErr, "the shared build is not cancelled with the first caller")
+}
+
+func TestAuditAgentResolver_EvictsIndicesOfIdleOrgs(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	r := newAuditAgentResolver(auditTestRepo(), "", time.Minute, func() time.Time { return now })
+	_, err := r.Index(context.Background(), "idle-ou")
+	require.NoError(t, err)
+	now = now.Add(auditAgentIndexRetention)
+	_, err = r.Index(context.Background(), auditTestOUID)
+	require.NoError(t, err)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	assert.NotContains(t, r.cache, "idle-ou")
+	assert.Contains(t, r.cache, auditTestOUID)
+}

@@ -286,20 +286,53 @@ func (r *auditAgentResolver) Index(ctx context.Context, ouID string) (*AuditAgen
 	}
 
 	// One build per org at a time; the lock is not held across the queries.
-	v, err, _ := r.group.Do(ouID, func() (any, error) {
-		idx, err := r.build(ctx, ouID)
+	//
+	// The build is shared by every concurrent caller for the org, so it must
+	// not run on any one caller's context: if the first caller went away, all
+	// the others would fail with its cancellation. It runs detached from
+	// cancellation (keeping the context's values) under its own deadline, and
+	// each caller waits only as long as its own context allows.
+	ch := r.group.DoChan(ouID, func() (any, error) {
+		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditAgentIndexBuildTimeout)
+		defer cancel()
+		idx, err := r.build(buildCtx, ouID)
 		if err != nil {
 			return nil, err
 		}
-		r.mu.Lock()
-		r.cache[ouID] = cachedAuditIndex{index: idx, builtAt: r.now()}
-		r.mu.Unlock()
+		r.store(ouID, idx)
 		return idx, nil
 	})
-	if err != nil {
-		return nil, err
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*AuditAgentIndex), nil
 	}
-	return v.(*AuditAgentIndex), nil
+}
+
+// auditAgentIndexBuildTimeout bounds one index build, which no caller's
+// context bounds any more.
+const auditAgentIndexBuildTimeout = 30 * time.Second
+
+// auditAgentIndexRetention is how long an org's index is kept after it was
+// built. Entries are only reused for the TTL; this bounds the memory held for
+// orgs that queried once and never again (each index holds the org's key
+// fingerprints).
+const auditAgentIndexRetention = 10 * auditAgentIndexTTL
+
+func (r *auditAgentResolver) store(ouID string, idx *AuditAgentIndex) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	for id, c := range r.cache {
+		if now.Sub(c.builtAt) >= auditAgentIndexRetention {
+			delete(r.cache, id)
+		}
+	}
+	r.cache[ouID] = cachedAuditIndex{index: idx, builtAt: now}
 }
 
 func (r *auditAgentResolver) build(ctx context.Context, ouID string) (*AuditAgentIndex, error) {
