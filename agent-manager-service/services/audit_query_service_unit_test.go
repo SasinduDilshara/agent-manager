@@ -24,12 +24,14 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/auditstoresvc"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
@@ -167,5 +169,182 @@ func TestAuditQueryService_Errors(t *testing.T) {
 		require.Len(t, resp.Events, 1)
 		assert.Equal(t, "x", resp.Events[0].Id)
 		assert.True(t, strings.HasPrefix(resp.Events[0].Summary, "api:invoke"))
+	})
+}
+
+// captureSink keeps every record the recorder writes, after redaction.
+type captureSink struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (c *captureSink) Write(_ context.Context, events []audit.Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, events...)
+	return nil
+}
+
+func (c *captureSink) Name() string { return "capture" }
+
+// recordedAuditReads runs fn with a real recorder and returns the audit:read
+// records it wrote, redacted as they would reach the trail.
+func recordedAuditReads(t *testing.T, fn func(ctx context.Context)) []audit.Event {
+	t.Helper()
+	sink := &captureSink{}
+	rec := audit.NewRecorder(sink, slog.New(slog.NewTextHandler(io.Discard, nil)), audit.Config{})
+	fn(audit.WithRecorder(context.Background(), rec))
+	require.NoError(t, rec.Close(context.Background()))
+	var out []audit.Event
+	for _, e := range sink.events {
+		if e.Action == audit.ActionAuditRead {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func TestAuditQueryService_RecordsWhatWasSearched(t *testing.T) {
+	docs := loadGatewayFixture(t)[:3]
+	store := &clientmocks.AuditStoreClientMock{
+		SearchFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+			return fakeSearchResponse(t, docs, 42, "eq"), nil
+		},
+	}
+	start := auditFixtureTime.Add(-2 * time.Hour)
+	end := auditFixtureTime
+	// Word-shaped, so the secret-shaped masker leaves it alone.
+	search := strings.Repeat("tool ", auditSearchDetailMax/5) + "x"
+	cursor, err := encodeAuditCursor([]json.RawMessage{json.RawMessage("1793799288935"), json.RawMessage(`"doc-9"`)}, true)
+	require.NoError(t, err)
+
+	records := recordedAuditReads(t, func(ctx context.Context) {
+		_, err := auditTestService(store).ListEvents(ctx, AuditQuery{
+			OUID: auditTestOUID, OrgHandle: auditTestOrgHandle,
+			Start: start, End: end,
+			Categories:  []string{"mcp"},
+			Agents:      []string{"default/ext-audit-agent"},
+			Project:     "default",
+			Environment: "default",
+			Outcomes:    []string{"STARTED", "DENIED"},
+			Actor:       "alice",
+			Search:      search,
+			Limit:       2,
+			Cursor:      cursor,
+			Ascending:   true,
+		})
+		require.NoError(t, err)
+	})
+	require.Len(t, records, 1)
+	e := records[0]
+	assert.Equal(t, audit.ClassRead, e.ActionClass)
+	assert.Equal(t, audit.OutcomeSuccess, e.Outcome)
+	assert.Equal(t, auditTestOUID, e.OUID)
+	assert.Equal(t, auditTestOrgHandle, e.OrgHandle)
+
+	d := e.Details
+	assert.NotContains(t, d, "_droppedKeys", "every detail must be declared in the action's schema")
+	assert.Equal(t, start.UTC().Format(time.RFC3339), d["startTime"])
+	assert.Equal(t, end.UTC().Format(time.RFC3339), d["endTime"])
+	assert.Equal(t, []string{"MCP"}, d["categories"], "normalised values are recorded")
+	assert.Equal(t, []string{"default/ext-audit-agent"}, d["agents"])
+	assert.Equal(t, []string{"STARTED", "DENIED"}, d["outcomes"])
+	assert.Equal(t, "default", d["project"])
+	assert.Equal(t, "default", d["environment"])
+	assert.Equal(t, "alice", d["actor"])
+	assert.Equal(t, search, d["search"])
+	assert.Equal(t, false, d["searchTruncated"])
+	assert.EqualValues(t, 2, d["limit"])
+	assert.Equal(t, "asc", d["sort"])
+	assert.Equal(t, true, d["cursorUsed"])
+	assert.EqualValues(t, 2, d["resultCount"], "the page returned, not the extra look-ahead hit")
+	assert.EqualValues(t, 42, d["totalMatched"])
+
+	b, err := json.Marshal(e)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), cursor, "the cursor value is never recorded")
+}
+
+func TestAuditQueryService_RecordsDefaultsAndFailures(t *testing.T) {
+	t.Run("defaults are the effective query", func(t *testing.T) {
+		store := &clientmocks.AuditStoreClientMock{SearchFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+			return fakeSearchResponse(t, nil, 0, "eq"), nil
+		}}
+		records := recordedAuditReads(t, func(ctx context.Context) {
+			_, err := auditTestService(store).ListEvents(ctx, AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle})
+			require.NoError(t, err)
+		})
+		require.Len(t, records, 1)
+		d := records[0].Details
+		now := auditFixtureTime.Add(time.Hour)
+		assert.Equal(t, now.Add(-24*time.Hour).UTC().Format(time.RFC3339), d["startTime"])
+		assert.Equal(t, now.UTC().Format(time.RFC3339), d["endTime"])
+		assert.EqualValues(t, AuditDefaultLimit, d["limit"])
+		assert.Equal(t, "desc", d["sort"])
+		assert.Equal(t, false, d["cursorUsed"])
+		assert.Equal(t, false, d["searchTruncated"])
+		assert.EqualValues(t, 0, d["resultCount"])
+		assert.Equal(t, []string{}, d["categories"])
+	})
+
+	t.Run("store failure records the search without the transport cause", func(t *testing.T) {
+		store := &clientmocks.AuditStoreClientMock{SearchFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+			return nil, fmt.Errorf("%w: dial tcp 10.43.0.9:9200 index amp-audit-x", auditstoresvc.ErrStoreUnavailable)
+		}}
+		records := recordedAuditReads(t, func(ctx context.Context) {
+			_, err := auditTestService(store).ListEvents(ctx, AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle, Agents: []string{"ext-audit-agent"}})
+			require.ErrorIs(t, err, ErrAuditStoreUnavailable)
+		})
+		require.Len(t, records, 1)
+		e := records[0]
+		assert.Equal(t, audit.OutcomeFailure, e.Outcome)
+		assert.Equal(t, ErrAuditStoreUnavailable.Error(), e.ErrorMessage)
+		assert.Equal(t, []string{"ext-audit-agent"}, e.Details["agents"])
+		assert.EqualValues(t, 0, e.Details["resultCount"])
+		assert.NotContains(t, e.Details, "totalMatched")
+	})
+
+	t.Run("invalid query is recorded as a failure", func(t *testing.T) {
+		store := &clientmocks.AuditStoreClientMock{}
+		records := recordedAuditReads(t, func(ctx context.Context) {
+			_, err := auditTestService(store).ListEvents(ctx, AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle, Outcomes: []string{"MAYBE"}})
+			require.ErrorIs(t, err, ErrAuditInvalidQuery)
+		})
+		require.Len(t, records, 1)
+		assert.Equal(t, audit.OutcomeFailure, records[0].Outcome)
+		assert.Equal(t, []string{"MAYBE"}, records[0].Details["outcomes"], "a rejected query is recorded as sent")
+	})
+
+	t.Run("over-long search text is truncated in the record", func(t *testing.T) {
+		store := &clientmocks.AuditStoreClientMock{}
+		records := recordedAuditReads(t, func(ctx context.Context) {
+			_, err := auditTestService(store).ListEvents(ctx, AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle, Search: strings.Repeat("tool ", 60)})
+			require.ErrorIs(t, err, ErrAuditInvalidQuery)
+		})
+		require.Len(t, records, 1)
+		assert.Equal(t, strings.Repeat("tool ", 60)[:auditSearchDetailMax], records[0].Details["search"])
+		assert.Equal(t, true, records[0].Details["searchTruncated"])
+	})
+
+	t.Run("a pasted token in the search text is masked", func(t *testing.T) {
+		store := &clientmocks.AuditStoreClientMock{SearchFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+			return fakeSearchResponse(t, nil, 0, "eq"), nil
+		}}
+		jwtLike := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlc2lnbmF0dXJl"
+		records := recordedAuditReads(t, func(ctx context.Context) {
+			_, err := auditTestService(store).ListEvents(ctx, AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle, Search: jwtLike})
+			require.NoError(t, err)
+		})
+		require.Len(t, records, 1)
+		assert.NotContains(t, records[0].Details["search"], "eyJhbGciOiJIUzI1NiJ9")
+	})
+
+	t.Run("disabled API records nothing", func(t *testing.T) {
+		records := recordedAuditReads(t, func(ctx context.Context) {
+			svc := NewAuditQueryService(config.Config{}, nil, NewAuditAgentResolver(auditTestRepo(), ""), slog.Default())
+			_, err := svc.ListEvents(ctx, AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle})
+			require.ErrorIs(t, err, ErrAuditQueryDisabled)
+		})
+		assert.Empty(t, records)
 	})
 }

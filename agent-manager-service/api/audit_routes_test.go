@@ -206,5 +206,6 @@ func TestAuditRoute_ReadingTheTrailIsAudited(t *testing.T) {
 	meta := audit.NewRouteMeta("GET /orgs/{orgName}/audit/events", []string{"orgName"},
 		[]rbac.Permission{rbac.ObservabilityLogRead})
 	assert.True(t, meta.Audited, "reading the audit trail must itself be recorded")
-	assert.Equal(t, audit.Action("observability:log-read"), meta.Action)
+	assert.Equal(t, audit.ActionAuditRead, meta.Action)
+	assert.Equal(t, audit.ClassRead, meta.Action.Class())
 }

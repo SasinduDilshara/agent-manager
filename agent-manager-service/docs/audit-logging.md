@@ -202,7 +202,9 @@ On installs that use the bundled OpenChoreo log module, the AMP observability ex
 
 ### Reading the trail back
 
-`GET /api/v1/orgs/{orgName}/audit/events` (permission `observability:log-read`) queries those indices and returns control-plane records and gateway traffic records in one normalised shape, scoped to the caller's organization: control-plane records by `ouId`, gateway records by the organization the gateway was configured with. Records written without an organization — `system:startup`, and the gateway key-sync reads on the internal surface — are platform-level and are not returned to any organization. Reading the trail is itself recorded (the route is in `sensitiveReadPaths`). The API is off unless `AUDIT_QUERY_ENABLED` is set; see Configuration.
+`GET /api/v1/orgs/{orgName}/audit/events` (permission `observability:log-read`) queries those indices and returns control-plane records and gateway traffic records in one normalised shape, scoped to the caller's organization: control-plane records by `ouId`, gateway records by the organization the gateway was configured with. Records written without an organization — `system:startup`, and the gateway key-sync reads on the internal surface — are platform-level and are not returned to any organization. Reading the trail is itself recorded (the route is in `sensitiveReadPaths`) as `audit:read`, with the search in `details`: the effective time range, the category, agent, project, environment, outcome and actor filters, the search text (at most 256 characters), the limit and sort, whether a cursor was sent (never its value), and the number of records returned and matched. That answers "who searched for agent X's records". A rejected search is recorded as sent, alongside the route's envelope record carrying the HTTP status.
+
+The API reports each record's outcome as `SUCCESS`, `DENIED`, `FAILED` or `STARTED`. `STARTED` is an `audit.Begin` intent record (`outcome: "unknown"`); its result is the record whose `details.attemptEventId` names it, so `outcome=SUCCESS` does not count an attempt that went on to fail. A `STARTED` record with no linked result is an orphan (see [Reliability](#reliability)). The API is off unless `AUDIT_QUERY_ENABLED` is set; see Configuration.
 
 ### Tamper evidence
 
@@ -350,6 +352,7 @@ The operations below emit a record describing what actually changed, not just th
 | Per-config API keys | `api-key:create` / `:rotate` / `:revoke` (model-config, mcp-config) | Fail-closed |
 | Monitors | `monitor:create` / `:update` / `:delete` / `:start` / `:stop` / `:rerun` | Fail-open |
 | Monitors | `monitor:run-failed` (scheduler, system actor) | Fail-open |
+| Audit trail | `audit:read` (search parameters and result count) | Fail-open |
 
 Three of these carry detail worth calling out:
 
@@ -389,6 +392,7 @@ The registry is the source of truth (`audit/actions.go`, `audit/actions_domain.g
 | `api-key:revoke` | credential | 4 critical | `gatewayCount`, `keyName`, `ownerName`, `ownerType` |
 | `api-key:rotate` | credential | 4 critical | `expiresAt`, `gatewayConnected`, `gatewayCount`, `keyName`, `ownerName`, `ownerType` |
 | `api-key:sync` | read | 2 notice | `keyCount` |
+| `audit:read` | read | 2 notice | `actor`, `agents`, `categories`, `cursorUsed`, `endTime`, `environment`, `limit`, `outcomes`, `project`, `resultCount`, `search`, `searchTruncated`, `sort`, `startTime`, `totalMatched` |
 | `authn:failure` | authn | 3 warning | `authHeader`, `reason` |
 | `authz:deny` | authz | 3 warning | `grantedScopes`, `imageId`, `missingScope`, `reason` |
 | `authz:root-ou-bypass` | authz | 4 critical | `rootOUBypass` |

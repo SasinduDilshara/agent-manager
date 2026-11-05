@@ -88,7 +88,8 @@ The `amp-audit-retention` ISM policy deletes each daily index 186 days after cre
 
 ## Security considerations
 
-- The audit query API requires `observability:log-read` and is scoped to the caller's organization. Reading the trail is itself recorded, because the route is listed in `sensitiveReadPaths`.
+- The audit query API requires `observability:log-read` and is scoped to the caller's organization. Reading the trail is itself recorded as `audit:read`, because the route is listed in `sensitiveReadPaths`. The record carries the filters used (time range, category, agent, project, environment, outcome, actor, search text up to 256 characters, limit, and whether a cursor was sent) and the number of records returned. It never carries the cursor value.
+- Each event's `outcome` is `SUCCESS`, `DENIED`, `FAILED` or `STARTED`. `STARTED` marks a control-plane intent record written before a privileged operation; the operation's result is a separate record whose `details.attemptEventId` points back to it. `outcome=SUCCESS` matches only completed successes.
 - AMS reads OpenSearch with a dedicated identity that can only read and search `amp-audit-*`. Fluent Bit and the setup Job use the logs module's admin credentials, as the module already does.
 - Only records from the expected containers are copied into the audit indices: the gateway runtime container with its system-component label, and the Agent Manager container in its namespace. The `audit_source` field is set by Fluent Bit, never taken from the line itself. Anyone who can create pods with those names and labels in the cluster is trusted to the same degree as the platform components.
 - Traffic records carry no headers or bodies. Token claims are limited to `auditClaims`. API keys appear only as an HMAC fingerprint (`hmac-sha256:…`) when a fingerprint key is configured, and are omitted otherwise.

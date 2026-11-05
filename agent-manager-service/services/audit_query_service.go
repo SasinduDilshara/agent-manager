@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/auditstoresvc"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/spec"
@@ -98,16 +99,107 @@ func (s *auditQueryService) ListEvents(ctx context.Context, q AuditQuery) (*spec
 	if !s.enabled {
 		return nil, ErrAuditQueryDisabled
 	}
-	if err := q.Normalize(s.now()); err != nil {
+	resp, err := s.listEvents(ctx, &q)
+	recordAuditRead(ctx, &q, resp, err)
+	return resp, err
+}
+
+// auditSearchDetailMax bounds the recorded search text. A valid query is
+// already this short; a rejected one is recorded as sent, so it can be longer.
+const auditSearchDetailMax = 256
+
+// recordAuditRead records a search of the audit trail: which filters were
+// used and how many records came back, so "who searched for agent X" can be
+// answered from the trail itself. Fail-open: a read discloses records but
+// creates nothing, so refusing it when the recorder is down would cost more
+// than it protects.
+//
+// q is the query after Normalize when that succeeded, so the time range is the
+// effective one (defaults applied); a rejected query is recorded as sent. The cursor value is never recorded, only
+// whether one was sent. A failed request is also recorded by the route's
+// envelope with its HTTP status; this record adds what was searched.
+func recordAuditRead(ctx context.Context, q *AuditQuery, resp *spec.AuditEventListResponse, err error) {
+	search := q.Search
+	truncated := false
+	if r := []rune(search); len(r) > auditSearchDetailMax {
+		search = string(r[:auditSearchDetailMax])
+		truncated = true
+	}
+	sort := "desc"
+	if q.Ascending {
+		sort = "asc"
+	}
+	opts := []audit.Option{
+		audit.Org(q.OUID),
+		audit.OrgHandle(q.OrgHandle),
+		audit.Detail("categories", nonNilStrings(q.Categories)),
+		audit.Detail("agents", nonNilStrings(q.Agents)),
+		audit.Detail("outcomes", nonNilStrings(q.Outcomes)),
+		audit.Detail("project", q.Project),
+		audit.Detail("environment", q.Environment),
+		audit.Detail("actor", q.Actor),
+		audit.Detail("search", search),
+		audit.Detail("searchTruncated", truncated),
+		audit.Detail("limit", q.Limit),
+		audit.Detail("sort", sort),
+		audit.Detail("cursorUsed", q.Cursor != ""),
+		audit.Result(auditReadResultError(err)),
+	}
+	if !q.Start.IsZero() {
+		opts = append(opts, audit.Detail("startTime", q.Start.UTC().Format(time.RFC3339)))
+	}
+	if !q.End.IsZero() {
+		opts = append(opts, audit.Detail("endTime", q.End.UTC().Format(time.RFC3339)))
+	}
+	resultCount := 0
+	if resp != nil {
+		resultCount = len(resp.Events)
+		opts = append(opts, audit.Detail("totalMatched", resp.Total))
+	}
+	opts = append(opts, audit.Detail("resultCount", resultCount))
+	audit.Record(ctx, audit.ActionAuditRead, opts...)
+}
+
+// auditReadResultError reduces a query error to what the record may carry. A
+// store error wraps the transport cause (hosts, index names), which the caller
+// is never shown and the trail does not need either.
+func auditReadResultError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrAuditInvalidQuery):
+		return err
+	case errors.Is(err, ErrAuditStoreUnavailable):
+		return ErrAuditStoreUnavailable
+	default:
+		return errAuditReadInternal
+	}
+}
+
+var errAuditReadInternal = errors.New("audit query failed")
+
+func nonNilStrings(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
+}
+
+// listEvents runs the query. q is replaced by its normalised form only when
+// normalisation succeeds, so a rejected query is recorded as the caller sent it.
+func (s *auditQueryService) listEvents(ctx context.Context, q *AuditQuery) (*spec.AuditEventListResponse, error) {
+	normalized := *q
+	if err := normalized.Normalize(s.now()); err != nil {
 		return nil, err
 	}
+	*q = normalized
 
 	idx, err := s.resolver.Index(ctx, q.OUID)
 	if err != nil {
 		return nil, fmt.Errorf("build audit agent index: %w", err)
 	}
 
-	body, err := buildAuditSearchBody(&q, idx, s.namespaceFallback)
+	body, err := buildAuditSearchBody(q, idx, s.namespaceFallback)
 	if err != nil {
 		return nil, err
 	}

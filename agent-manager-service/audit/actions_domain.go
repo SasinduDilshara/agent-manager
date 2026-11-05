@@ -77,6 +77,11 @@ const (
 	ActionProjectRead     Action = "project:read"
 	ActionEnvironmentRead Action = "environment:read"
 
+	// ActionAuditRead is a search of the org's audit trail. Unlike the other
+	// reads it is recorded (the route is a sensitive read), with what was
+	// searched for and how many records came back.
+	ActionAuditRead Action = "audit:read"
+
 	// Agent lifecycle.
 	ActionAgentCreate                Action = "agent:create"
 	ActionProjectCreate              Action = "project:create"
@@ -334,6 +339,30 @@ func init() {
 	RegisterDetailSchema(ActionProjectRead, nil)
 	Register(ActionEnvironmentRead, ClassRead, SeverityInfo)
 	RegisterDetailSchema(ActionEnvironmentRead, nil)
+
+	// Searching the audit trail. "Who searched for agent X's records" needs
+	// the filters, not just the route. The search text is caller-supplied, so
+	// it is truncated at the emit site and passes the secret-shaped masker
+	// like every other detail; the cursor is an opaque position, so only its
+	// presence is recorded.
+	Register(ActionAuditRead, ClassRead, SeverityNotice)
+	RegisterDetailSchema(ActionAuditRead, map[string]FieldKind{
+		"startTime":       KindIdentifier,
+		"endTime":         KindIdentifier,
+		"categories":      KindNameList,
+		"agents":          KindNameList,
+		"project":         KindName,
+		"environment":     KindName,
+		"outcomes":        KindNameList,
+		"actor":           KindName,
+		"search":          KindName,
+		"searchTruncated": KindFlag,
+		"limit":           KindCount,
+		"sort":            KindEnum,
+		"cursorUsed":      KindFlag,
+		"resultCount":     KindCount,
+		"totalMatched":    KindCount,
+	})
 
 	Register(ActionAgentCreate, ClassConfig, SeverityNotice)
 	RegisterDetailSchema(ActionAgentCreate, map[string]FieldKind{
