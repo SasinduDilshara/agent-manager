@@ -180,6 +180,11 @@ func guardedRoutes(org string) []guardedRoute {
 		{http.MethodDelete, orgBase + "/agent-kinds/" + absentName, []string{"amp:agent-kind:delete"}},
 		{http.MethodGet, orgBase + "/catalog", []string{"amp:catalog:read"}},
 
+		// --- Org audit trail -----------------------------------------------------
+		// Its own scope: log-read (held by Developer) must not reach it. With the
+		// audit API off the allow case answers 503, which still passes authz.
+		{http.MethodGet, orgBase + "/audit/events?limit=1", []string{"amp:audit:read"}},
+
 		// --- Evaluators --------------------------------------------------------
 		{http.MethodPost, orgBase + "/evaluators/custom", []string{"amp:evaluator:create"}},
 		{http.MethodDelete, orgBase + "/evaluators/custom/" + absentName, []string{"amp:evaluator:delete"}},
