@@ -31,7 +31,7 @@ The organization always comes from the caller's token. It is never taken from th
 - Control-plane records are matched on `event.ouId`.
 - Gateway records are matched on `gateway.organization`, which the gateway extension sets from `agentManager.orgName`.
 
-Some records carry no organization: AMS `system:startup`, and gateway key-sync reads on the internal surface. These are platform-level records and are not returned to any organization.
+Some records carry no organization: AMS `system:startup`, and gateway key-sync reads on the internal surface. These are platform-level records and are not returned to any organization. Records of platform-admin routes (those without `{orgName}`, such as the cross-org gateway failure summary) are stamped with the acting admin's own organization from the token, so they appear in the platform-admin organization's trail, to its `audit:read` holders, and not in the trail of the tenant whose data was read.
 
 `AUDIT_GATEWAY_NAMESPACE_FALLBACK=true` makes the API also accept gateway records that have no `gateway.organization` (written by a gateway configured before this feature) when they come from a namespace starting with `<org>-`. The fallback is off by default. A prefix cannot tell org `acme` from org `acme-labs`, so enable it only when no org handle is a hyphenated extension of another.
 
@@ -89,6 +89,10 @@ To join API-key calls back to their keys, give every gateway and Agent Manager t
 ## Event time
 
 The API filters and sorts on `@timestamp`. The setup Job installs an `amp-audit-event-time` ingest pipeline, the default pipeline of every `amp-audit-*` index, that sets `@timestamp` to when the event happened (the gateway's `timestamp`, the control plane's `event.occurredAt`) and keeps the Fluent Bit collection time as `collectedAt`. The time range and the order therefore match the time each row shows, also after a store outage or a Fluent Bit backlog. A record whose own time is missing or unparseable keeps the collection time. Records indexed before the pipeline existed keep the collection time as `@timestamp`, normally seconds after the event.
+
+## GitOps and `helm template`
+
+Two Secrets are generated on first install and kept with `lookup`: the observability extension's reader Secret (`amp-audit-opensearch-reader`) and each gateway's traffic-log fingerprint key. `lookup` returns nothing under `helm template`, `--dry-run` and Argo CD, so every sync there would generate new values: the reader password would no longer match Agent Manager's copy (the API answers 502), and fingerprints would stop being comparable over time. GitOps installs must create these Secrets themselves and name them: `audit.reader.existingSecret` on the observability extension, and `audit.trafficLogging.fingerprintKeySecret.name` on each gateway.
 
 ## Retention
 

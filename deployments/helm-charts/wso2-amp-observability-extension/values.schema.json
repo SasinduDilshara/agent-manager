@@ -365,21 +365,24 @@
                   "description": "Container name.",
                   "minLength": 1,
                   "title": "containerName",
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
                 },
                 "podLabelKey": {
                   "default": "openchoreo.dev/system-component",
                   "description": "Pod label key the gateway runtime carries.",
                   "minLength": 1,
                   "title": "podLabelKey",
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^([a-z0-9]([a-z0-9.-]*[a-z0-9])?/)?[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$"
                 },
                 "podLabelValue": {
                   "default": "gateway-runtime",
                   "description": "Value of that label.",
                   "minLength": 1,
                   "title": "podLabelValue",
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$"
                 }
               },
               "title": "gateway",
@@ -394,14 +397,16 @@
                   "description": "Container name.",
                   "minLength": 1,
                   "title": "containerName",
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
                 },
                 "namespace": {
                   "default": "wso2-amp",
                   "description": "Namespace Agent Manager is installed in.",
                   "minLength": 1,
                   "title": "namespace",
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
                 }
               },
               "title": "controlPlane",
