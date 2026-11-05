@@ -101,6 +101,35 @@ data:
         Regex      $kubernetes['container_name'] ^{{ $cp.containerName }}$
         Regex      $kubernetes['namespace_name'] ^{{ $cp.namespace }}$
 
+    # The audit indices keep only the namespace, pod and container names of
+    # the Kubernetes metadata. The rest (node host, pod IP and id, image and
+    # digest, labels, annotations such as checksum/secret) describes the
+    # shared platform pods, not the tenant's activity, and the audit API
+    # serves these records to org users. Done after the grep filters, which
+    # need the pod label, and only on audit.*: container-logs keep everything.
+    [FILTER]
+        Name         nest
+        Match        audit.*
+        Operation    lift
+        Nested_under kubernetes
+        Add_prefix   amp_k8s_
+
+    [FILTER]
+        Name            modify
+        Match           audit.*
+        Rename          amp_k8s_namespace_name amp_keep_namespace_name
+        Rename          amp_k8s_pod_name amp_keep_pod_name
+        Rename          amp_k8s_container_name amp_keep_container_name
+        Remove_wildcard amp_k8s_
+
+    [FILTER]
+        Name          nest
+        Match         audit.*
+        Operation     nest
+        Wildcard      amp_keep_*
+        Nest_under    kubernetes
+        Remove_prefix amp_keep_
+
     # Lift the JSON line into the record. On success the raw "log" field is
     # dropped (Preserve_Key Off); a line that fails to parse keeps it.
     [FILTER]

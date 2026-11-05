@@ -49,6 +49,7 @@ import {
   actorTypeLabel,
   agentLabel,
   delegationPath,
+  displayRaw,
   formatAbsoluteTime,
   formatNumber,
 } from "../auditFormat";
@@ -206,7 +207,7 @@ export function AuditEventDrawer({ event, onClose }: AuditEventDrawerProps) {
 
 export function AuditEventDetails({ event, onClose }: { event: AuditEvent; onClose: () => void }) {
   const denied = event.decision?.deniedBy;
-  const raw = JSON.stringify(event.raw ?? event, null, 2);
+  const raw = JSON.stringify(displayRaw(event.raw) ?? event, null, 2);
   const a2a = event.a2a;
 
   return (

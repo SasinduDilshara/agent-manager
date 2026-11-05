@@ -27,6 +27,7 @@ import {
   OUTCOME_LABEL,
   toCsv,
   toJson,
+  displayRaw,
 } from "../auditFormat";
 import {
   ALL_EVENTS,
@@ -118,5 +119,39 @@ describe("outcome presentation", () => {
     expect(OUTCOME_LABEL.STARTED).toBe("Started");
     expect(OUTCOME_COLOR.STARTED).toBe("default");
     expect(OUTCOME_COLOR.SUCCESS).toBe("success");
+  });
+});
+
+describe("raw view", () => {
+  const platform = {
+    namespace_name: "wso2-amp",
+    pod_name: "amp-api-1",
+    container_name: "agent-manager-service",
+    host: "node-0",
+    pod_ip: "10.42.0.37",
+    container_image: "local/amp-api@sha256:deadbeef",
+    labels: { "pod-template-hash": "6f9c" },
+    annotations: { "checksum/secret": "abc" },
+  };
+
+  it("keeps only the namespace, pod and container names of the Kubernetes block", () => {
+    const raw = displayRaw({ event: { action: "agent:create" }, kubernetes: platform });
+    expect(raw).toEqual({
+      event: { action: "agent:create" },
+      kubernetes: { namespace_name: "wso2-amp", pod_name: "amp-api-1", container_name: "agent-manager-service" },
+    });
+  });
+
+  it("drops a Kubernetes block with nothing safe to show", () => {
+    expect(displayRaw({ status: 200, kubernetes: { host: "node-0" } })).toEqual({ status: 200 });
+    expect(displayRaw(undefined)).toBeUndefined();
+  });
+
+  it("exports JSON without platform metadata", () => {
+    const json = toJson([{ ...llmChatOk, raw: { ...(llmChatOk.raw ?? {}), kubernetes: platform } }]);
+    for (const leak of ["pod_ip", "10.42.0.37", "node-0", "sha256:deadbeef", "checksum/secret", "pod-template-hash"]) {
+      expect(json).not.toContain(leak);
+    }
+    expect(json).toContain("amp-api-1");
   });
 });

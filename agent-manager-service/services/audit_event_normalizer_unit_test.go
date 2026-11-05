@@ -394,3 +394,80 @@ func TestAuditEvent_JSONShape(t *testing.T) {
 		assert.Contains(t, actor, k)
 	}
 }
+
+// withPlatformMetadata adds the Kubernetes block Fluent Bit's kubernetes filter
+// writes for a shared platform pod, as captured from the live cluster.
+func withPlatformMetadata(doc map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range doc {
+		out[k] = v
+	}
+	out["@timestamp"] = "2026-11-04T11:01:00.123Z"
+	out["stream"] = "stdout"
+	out["_p"] = "F"
+	out["time"] = "2026-11-04T11:01:00.120Z"
+	out["kubernetes"] = map[string]any{
+		"pod_name":        "amp-agent-manager-service-6f9c-abcde",
+		"namespace_name":  "wso2-amp",
+		"pod_id":          "0b6f0d6e-1111-2222-3333-444455556666",
+		"host":            "k3d-amp-local-server-0",
+		"pod_ip":          "10.42.0.37",
+		"container_name":  "agent-manager-service",
+		"docker_id":       "c0ffee",
+		"container_hash":  "local/amp-api@sha256:deadbeef",
+		"container_image": "local/amp-api:audit-dev2",
+		"labels":          map[string]any{"app.kubernetes.io/component": "agent-manager-service", "pod-template-hash": "6f9c"},
+		"annotations":     map[string]any{"checksum/secret": "abc123", "checksum/config": "def456"},
+	}
+	return out
+}
+
+func TestAuditRawView_DropsPlatformMetadata(t *testing.T) {
+	idx := auditTestIndex(t)
+	for name, doc := range map[string]map[string]any{
+		"gateway":       loadGatewayFixture(t)[0],
+		"control plane": loadControlPlaneFixture(t)[0],
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := normalizeAuditDocument("doc-id", withPlatformMetadata(doc), idx)
+			raw := e.Raw
+			k8s, ok := raw["kubernetes"].(map[string]any)
+			require.True(t, ok, "namespace and pod names are kept")
+			assert.Equal(t, map[string]any{
+				"namespace_name": "wso2-amp",
+				"pod_name":       "amp-agent-manager-service-6f9c-abcde",
+				"container_name": "agent-manager-service",
+			}, k8s)
+			for _, k := range []string{"stream", "_p"} {
+				assert.NotContains(t, raw, k)
+			}
+			assert.Equal(t, "2026-11-04T11:01:00.123Z", raw["@timestamp"])
+			assert.Contains(t, raw, "audit_source")
+
+			b, err := json.Marshal(raw)
+			require.NoError(t, err)
+			for _, leak := range []string{"pod_ip", "10.42.0.37", "k3d-amp-local-server-0", "pod_id", "docker_id",
+				"container_image", "sha256:deadbeef", "checksum/secret", "annotations", "labels", "pod-template-hash"} {
+				assert.NotContains(t, string(b), leak)
+			}
+		})
+	}
+	t.Run("the record's own fields are kept", func(t *testing.T) {
+		doc := loadGatewayFixture(t)[0]
+		raw := normalizeAuditDocument("doc-id", withPlatformMetadata(doc), idx).Raw
+		for k := range doc {
+			if k != "kubernetes" {
+				assert.Contains(t, raw, k)
+			}
+		}
+		cp := loadControlPlaneFixture(t)[0]
+		raw = normalizeAuditDocument("doc-id", withPlatformMetadata(cp), idx).Raw
+		assert.Equal(t, cp["event"], raw["event"])
+		assert.Equal(t, "audit", raw["log_type"])
+	})
+	t.Run("an unknown top-level field added by the pipeline is not returned", func(t *testing.T) {
+		doc := withPlatformMetadata(loadGatewayFixture(t)[0])
+		doc["node_labels"] = map[string]any{"topology.kubernetes.io/zone": "eu-1a"}
+		assert.NotContains(t, normalizeAuditDocument("doc-id", doc, idx).Raw, "node_labels")
+	})
+}

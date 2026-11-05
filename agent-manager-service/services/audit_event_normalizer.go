@@ -29,7 +29,7 @@ import (
 // control-plane audit record, each with the Kubernetes metadata Fluent Bit
 // adds — into the one AuditEvent shape the API returns. It never fails: a
 // field that is missing or of an unexpected type normalises to its zero value,
-// and the original document is always returned under raw.
+// and the record's own fields are always returned under raw (auditRawView).
 
 // Audit actor types, as returned by the API.
 const (
@@ -348,7 +348,7 @@ func normalizeControlPlaneRecord(docID string, doc map[string]any, idx *AuditAge
 		*spec.NewAuditNetwork(docString(ev, "sourceIp"), docString(ev, "userAgent")),
 		docString(ev, "correlationId"),
 		*spec.NewNullableAuditGateway(nil),
-		doc,
+		auditRawView(doc, auditRawControlPlaneFields),
 	)
 }
 
@@ -664,6 +664,56 @@ func normalizeGatewayRecord(docID string, doc map[string]any, idx *AuditAgentInd
 		*spec.NewAuditNetwork(docString(doc, "client", "ip"), docString(doc, "client", "userAgent")),
 		docString(doc, "correlationId"),
 		gateway,
-		doc,
+		auditRawView(doc, auditRawGatewayFields),
 	)
+}
+
+// --- raw view ----------------------------------------------------------------
+
+// The raw view is an allow-list, not the stored document. Fluent Bit stores
+// each record with the Kubernetes metadata of the pod that wrote it — node
+// host, pod IP and id, container image and digest, labels and annotations of
+// the shared Agent Manager and gateway pods. That describes the platform, not
+// the tenant's activity, so it is never returned: raw carries the record's own
+// fields, the source Fluent Bit stamped, and only the namespace, pod and
+// container names. An allow-list keeps a field the pipeline adds later out of
+// the API until someone decides it belongs there.
+
+// auditRawGatewayFields are the gateway traffic log's own top-level fields.
+var auditRawGatewayFields = []string{
+	"component", "eventId", "seq", "timestamp", "correlationId", "gateway", "status",
+	"api", "operation", "target", "client", "latencies", "auth", "ai", "mcp", "a2a",
+	"guardrail", "decision", "errorType", "error", "properties",
+}
+
+// auditRawControlPlaneFields are the Agent Manager audit line's own fields.
+var auditRawControlPlaneFields = []string{"time", "level", "msg", "log_type", "event"}
+
+// auditRawPipelineFields are added by the pipeline and safe to show.
+var auditRawPipelineFields = []string{"@timestamp", "audit_source"}
+
+// auditRawKubernetesFields are the Kubernetes metadata kept in raw.
+var auditRawKubernetesFields = []string{"namespace_name", "pod_name", "container_name"}
+
+func auditRawView(doc map[string]any, recordFields []string) map[string]any {
+	out := make(map[string]any, len(recordFields)+3)
+	for _, fields := range [][]string{recordFields, auditRawPipelineFields} {
+		for _, k := range fields {
+			if v, ok := doc[k]; ok {
+				out[k] = v
+			}
+		}
+	}
+	if k8s, ok := doc["kubernetes"].(map[string]any); ok {
+		kept := map[string]any{}
+		for _, k := range auditRawKubernetesFields {
+			if v, ok := k8s[k]; ok {
+				kept[k] = v
+			}
+		}
+		if len(kept) > 0 {
+			out["kubernetes"] = kept
+		}
+	}
+	return out
 }

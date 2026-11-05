@@ -326,6 +326,23 @@ describe("detail drawer", () => {
     expect(screen.getByTestId("raw-json")).toHaveTextContent('"terminalReason": "policy_denied"');
   });
 
+  it("shows no platform metadata in the raw JSON", async () => {
+    const leaky = {
+      ...mcpOboToolsCallDenied,
+      raw: {
+        ...(mcpOboToolsCallDenied.raw ?? {}),
+        kubernetes: { namespace_name: "default-default", pod_name: "gw-1", host: "node-0", pod_ip: "10.42.0.9" },
+      },
+    };
+    mockUseAuditEvents.mockImplementation(() => hookResult({ events: [leaky] }));
+    renderPage();
+    fireEvent.click(rowFor(leaky));
+    const raw = await screen.findByTestId("raw-json");
+    expect(raw).toHaveTextContent('"pod_name": "gw-1"');
+    expect(raw).not.toHaveTextContent("10.42.0.9");
+    expect(raw).not.toHaveTextContent("node-0");
+  });
+
   it("explains an intent record", async () => {
     mockUseAuditEvents.mockImplementation(() =>
       hookResult({ events: [...ALL_EVENTS, cpIdentityProvisionStarted] }),

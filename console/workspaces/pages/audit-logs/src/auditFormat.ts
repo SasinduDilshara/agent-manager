@@ -183,8 +183,35 @@ export function toCsv(events: AuditEvent[]): string {
   return [header, ...rows].join("\r\n") + "\r\n";
 }
 
+/** Kubernetes metadata the raw view may show; anything else describes the platform. */
+const RAW_KUBERNETES_FIELDS = ["namespace_name", "pod_name", "container_name"];
+
+/**
+ * The record's raw document as the console shows and exports it. The API
+ * already returns an allow-listed view; this also reduces any Kubernetes block
+ * to the namespace, pod and container names, so a console running against an
+ * older API never shows node hosts, pod IPs, images, labels or annotations.
+ */
+export function displayRaw(raw: AuditEvent["raw"]): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Record<string, unknown> = { ...raw };
+  const k8s = out.kubernetes;
+  if (k8s && typeof k8s === "object" && !Array.isArray(k8s)) {
+    const kept = Object.fromEntries(
+      RAW_KUBERNETES_FIELDS.filter((k) => k in k8s).map((k) => [k, (k8s as Record<string, unknown>)[k]]),
+    );
+    if (Object.keys(kept).length) out.kubernetes = kept;
+    else delete out.kubernetes;
+  }
+  return out;
+}
+
 export function toJson(events: AuditEvent[]): string {
-  return JSON.stringify(events, null, 2);
+  return JSON.stringify(
+    events.map((e) => (e.raw ? { ...e, raw: displayRaw(e.raw) } : e)),
+    null,
+    2,
+  );
 }
 
 export function exportFileName(orgName: string, ext: "csv" | "json", now = new Date()) {

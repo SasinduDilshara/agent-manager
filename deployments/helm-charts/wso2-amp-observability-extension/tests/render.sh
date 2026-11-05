@@ -187,6 +187,9 @@ check "the control-plane rule does not start with a quote" yes 'Rule            
 check "gateway records must come from the gateway runtime" yes "Regex      \$kubernetes['labels']['openchoreo.dev/system-component'] ^gateway-runtime\$"
 check "control-plane records must come from the Agent Manager namespace" yes "Regex      \$kubernetes['namespace_name'] ^wso2-amp\$"
 check "the source is set, not added" yes "Set   audit_source control-plane"
+check "audit records drop the Kubernetes metadata except names" yes "Remove_wildcard amp_k8s_"
+check "audit records keep the namespace name" yes "Rename          amp_k8s_namespace_name amp_keep_namespace_name"
+check "the metadata strip applies to audit records only" yes "Nested_under kubernetes"
 check "the Agent Manager namespace is configurable" yes "Regex      \$kubernetes['namespace_name'] ^amp-prod\$" \
   --set audit.sources.controlPlane.namespace=amp-prod
 check "retention defaults to 186 days" yes '"min_index_age": "186d"'
