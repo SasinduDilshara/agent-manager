@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Audit record field values written by the log pipeline (Fluent Bit adds
@@ -42,12 +43,17 @@ const (
 	AuditDefaultLimit = 50
 	AuditMaxLimit     = 200
 	// AuditMaxRange is the retention the pipeline keeps (six calendar months).
-	AuditMaxRange       = 186 * 24 * time.Hour
-	AuditDefaultRange   = 24 * time.Hour
-	auditMaxFilterText  = 256
-	auditMaxAgentValues = 20
-	auditMaxNameLength  = 128
-	auditMaxCursorBytes = 1024
+	AuditMaxRange     = 186 * 24 * time.Hour
+	AuditDefaultRange = 24 * time.Hour
+	// AuditMaxWildcardRange bounds actor and search, which are substring
+	// (leading-wildcard) matches, when nothing else narrows the query: over the
+	// full retention they would scan every daily index of a store all orgs
+	// share. An agent or project filter lifts the bound.
+	AuditMaxWildcardRange = 31 * 24 * time.Hour
+	auditMaxFilterText    = 256
+	auditMaxAgentValues   = 20
+	auditMaxNameLength    = 128
+	auditMaxCursorBytes   = 1024
 	// auditTrackTotalHits bounds the exact count; beyond it total is a lower
 	// bound and totalRelation says "gte".
 	auditTrackTotalHits = 10000
@@ -165,11 +171,16 @@ func (q *AuditQuery) Normalize(now time.Time) error {
 	q.Environment = strings.TrimSpace(q.Environment)
 	q.Actor = strings.TrimSpace(q.Actor)
 	q.Search = strings.TrimSpace(q.Search)
-	if len(q.Project) > auditMaxNameLength || len(q.Environment) > auditMaxNameLength {
+	if utf8.RuneCountInString(q.Project) > auditMaxNameLength || utf8.RuneCountInString(q.Environment) > auditMaxNameLength {
 		return invalidAuditQuery("project and environment may be at most %d characters", auditMaxNameLength)
 	}
-	if len(q.Actor) > auditMaxFilterText || len(q.Search) > auditMaxFilterText {
+	if utf8.RuneCountInString(q.Actor) > auditMaxFilterText || utf8.RuneCountInString(q.Search) > auditMaxFilterText {
 		return invalidAuditQuery("actor and search may be at most %d characters", auditMaxFilterText)
+	}
+	if (q.Actor != "" || q.Search != "") && len(q.Agents) == 0 && q.Project == "" &&
+		q.End.Sub(q.Start) > AuditMaxWildcardRange {
+		return invalidAuditQuery("actor and search may span at most %d days unless an agent or project filter is set",
+			int(AuditMaxWildcardRange.Hours()/24))
 	}
 	if q.Cursor != "" {
 		if _, err := decodeAuditCursor(q.Cursor, q.Ascending); err != nil {
@@ -205,7 +216,7 @@ func normalizeEnumList(name string, values, allowed []string) ([]string, error) 
 
 // splitAuditAgentFilter splits "project/agent" or "agent".
 func splitAuditAgentFilter(v string) (project, name string, err error) {
-	if len(v) > 2*auditMaxNameLength+1 {
+	if utf8.RuneCountInString(v) > 2*auditMaxNameLength+1 {
 		return "", "", invalidAuditQuery("agent filter %q is too long", v)
 	}
 	parts := strings.Split(v, "/")

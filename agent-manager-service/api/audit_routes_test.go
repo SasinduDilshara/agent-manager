@@ -326,3 +326,25 @@ func TestAuditRoute_OnlyAdminHoldsAuditReadByDefault(t *testing.T) {
 		assert.Equal(t, role == rbac.RoleAdmin, held, "role %q", role)
 	}
 }
+
+func TestAuditRoute_RateLimitIs429WithRetryAfter(t *testing.T) {
+	store := &clientmocks.AuditStoreClientMock{SearchFunc: func(context.Context, []byte) ([]byte, error) {
+		return []byte(emptySearchResponse), nil
+	}}
+	cfg := config.Config{}
+	cfg.AuditQuery.Enabled = true
+	cfg.AuditQuery.RateLimitPerMinute = 6 // burst 5
+	svc := services.NewAuditQueryService(cfg, store, services.NewAuditAgentResolver(emptyAttributionRepo(), ""),
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	mux := http.NewServeMux()
+	registerAuditRoutes(middleware.NewRouteRegistrar(mux, nil, audit.NewNoopRecorder()), controllers.NewAuditController(svc))
+
+	for i := 0; i < 5; i++ {
+		require.Equal(t, http.StatusOK, callAudit(t, mux, "/orgs/acme/audit/events", auditReader("ou-a", "acme")).Code)
+	}
+	rec := callAudit(t, mux, "/orgs/acme/audit/events", auditReader("ou-a", "acme"))
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.NotEmpty(t, rec.Header().Get("Retry-After"))
+	// Another org is unaffected.
+	assert.Equal(t, http.StatusOK, callAudit(t, mux, "/orgs/other/audit/events", auditReader("ou-b", "other")).Code)
+}

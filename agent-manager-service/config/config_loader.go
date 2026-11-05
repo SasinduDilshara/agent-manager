@@ -381,6 +381,7 @@ func loadEnvs() {
 		CAFile:                   r.readOptionalString("AUDIT_OPENSEARCH_CA_FILE", ""),
 		IndexPattern:             r.readOptionalString("AUDIT_INDEX_PATTERN", "amp-audit-*"),
 		RequestTimeoutSeconds:    int(r.readOptionalInt64("AUDIT_OPENSEARCH_TIMEOUT_SECONDS", 15)),
+		RateLimitPerMinute:       int(r.readOptionalInt64("AUDIT_QUERY_RATE_LIMIT_PER_MINUTE", 60)),
 		TokenFingerprintKey:      r.readOptionalString("AUDIT_TOKEN_FINGERPRINT_KEY", ""),
 		GatewayNamespaceFallback: r.readOptionalBool("AUDIT_GATEWAY_NAMESPACE_FALLBACK", false),
 	}
@@ -893,6 +894,9 @@ func validateAuditQueryConfig(cfg AuditQueryConfig) []error {
 	}
 	if cfg.RequestTimeoutSeconds <= 0 || cfg.RequestTimeoutSeconds > 120 {
 		errs = append(errs, fmt.Errorf("AUDIT_OPENSEARCH_TIMEOUT_SECONDS must be between 1 and 120, got %d", cfg.RequestTimeoutSeconds))
+	}
+	if cfg.RateLimitPerMinute < 0 || cfg.RateLimitPerMinute > 6000 {
+		errs = append(errs, fmt.Errorf("AUDIT_QUERY_RATE_LIMIT_PER_MINUTE must be between 0 (off) and 6000, got %d", cfg.RateLimitPerMinute))
 	}
 	// The gateway refuses a key shorter than 32 bytes, so a shorter one here can
 	// never match what the gateway logged.

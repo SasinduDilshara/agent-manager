@@ -128,6 +128,7 @@ data:
   {{- end }}
   AUDIT_INDEX_PATTERN: {{ dig "indexPattern" "amp-audit-*" $auditQuery | quote }}
   AUDIT_OPENSEARCH_TIMEOUT_SECONDS: {{ dig "timeoutSeconds" 15 $auditQuery | int | quote }}
+  AUDIT_QUERY_RATE_LIMIT_PER_MINUTE: {{ dig "rateLimitPerMinute" 60 $auditQuery | int | quote }}
   AUDIT_GATEWAY_NAMESPACE_FALLBACK: {{ dig "gatewayNamespaceFallback" false $auditQuery | quote }}
   # Gateway manifest cache backend. Must be "redis" whenever replicaCount > 1 — see
   # the gatewayManifestCache note in values.yaml.

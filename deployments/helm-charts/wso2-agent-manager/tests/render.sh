@@ -580,6 +580,10 @@ else
   printf 'FAIL - enabling the audit query API without a Secret rendered\n'; FAILURES=$((FAILURES + 1))
 fi
 
+assert_cm "audit searches are rate limited per org by default" AUDIT_QUERY_RATE_LIMIT_PER_MINUTE "60"
+assert_cm "the audit rate limit can be turned off" AUDIT_QUERY_RATE_LIMIT_PER_MINUTE "0" \
+  --set agentManagerService.config.auditQuery.rateLimitPerMinute=0
+
 # TLS to OpenSearch is verified unless an operator opts out; a CA bundle keeps
 # verification on and is mounted read-only.
 assert_cm "TLS verification of OpenSearch is on by default" AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY "false" \

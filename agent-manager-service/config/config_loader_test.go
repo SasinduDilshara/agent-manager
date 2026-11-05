@@ -1250,7 +1250,8 @@ func TestValidateAuditQueryConfig(t *testing.T) {
 			mutate:      func(c *AuditQueryConfig) { c.RequestTimeoutSeconds = 0 },
 			wantErrors:  1,
 			errContains: "AUDIT_OPENSEARCH_TIMEOUT_SECONDS",
-		},		{
+		},
+		{
 			name:   "a CA file keeps verification on",
 			mutate: func(c *AuditQueryConfig) { c.CAFile = "/etc/amp/audit-opensearch-ca/ca.crt" },
 		},

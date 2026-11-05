@@ -573,3 +573,44 @@ func TestAuditQuery_Normalize(t *testing.T) {
 		assert.NotErrorIs(t, err, ErrAuditInvalidQuery)
 	})
 }
+
+func TestAuditQueryNormalize_WildcardWindow(t *testing.T) {
+	now := auditFixtureTime
+	base := func() AuditQuery {
+		return AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle, Start: now.Add(-60 * 24 * time.Hour), End: now}
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*AuditQuery)
+		ok     bool
+	}{
+		"no wildcard filter may use the full range":     {func(*AuditQuery) {}, true},
+		"actor over 60 days alone is refused":           {func(q *AuditQuery) { q.Actor = "alice" }, false},
+		"search over 60 days alone is refused":          {func(q *AuditQuery) { q.Search = "tools" }, false},
+		"search narrowed by an agent may use the range": {func(q *AuditQuery) { q.Search = "tools"; q.Agents = []string{"bot"} }, true},
+		"actor narrowed by a project may use the range": {func(q *AuditQuery) { q.Actor = "alice"; q.Project = "default" }, true},
+		"search over exactly 31 days is allowed": {func(q *AuditQuery) {
+			q.Search = "tools"
+			q.Start = now.Add(-AuditMaxWildcardRange)
+		}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := base()
+			tc.mutate(&q)
+			err := q.Normalize(now)
+			if tc.ok {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrAuditInvalidQuery)
+			assert.Contains(t, err.Error(), "31 days")
+		})
+	}
+}
+
+func TestAuditQueryNormalize_LengthsCountCharacters(t *testing.T) {
+	// 256 three-byte characters are 768 bytes but within the documented 256.
+	q := AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle, Search: strings.Repeat("é", auditMaxFilterText)}
+	require.NoError(t, q.Normalize(auditFixtureTime))
+	q = AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle, Search: strings.Repeat("é", auditMaxFilterText+1)}
+	require.ErrorIs(t, q.Normalize(auditFixtureTime), ErrAuditInvalidQuery)
+}

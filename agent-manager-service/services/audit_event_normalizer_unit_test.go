@@ -446,8 +446,10 @@ func TestAuditRawView_DropsPlatformMetadata(t *testing.T) {
 
 			b, err := json.Marshal(raw)
 			require.NoError(t, err)
-			for _, leak := range []string{"pod_ip", "10.42.0.37", "k3d-amp-local-server-0", "pod_id", "docker_id",
-				"container_image", "sha256:deadbeef", "checksum/secret", "annotations", "labels", "pod-template-hash"} {
+			for _, leak := range []string{
+				"pod_ip", "10.42.0.37", "k3d-amp-local-server-0", "pod_id", "docker_id",
+				"container_image", "sha256:deadbeef", "checksum/secret", "annotations", "labels", "pod-template-hash",
+			} {
 				assert.NotContains(t, string(b), leak)
 			}
 		})

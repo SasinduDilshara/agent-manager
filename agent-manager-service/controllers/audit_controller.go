@@ -136,6 +136,9 @@ func (c *auditController) ListAuditEvents(w http.ResponseWriter, r *http.Request
 		utils.WriteErrorResponse(w, status, err.Error())
 	case http.StatusServiceUnavailable:
 		utils.WriteErrorResponse(w, status, "Audit log query is not enabled on this deployment")
+	case http.StatusTooManyRequests:
+		w.Header().Set("Retry-After", "5")
+		utils.WriteErrorResponse(w, status, "Too many audit searches for this organization; try again shortly")
 	case http.StatusBadGateway:
 		// The cause is logged by the service; the caller learns only that the
 		// store could not answer.

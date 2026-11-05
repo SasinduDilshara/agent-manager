@@ -728,6 +728,14 @@
                   "title": "timeoutSeconds",
                   "type": "integer"
                 },
+                "rateLimitPerMinute": {
+                  "default": 60,
+                  "description": "Audit searches allowed per organization per minute. 0 turns the limit off.",
+                  "minimum": 0,
+                  "maximum": 6000,
+                  "title": "rateLimitPerMinute",
+                  "type": "integer"
+                },
                 "gatewayNamespaceFallback": {
                   "default": false,
                   "description": "Scope gateway records without gateway.organization by the <org>- namespace prefix. Only safe where no org handle is a hyphenated extension of another.",

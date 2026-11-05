@@ -76,7 +76,8 @@ With `enabled=false`, the rendered chart is byte-identical to the previous relea
 | `ca.secretName` / `ca.configMapName`, `ca.key` | `AUDIT_OPENSEARCH_CA_FILE` | not set. A PEM CA bundle in this namespace, mounted read-only at `/etc/amp-audit-opensearch-ca/` and trusted alongside the system roots. Verification stays on. |
 | `insecureSkipVerify` | `AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY` | `false`. Development only: the reader credentials are then sent unverified, and AMS logs a warning at startup. The quick-start installer sets it to `true` for the bundled, self-signed OpenSearch. Cannot be combined with `ca`. |
 | `indexPattern` | `AUDIT_INDEX_PATTERN` | `amp-audit-*` |
-| `timeoutSeconds` | `AUDIT_OPENSEARCH_TIMEOUT_SECONDS` | `15` |
+| `timeoutSeconds` | `AUDIT_OPENSEARCH_TIMEOUT_SECONDS` | `15`. The search body carries a server-side `timeout` one second shorter, so OpenSearch stops a search the client gave up on; a timed-out search answers 502. |
+| `rateLimitPerMinute` | `AUDIT_QUERY_RATE_LIMIT_PER_MINUTE` | `60` searches per organization per minute (burst of a quarter of that, at least 5); `0` turns it off. Over the limit the API answers 429 with `Retry-After`. |
 | `gatewayNamespaceFallback` | `AUDIT_GATEWAY_NAMESPACE_FALLBACK` | `false` |
 | `existingSecret` (keys `username`, `password`) | `AUDIT_OPENSEARCH_USERNAME` / `_PASSWORD` | `amp-audit-opensearch-reader` |
 | `fingerprintKeySecret.name` / `.key` | `AUDIT_TOKEN_FINGERPRINT_KEY` | not set |
@@ -96,6 +97,7 @@ The `amp-audit-retention` ISM policy deletes each daily index 186 days after cre
 - Traffic records carry no headers or bodies. Token claims are limited to `auditClaims`. API keys appear only as an HMAC fingerprint (`hmac-sha256:…`) when a fingerprint key is configured, and are omitted otherwise.
 - The audit indices are not write-once: anyone with OpenSearch admin access can change or delete them. If you need tamper evidence or separation of duties, forward the records to a store the platform administrators do not control.
 - Each event's `raw` is an allow-list of the record's own fields (the gateway line, or the control-plane line with its `event`), `@timestamp`, `audit_source` and `kubernetes.{namespace_name,pod_name,container_name}`. Platform metadata is never returned, including for records indexed before the Fluent Bit filter above was added.
+- `actor` and `search` are leading-wildcard substring matches over keyword fields. Without an `agent` or `project` filter they may span at most 31 days, so a single search cannot scan the full 186-day retention of a store every org shares.
 - The API returns `502` with a generic message when OpenSearch cannot be queried. Details go only to the service log.
 
 ## Existing installations (manual steps)

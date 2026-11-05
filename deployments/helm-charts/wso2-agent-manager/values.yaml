@@ -186,6 +186,10 @@ agentManagerService:
       insecureSkipVerify: false
       indexPattern: "amp-audit-*"
       timeoutSeconds: 15
+      # Audit searches allowed per organization per minute (0 turns the limit
+      # off). The store is shared by every org; this keeps one org's users or
+      # scripts from loading it.
+      rateLimitPerMinute: 60
       # Scope gateway records that carry no gateway.organization by the
       # "<org>-" namespace prefix. Only safe where no org handle is a
       # hyphenated extension of another.

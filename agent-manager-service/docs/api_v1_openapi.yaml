@@ -11870,6 +11870,11 @@ paths:
         is not enough). Reading the audit trail is itself recorded in the audit trail.
         The organization is always the caller's own, taken from the token.
 
+        `actor` and `search` are substring matches. Without an `agent` or `project`
+        filter they may span at most 31 days; a longer range is refused with 400.
+        Searches are rate limited per organization (429, with `Retry-After`), and
+        each search is bounded by a server-side timeout (502 when it is hit).
+
         `categoryCounts` is computed over every filter except `category`, so the
         per-category counts stay meaningful while one category is selected; `total`
         and `events` honour all filters, including `category`.
@@ -11907,7 +11912,7 @@ paths:
               $ref: "#/components/schemas/AuditEventCategory"
         - name: agent
           in: query
-          description: Agent name, either `project/agent` or `agent` (any project). Repeatable.
+          description: Agent name, either `project/agent` or `agent` (any project). Each name is at most 128 characters, so a `project/agent` value is at most 257. Repeatable.
           style: form
           explode: true
           schema:
@@ -11915,7 +11920,7 @@ paths:
             maxItems: 20
             items:
               type: string
-              maxLength: 128
+              maxLength: 257
         - name: project
           in: query
           description: Project name.
@@ -11942,13 +11947,13 @@ paths:
               $ref: "#/components/schemas/AuditEventOutcome"
         - name: actor
           in: query
-          description: Case-insensitive substring of the actor's subject, actor id or client id.
+          description: Case-insensitive substring of the actor's subject, client id, actor id or display name. At most 31 days unless `agent` or `project` is set.
           schema:
             type: string
             maxLength: 256
         - name: search
           in: query
-          description: Case-insensitive free text over action, API name, MCP tool name, model, resource name and denying policy.
+          description: Case-insensitive free text over action, resource name, API name, MCP tool name and method, model and requested model, denying policy and A2A operation. At most 31 days unless `agent` or `project` is set.
           schema:
             type: string
             maxLength: 256
@@ -11995,6 +12000,17 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "403":
           description: Forbidden - the caller lacks audit:read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Too many audit searches for this organization; retry after the Retry-After seconds
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
           content:
             application/json:
               schema:

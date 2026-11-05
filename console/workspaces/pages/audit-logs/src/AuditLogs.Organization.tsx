@@ -97,6 +97,11 @@ function errorMessage(error: unknown): { title: string; detail: string } {
         title: "Audit logs aren't available on this deployment.",
         detail: "The audit query API is not enabled. Ask your platform administrator.",
       };
+    case 429:
+      return {
+        title: "Too many audit searches right now.",
+        detail: "Your organization's search limit was reached. Wait a few seconds and try again.",
+      };
     case 502:
     case 504:
       return {

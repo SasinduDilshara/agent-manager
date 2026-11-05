@@ -321,9 +321,15 @@ type AuditQueryConfig struct {
 	CAFile string
 	// IndexPattern selects the audit indices. AUDIT_INDEX_PATTERN.
 	IndexPattern string
-	// RequestTimeoutSeconds bounds one query to the log store.
+	// RequestTimeoutSeconds bounds one query to the log store. The search body
+	// carries a server-side timeout one second shorter, so OpenSearch stops
+	// working on a query the client has given up on.
 	// AUDIT_OPENSEARCH_TIMEOUT_SECONDS.
 	RequestTimeoutSeconds int
+	// RateLimitPerMinute bounds audit searches per organization, so one org
+	// cannot load the store every org shares. 0 disables the limit.
+	// AUDIT_QUERY_RATE_LIMIT_PER_MINUTE.
+	RateLimitPerMinute int
 	// TokenFingerprintKey is the gateway's traffic_logging.token_fingerprint_key.
 	// When set, an API-key call's logged fingerprint is joined back to the key,
 	// and through it to the agent that owns it. Optional.

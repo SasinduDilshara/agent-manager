@@ -24,7 +24,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/auditstoresvc"
@@ -35,6 +38,10 @@ import (
 // ErrAuditQueryDisabled is returned when the deployment has not enabled the
 // audit query API (AUDIT_QUERY_ENABLED).
 var ErrAuditQueryDisabled = errors.New("audit query is not enabled")
+
+// ErrAuditRateLimited is returned when the caller's organization has used its
+// audit search budget (AUDIT_QUERY_RATE_LIMIT_PER_MINUTE).
+var ErrAuditRateLimited = errors.New("too many audit searches for this organization; try again shortly")
 
 // ErrAuditStoreUnavailable is returned when the log store cannot be queried or
 // answers with something unusable. Callers report it without detail.
@@ -76,6 +83,8 @@ func AuditQueryStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, ErrAuditQueryDisabled):
 		return http.StatusServiceUnavailable
+	case errors.Is(err, ErrAuditRateLimited):
+		return http.StatusTooManyRequests
 	case errors.Is(err, ErrAuditStoreUnavailable):
 		return http.StatusBadGateway
 	default:
@@ -86,10 +95,14 @@ func AuditQueryStatus(err error) int {
 type auditQueryService struct {
 	enabled           bool
 	namespaceFallback bool
-	store             auditstoresvc.AuditStoreClient
-	resolver          AuditAgentResolver
-	now               func() time.Time
-	logger            *slog.Logger
+	// searchTimeout is sent in the search body so OpenSearch abandons a query
+	// the client has stopped waiting for; zero sends none.
+	searchTimeout time.Duration
+	limiter       *auditOrgLimiter
+	store         auditstoresvc.AuditStoreClient
+	resolver      AuditAgentResolver
+	now           func() time.Time
+	logger        *slog.Logger
 }
 
 // NewAuditQueryService creates the service. store is nil when the API is
@@ -100,6 +113,8 @@ func NewAuditQueryService(
 	return &auditQueryService{
 		enabled:           cfg.AuditQuery.Enabled && store != nil,
 		namespaceFallback: cfg.AuditQuery.GatewayNamespaceFallback,
+		searchTimeout:     auditServerTimeout(cfg.AuditQuery.RequestTimeoutSeconds),
+		limiter:           newAuditOrgLimiter(cfg.AuditQuery.RateLimitPerMinute),
 		store:             store,
 		resolver:          resolver,
 		now:               time.Now,
@@ -137,10 +152,13 @@ type osSearchResponse struct {
 func (s *auditQueryService) ListEvents(ctx context.Context, q AuditQuery) (*spec.AuditEventListResponse, error) {
 	var resp *spec.AuditEventListResponse
 	var err error
-	if s.enabled {
-		resp, err = s.listEvents(ctx, &q)
-	} else {
+	switch {
+	case !s.enabled:
 		err = ErrAuditQueryDisabled
+	case !s.limiter.allow(q.OUID):
+		err = ErrAuditRateLimited
+	default:
+		resp, err = s.listEvents(ctx, &q)
 	}
 	recordAuditRead(ctx, &q, resp, err, "")
 	return resp, err
@@ -226,7 +244,7 @@ func auditReadResultError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, ErrAuditInvalidQuery), errors.Is(err, ErrAuditQueryDisabled):
+	case errors.Is(err, ErrAuditInvalidQuery), errors.Is(err, ErrAuditQueryDisabled), errors.Is(err, ErrAuditRateLimited):
 		return err
 	case errors.Is(err, ErrAuditStoreUnavailable):
 		return ErrAuditStoreUnavailable
@@ -261,6 +279,10 @@ func (s *auditQueryService) listEvents(ctx context.Context, q *AuditQuery) (*spe
 	body, err := buildAuditSearchBody(q, idx, s.namespaceFallback)
 	if err != nil {
 		return nil, err
+	}
+	if s.searchTimeout > 0 {
+		// A search that hits it comes back timed_out and is rejected below.
+		body["timeout"] = fmt.Sprintf("%dms", s.searchTimeout.Milliseconds())
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -326,4 +348,75 @@ func (s *auditQueryService) listEvents(ctx context.Context, q *AuditQuery) (*spe
 		buckets[AuditCategoryOther].DocCount,
 	)
 	return spec.NewAuditEventListResponse(events, nextCursor, resp.Hits.Total.Value, relation, *counts), nil
+}
+
+// auditServerTimeout is the search body's timeout: one second inside the
+// client's, so the store gives up first and says so (timed_out) rather than
+// running on after the client has disconnected.
+func auditServerTimeout(clientSeconds int) time.Duration {
+	if clientSeconds <= 0 {
+		return 0
+	}
+	if clientSeconds == 1 {
+		return 500 * time.Millisecond
+	}
+	return time.Duration(clientSeconds-1) * time.Second
+}
+
+// auditOrgLimiter is a token bucket per organization. Searches are bounded per
+// org, not per caller: the store is shared by every org, and one org's users
+// or scripts together must not be able to load it.
+type auditOrgLimiter struct {
+	mu        sync.Mutex
+	perMinute int
+	burst     int
+	orgs      map[string]*auditOrgBucket
+	lastSweep time.Time
+	now       func() time.Time
+}
+
+type auditOrgBucket struct {
+	limiter  *rate.Limiter
+	lastUsed time.Time
+}
+
+// auditLimiterIdle is how long an org's bucket is kept after its last search.
+const auditLimiterIdle = 10 * time.Minute
+
+func newAuditOrgLimiter(perMinute int) *auditOrgLimiter {
+	if perMinute <= 0 {
+		return nil
+	}
+	// A page load issues two searches (list and counts) and Load more one per
+	// click; a burst of a quarter of the minute's budget absorbs that.
+	burst := perMinute / 4
+	if burst < 5 {
+		burst = 5
+	}
+	return &auditOrgLimiter{perMinute: perMinute, burst: burst, orgs: map[string]*auditOrgBucket{}, now: time.Now}
+}
+
+// allow reports whether the org may search now. A nil limiter allows all.
+func (l *auditOrgLimiter) allow(ouID string) bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if now.Sub(l.lastSweep) >= auditLimiterIdle {
+		l.lastSweep = now
+		for id, b := range l.orgs {
+			if now.Sub(b.lastUsed) >= auditLimiterIdle {
+				delete(l.orgs, id)
+			}
+		}
+	}
+	b, ok := l.orgs[ouID]
+	if !ok {
+		b = &auditOrgBucket{limiter: rate.NewLimiter(rate.Limit(float64(l.perMinute)/60), l.burst)}
+		l.orgs[ouID] = b
+	}
+	b.lastUsed = now
+	return b.limiter.AllowN(now, 1)
 }

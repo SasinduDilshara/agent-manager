@@ -60,7 +60,7 @@ func (r ApiListAuditEventsRequest) Category(category []AuditEventCategory) ApiLi
 	return r
 }
 
-// Agent name, either &#x60;project/agent&#x60; or &#x60;agent&#x60; (any project). Repeatable.
+// Agent name, either &#x60;project/agent&#x60; or &#x60;agent&#x60; (any project). Each name is at most 128 characters, so a &#x60;project/agent&#x60; value is at most 257. Repeatable.
 func (r ApiListAuditEventsRequest) Agent(agent []string) ApiListAuditEventsRequest {
 	r.agent = &agent
 	return r
@@ -84,13 +84,13 @@ func (r ApiListAuditEventsRequest) Outcome(outcome []AuditEventOutcome) ApiListA
 	return r
 }
 
-// Case-insensitive substring of the actor&#39;s subject, actor id or client id.
+// Case-insensitive substring of the actor&#39;s subject, client id, actor id or display name. At most 31 days unless &#x60;agent&#x60; or &#x60;project&#x60; is set.
 func (r ApiListAuditEventsRequest) Actor(actor string) ApiListAuditEventsRequest {
 	r.actor = &actor
 	return r
 }
 
-// Case-insensitive free text over action, API name, MCP tool name, model, resource name and denying policy.
+// Case-insensitive free text over action, resource name, API name, MCP tool name and method, model and requested model, denying policy and A2A operation. At most 31 days unless &#x60;agent&#x60; or &#x60;project&#x60; is set.
 func (r ApiListAuditEventsRequest) Search(search string) ApiListAuditEventsRequest {
 	r.search = &search
 	return r
@@ -126,6 +126,11 @@ organization, normalised to one shape, newest first by default. Requires
 `audit:read` (held by the Agent Manager Admin role; `observability:log-read`
 is not enough). Reading the audit trail is itself recorded in the audit trail.
 The organization is always the caller's own, taken from the token.
+
+`actor` and `search` are substring matches. Without an `agent` or `project`
+filter they may span at most 31 days; a longer range is refused with 400.
+Searches are rate limited per organization (429, with `Retry-After`), and
+each search is bounded by a server-side timeout (502 when it is hit).
 
 `categoryCounts` is computed over every filter except `category`, so the
 per-category counts stay meaningful while one category is selected; `total`
@@ -302,6 +307,17 @@ func (a *AuditAPIService) ListAuditEventsExecute(r ApiListAuditEventsRequest) (*
 			return localVarReturnValue, localVarHTTPResponse, newErr
 		}
 		if localVarHTTPResponse.StatusCode == 403 {
+			var v ErrorResponse
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 429 {
 			var v ErrorResponse
 			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
 			if err != nil {

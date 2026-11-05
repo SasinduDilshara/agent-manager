@@ -379,3 +379,78 @@ func TestAuditQueryStatus(t *testing.T) {
 	assert.Equal(t, 502, AuditQueryStatus(fmt.Errorf("%w: x", ErrAuditStoreUnavailable)))
 	assert.Equal(t, 500, AuditQueryStatus(errors.New("db down")))
 }
+
+func TestAuditQueryService_SendsAServerSideTimeout(t *testing.T) {
+	var sent map[string]any
+	store := &clientmocks.AuditStoreClientMock{SearchFunc: func(_ context.Context, body []byte) ([]byte, error) {
+		require.NoError(t, json.Unmarshal(body, &sent))
+		return fakeSearchResponse(t, nil, 0, "eq"), nil
+	}}
+	cfg := config.Config{}
+	cfg.AuditQuery.Enabled = true
+	cfg.AuditQuery.RequestTimeoutSeconds = 15
+	svc := NewAuditQueryService(cfg, store, NewAuditAgentResolver(auditTestRepo(), ""), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err := svc.ListEvents(context.Background(), AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle})
+	require.NoError(t, err)
+	assert.Equal(t, "14000ms", sent["timeout"], "the store gives up one second before the client")
+
+	assert.Equal(t, 500*time.Millisecond, auditServerTimeout(1))
+	assert.Equal(t, time.Duration(0), auditServerTimeout(0))
+}
+
+func TestAuditOrgLimiter(t *testing.T) {
+	t.Run("an org's burst is bounded and refills", func(t *testing.T) {
+		l := newAuditOrgLimiter(60) // 1 per second, burst 15
+		at := auditFixtureTime
+		l.now = func() time.Time { return at }
+		for i := 0; i < l.burst; i++ {
+			require.True(t, l.allow("ou-a"), "search %d is within the burst", i)
+		}
+		assert.False(t, l.allow("ou-a"), "the burst is spent")
+		assert.True(t, l.allow("ou-b"), "another org has its own budget")
+		at = at.Add(time.Second)
+		assert.True(t, l.allow("ou-a"), "one token back after a second")
+		assert.False(t, l.allow("ou-a"))
+	})
+	t.Run("idle orgs are evicted", func(t *testing.T) {
+		l := newAuditOrgLimiter(60)
+		at := auditFixtureTime
+		l.now = func() time.Time { return at }
+		l.allow("ou-a")
+		at = at.Add(auditLimiterIdle + time.Second)
+		l.allow("ou-b")
+		assert.NotContains(t, l.orgs, "ou-a")
+		assert.Contains(t, l.orgs, "ou-b")
+	})
+	t.Run("zero disables the limit", func(t *testing.T) {
+		var l *auditOrgLimiter = newAuditOrgLimiter(0)
+		assert.Nil(t, l)
+		for i := 0; i < 1000; i++ {
+			require.True(t, l.allow("ou-a"))
+		}
+	})
+	t.Run("a small budget still allows a page load", func(t *testing.T) {
+		assert.Equal(t, 5, newAuditOrgLimiter(6).burst)
+	})
+}
+
+func TestAuditQueryService_RateLimitedReadIsRefusedAndRecorded(t *testing.T) {
+	store := &clientmocks.AuditStoreClientMock{SearchFunc: func(context.Context, []byte) ([]byte, error) {
+		return fakeSearchResponse(t, nil, 0, "eq"), nil
+	}}
+	svc := auditTestService(store)
+	svc.limiter = newAuditOrgLimiter(6) // burst 5
+	q := AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle, Actor: "alice"}
+	var lastErr error
+	records := recordedAuditReads(t, func(ctx context.Context) {
+		for i := 0; i < 6; i++ {
+			_, lastErr = svc.ListEvents(ctx, q)
+		}
+	})
+	require.ErrorIs(t, lastErr, ErrAuditRateLimited)
+	assert.Equal(t, 429, AuditQueryStatus(lastErr))
+	assert.Len(t, store.SearchCalls(), 5, "the refused search never reaches the store")
+	require.Len(t, records, 6)
+	assert.Equal(t, 429, records[5].StatusCode)
+	assert.Equal(t, "alice", records[5].Details["actor"])
+}

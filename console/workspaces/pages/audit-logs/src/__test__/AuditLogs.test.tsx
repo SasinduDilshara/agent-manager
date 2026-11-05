@@ -272,6 +272,14 @@ describe("results table", () => {
     expect(screen.queryByText(/unreachable/i)).not.toBeInTheDocument();
   });
 
+  it("explains the per-organization search limit (429)", () => {
+    mockUseAuditEvents.mockImplementation(() =>
+      hookResult({ events: [], error: Object.assign(new Error("x"), { status: 429 }) }),
+    );
+    renderPage();
+    expect(screen.getByText(/too many audit searches/i)).toBeInTheDocument();
+  });
+
   it("explains a missing permission (403)", () => {
     mockUseAuditEvents.mockImplementation(() =>
       hookResult({ events: [], error: Object.assign(new Error("x"), { status: 403 }) }),
