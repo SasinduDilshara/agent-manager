@@ -166,7 +166,7 @@ func (s *auditQueryService) ListEvents(ctx context.Context, q AuditQuery) (*spec
 
 func (s *auditQueryService) RecordRejectedRead(ctx context.Context, q AuditQuery, reason *AuditParamError) {
 	param := ""
-	var err error = ErrAuditInvalidQuery
+	err := error(ErrAuditInvalidQuery)
 	if reason != nil {
 		param = reason.Param
 		err = reason

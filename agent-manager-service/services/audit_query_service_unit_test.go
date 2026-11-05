@@ -423,7 +423,7 @@ func TestAuditOrgLimiter(t *testing.T) {
 		assert.Contains(t, l.orgs, "ou-b")
 	})
 	t.Run("zero disables the limit", func(t *testing.T) {
-		var l *auditOrgLimiter = newAuditOrgLimiter(0)
+		l := newAuditOrgLimiter(0)
 		assert.Nil(t, l)
 		for i := 0; i < 1000; i++ {
 			require.True(t, l.allow("ou-a"))
