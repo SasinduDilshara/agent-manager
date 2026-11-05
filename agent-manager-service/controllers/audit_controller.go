@@ -17,7 +17,7 @@
 package controllers
 
 import (
-	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -79,38 +79,9 @@ func (c *auditController) ListAuditEvents(w http.ResponseWriter, r *http.Request
 	}
 
 	query := r.URL.Query()
-	start, err := parseOptionalTime(r, "startTime")
-	if err != nil {
-		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid 'startTime' format, expected RFC3339")
-		return
-	}
-	end, err := parseOptionalTime(r, "endTime")
-	if err != nil {
-		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid 'endTime' format, expected RFC3339")
-		return
-	}
-	limit := 0
-	if v := query.Get("limit"); v != "" {
-		if limit, err = strconv.Atoi(v); err != nil || limit < 1 || limit > services.AuditMaxLimit {
-			utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid 'limit', must be an integer between 1 and 200")
-			return
-		}
-	}
-	ascending := false
-	switch query.Get("sort") {
-	case "", "desc":
-	case "asc":
-		ascending = true
-	default:
-		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid 'sort', must be 'asc' or 'desc'")
-		return
-	}
-
-	resp, err := c.svc.ListEvents(r.Context(), services.AuditQuery{
+	q := services.AuditQuery{
 		OUID:        ouID,
 		OrgHandle:   orgHandle,
-		Start:       start,
-		End:         end,
 		Categories:  queryList(r, "category"),
 		Agents:      queryList(r, "agent"),
 		Project:     query.Get("project"),
@@ -118,23 +89,59 @@ func (c *auditController) ListAuditEvents(w http.ResponseWriter, r *http.Request
 		Outcomes:    queryList(r, "outcome"),
 		Actor:       query.Get("actor"),
 		Search:      query.Get("search"),
-		Limit:       limit,
 		Cursor:      query.Get("cursor"),
-		Ascending:   ascending,
-	})
-	switch {
-	case err == nil:
-		utils.WriteSuccessResponse(w, http.StatusOK, resp)
-	case errors.Is(err, services.ErrAuditInvalidQuery):
-		utils.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, services.ErrAuditQueryDisabled):
-		utils.WriteErrorResponse(w, http.StatusServiceUnavailable, "Audit log query is not enabled on this deployment")
-	case errors.Is(err, services.ErrAuditStoreUnavailable):
+	}
+	// Every parameter is parsed before any is rejected, so a refused read is
+	// recorded with everything else the caller sent.
+	var paramErr *services.AuditParamError
+	reject := func(param, msg string) {
+		if paramErr == nil {
+			paramErr = &services.AuditParamError{Param: param, Message: msg}
+		}
+	}
+	var err error
+	if q.Start, err = parseOptionalTime(r, "startTime"); err != nil {
+		reject("startTime", "Invalid 'startTime' format, expected RFC3339")
+	}
+	if q.End, err = parseOptionalTime(r, "endTime"); err != nil {
+		reject("endTime", "Invalid 'endTime' format, expected RFC3339")
+	}
+	if v := query.Get("limit"); v != "" {
+		limit, convErr := strconv.Atoi(v)
+		if convErr != nil || limit < 1 || limit > services.AuditMaxLimit {
+			reject("limit", fmt.Sprintf("Invalid 'limit', must be an integer between 1 and %d", services.AuditMaxLimit))
+		} else {
+			q.Limit = limit
+		}
+	}
+	switch query.Get("sort") {
+	case "", "desc":
+	case "asc":
+		q.Ascending = true
+	default:
+		reject("sort", "Invalid 'sort', must be 'asc' or 'desc'")
+	}
+	if paramErr != nil {
+		c.svc.RecordRejectedRead(r.Context(), q, paramErr)
+		utils.WriteErrorResponse(w, http.StatusBadRequest, paramErr.Message)
+		return
+	}
+
+	resp, err := c.svc.ListEvents(r.Context(), q)
+	status := services.AuditQueryStatus(err)
+	switch status {
+	case http.StatusOK:
+		utils.WriteSuccessResponse(w, status, resp)
+	case http.StatusBadRequest:
+		utils.WriteErrorResponse(w, status, err.Error())
+	case http.StatusServiceUnavailable:
+		utils.WriteErrorResponse(w, status, "Audit log query is not enabled on this deployment")
+	case http.StatusBadGateway:
 		// The cause is logged by the service; the caller learns only that the
 		// store could not answer.
-		utils.WriteErrorResponse(w, http.StatusBadGateway, "Audit log store is unavailable")
+		utils.WriteErrorResponse(w, status, "Audit log store is unavailable")
 	default:
 		log.Error("Failed to query audit events", "ouID", ouID, "error", err)
-		utils.WriteErrorResponse(w, http.StatusInternalServerError, "Failed to query audit events")
+		utils.WriteErrorResponse(w, status, "Failed to query audit events")
 	}
 }

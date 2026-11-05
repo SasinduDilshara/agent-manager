@@ -362,6 +362,9 @@ func init() {
 		"cursorUsed":      KindFlag,
 		"resultCount":     KindCount,
 		"totalMatched":    KindCount,
+		// The request parameter the controller could not parse (a name, never
+		// the value sent).
+		"rejectedParameter": KindEnum,
 	})
 
 	Register(ActionAgentCreate, ClassConfig, SeverityNotice)

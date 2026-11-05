@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,6 +65,11 @@ func emptyAttributionRepo() *repomocks.AuditAttributionRepositoryMock {
 // real RouteRegistrar, so permission and org checks are under test too.
 func auditMux(t *testing.T, enabled bool, store *clientmocks.AuditStoreClientMock) *http.ServeMux {
 	t.Helper()
+	return auditMuxWithRecorder(t, enabled, store, audit.NewNoopRecorder())
+}
+
+func auditMuxWithRecorder(t *testing.T, enabled bool, store *clientmocks.AuditStoreClientMock, recorder audit.Recorder) *http.ServeMux {
+	t.Helper()
 	cfg := config.Config{}
 	cfg.AuditQuery.Enabled = enabled
 	var client auditstoresvc.AuditStoreClient
@@ -73,7 +79,7 @@ func auditMux(t *testing.T, enabled bool, store *clientmocks.AuditStoreClientMoc
 	svc := services.NewAuditQueryService(cfg, client, services.NewAuditAgentResolver(emptyAttributionRepo(), ""),
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	mux := http.NewServeMux()
-	registerAuditRoutes(middleware.NewRouteRegistrar(mux, nil, audit.NewNoopRecorder()), controllers.NewAuditController(svc))
+	registerAuditRoutes(middleware.NewRouteRegistrar(mux, nil, recorder), controllers.NewAuditController(svc))
 	return mux
 }
 
@@ -208,4 +214,93 @@ func TestAuditRoute_ReadingTheTrailIsAudited(t *testing.T) {
 	assert.True(t, meta.Audited, "reading the audit trail must itself be recorded")
 	assert.Equal(t, audit.ActionAuditRead, meta.Action)
 	assert.Equal(t, audit.ClassRead, meta.Action.Class())
+}
+
+// auditCaptureSink keeps every record written, after redaction.
+type auditCaptureSink struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (c *auditCaptureSink) Write(_ context.Context, events []audit.Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, events...)
+	return nil
+}
+
+func (c *auditCaptureSink) Name() string { return "capture" }
+
+// recordsForRead sends one request through the real route stack and returns
+// every audit record it produced.
+func recordsForRead(t *testing.T, enabled bool, store *clientmocks.AuditStoreClientMock, target string) (int, []audit.Event) {
+	t.Helper()
+	sink := &auditCaptureSink{}
+	rec := audit.NewRecorder(sink, slog.New(slog.NewTextHandler(io.Discard, nil)), audit.Config{})
+	resp := callAudit(t, auditMuxWithRecorder(t, enabled, store, rec), target, auditReader("ou-a", "acme"))
+	require.NoError(t, rec.Close(context.Background()))
+	return resp.Code, sink.events
+}
+
+// One read is one record, carrying both what was searched and the status the
+// caller got, whichever layer refused it.
+func TestAuditRoute_EachReadIsOneRecordWithFiltersAndStatus(t *testing.T) {
+	okStore := func() *clientmocks.AuditStoreClientMock {
+		return &clientmocks.AuditStoreClientMock{SearchFunc: func(context.Context, []byte) ([]byte, error) {
+			return []byte(emptySearchResponse), nil
+		}}
+	}
+	downStore := &clientmocks.AuditStoreClientMock{SearchFunc: func(context.Context, []byte) ([]byte, error) {
+		return nil, fmt.Errorf("%w: refused", auditstoresvc.ErrStoreUnavailable)
+	}}
+	for name, tc := range map[string]struct {
+		enabled  bool
+		store    *clientmocks.AuditStoreClientMock
+		query    string
+		status   int
+		rejected string
+	}{
+		"success":                      {true, okStore(), "agent=bot&actor=alice", http.StatusOK, ""},
+		"rejected by the service":      {true, &clientmocks.AuditStoreClientMock{}, "agent=bot&actor=alice&outcome=MAYBE", http.StatusBadRequest, ""},
+		"limit rejected by controller": {true, &clientmocks.AuditStoreClientMock{}, "agent=bot&actor=alice&limit=ten", http.StatusBadRequest, "limit"},
+		"sort rejected by controller":  {true, &clientmocks.AuditStoreClientMock{}, "agent=bot&actor=alice&sort=random", http.StatusBadRequest, "sort"},
+		"time rejected by controller":  {true, &clientmocks.AuditStoreClientMock{}, "agent=bot&actor=alice&startTime=yesterday", http.StatusBadRequest, "startTime"},
+		"store unavailable":            {true, downStore, "agent=bot&actor=alice", http.StatusBadGateway, ""},
+		"API disabled":                 {false, nil, "agent=bot&actor=alice", http.StatusServiceUnavailable, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			code, records := recordsForRead(t, tc.enabled, tc.store, "/orgs/acme/audit/events?"+tc.query)
+			require.Equal(t, tc.status, code)
+			require.Len(t, records, 1, "exactly one record per read")
+			e := records[0]
+			assert.Equal(t, audit.ActionAuditRead, e.Action)
+			assert.Equal(t, tc.status, e.StatusCode)
+			assert.NotContains(t, e.Details, "envelope", "the envelope record is replaced, not added")
+			assert.Equal(t, []string{"bot"}, e.Details["agents"])
+			assert.Equal(t, "alice", e.Details["actor"])
+			if tc.rejected != "" {
+				assert.Equal(t, tc.rejected, e.Details["rejectedParameter"])
+			} else {
+				assert.NotContains(t, e.Details, "rejectedParameter")
+			}
+			if tc.status == http.StatusOK {
+				assert.Equal(t, audit.OutcomeSuccess, e.Outcome)
+			} else {
+				assert.Equal(t, audit.OutcomeFailure, e.Outcome)
+			}
+		})
+	}
+}
+
+// A request refused before the handler runs is still recorded, by the envelope.
+func TestAuditRoute_DeniedReadIsRecordedByTheEnvelope(t *testing.T) {
+	sink := &auditCaptureSink{}
+	rec := audit.NewRecorder(sink, slog.New(slog.NewTextHandler(io.Discard, nil)), audit.Config{})
+	resp := callAudit(t, auditMuxWithRecorder(t, true, &clientmocks.AuditStoreClientMock{}, rec), "/orgs/acme/audit/events",
+		&jwtassertion.TokenClaims{Sub: "user-a", OuId: "ou-a", OuHandle: "acme", Scope: rbac.AgentRead.Scope()})
+	require.NoError(t, rec.Close(context.Background()))
+	require.Equal(t, http.StatusForbidden, resp.Code)
+	require.Len(t, sink.events, 1)
+	assert.Equal(t, audit.OutcomeDeny, sink.events[0].Outcome)
+	assert.Equal(t, http.StatusForbidden, sink.events[0].StatusCode)
 }

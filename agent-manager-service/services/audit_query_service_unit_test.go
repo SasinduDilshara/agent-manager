@@ -239,6 +239,7 @@ func TestAuditQueryService_RecordsWhatWasSearched(t *testing.T) {
 	e := records[0]
 	assert.Equal(t, audit.ClassRead, e.ActionClass)
 	assert.Equal(t, audit.OutcomeSuccess, e.Outcome)
+	assert.Equal(t, 200, e.StatusCode, "the record carries the status the caller received")
 	assert.Equal(t, auditTestOUID, e.OUID)
 	assert.Equal(t, auditTestOrgHandle, e.OrgHandle)
 
@@ -298,6 +299,7 @@ func TestAuditQueryService_RecordsDefaultsAndFailures(t *testing.T) {
 		require.Len(t, records, 1)
 		e := records[0]
 		assert.Equal(t, audit.OutcomeFailure, e.Outcome)
+		assert.Equal(t, 502, e.StatusCode)
 		assert.Equal(t, ErrAuditStoreUnavailable.Error(), e.ErrorMessage)
 		assert.Equal(t, []string{"ext-audit-agent"}, e.Details["agents"])
 		assert.EqualValues(t, 0, e.Details["resultCount"])
@@ -312,6 +314,7 @@ func TestAuditQueryService_RecordsDefaultsAndFailures(t *testing.T) {
 		})
 		require.Len(t, records, 1)
 		assert.Equal(t, audit.OutcomeFailure, records[0].Outcome)
+		assert.Equal(t, 400, records[0].StatusCode)
 		assert.Equal(t, []string{"MAYBE"}, records[0].Details["outcomes"], "a rejected query is recorded as sent")
 	})
 
@@ -339,12 +342,40 @@ func TestAuditQueryService_RecordsDefaultsAndFailures(t *testing.T) {
 		assert.NotContains(t, records[0].Details["search"], "eyJhbGciOiJIUzI1NiJ9")
 	})
 
-	t.Run("disabled API records nothing", func(t *testing.T) {
+	t.Run("disabled API records the attempt with 503", func(t *testing.T) {
 		records := recordedAuditReads(t, func(ctx context.Context) {
 			svc := NewAuditQueryService(config.Config{}, nil, NewAuditAgentResolver(auditTestRepo(), ""), slog.Default())
-			_, err := svc.ListEvents(ctx, AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle})
+			_, err := svc.ListEvents(ctx, AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle, Actor: "alice"})
 			require.ErrorIs(t, err, ErrAuditQueryDisabled)
 		})
-		assert.Empty(t, records)
+		require.Len(t, records, 1)
+		assert.Equal(t, 503, records[0].StatusCode)
+		assert.Equal(t, audit.OutcomeFailure, records[0].Outcome)
+		assert.Equal(t, "alice", records[0].Details["actor"])
 	})
+
+	t.Run("a read the controller rejected is recorded with its filters and 400", func(t *testing.T) {
+		records := recordedAuditReads(t, func(ctx context.Context) {
+			auditTestService(&clientmocks.AuditStoreClientMock{}).RecordRejectedRead(ctx,
+				AuditQuery{OUID: auditTestOUID, OrgHandle: auditTestOrgHandle, Agents: []string{"bot"}, Search: "echo"},
+				&AuditParamError{Param: "limit", Message: "Invalid 'limit'"})
+		})
+		require.Len(t, records, 1)
+		e := records[0]
+		assert.Equal(t, 400, e.StatusCode)
+		assert.Equal(t, audit.OutcomeFailure, e.Outcome)
+		assert.Equal(t, "limit", e.Details["rejectedParameter"])
+		assert.Equal(t, []string{"bot"}, e.Details["agents"])
+		assert.Equal(t, "echo", e.Details["search"])
+		assert.NotContains(t, e.Details, "_droppedKeys")
+	})
+}
+
+func TestAuditQueryStatus(t *testing.T) {
+	assert.Equal(t, 200, AuditQueryStatus(nil))
+	assert.Equal(t, 400, AuditQueryStatus(invalidAuditQuery("x")))
+	assert.Equal(t, 400, AuditQueryStatus(&AuditParamError{Param: "sort", Message: "bad"}))
+	assert.Equal(t, 503, AuditQueryStatus(ErrAuditQueryDisabled))
+	assert.Equal(t, 502, AuditQueryStatus(fmt.Errorf("%w: x", ErrAuditStoreUnavailable)))
+	assert.Equal(t, 500, AuditQueryStatus(errors.New("db down")))
 }

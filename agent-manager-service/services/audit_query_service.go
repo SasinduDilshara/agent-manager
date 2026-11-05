@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
@@ -40,8 +41,46 @@ var ErrAuditQueryDisabled = errors.New("audit query is not enabled")
 var ErrAuditStoreUnavailable = errors.New("audit store unavailable")
 
 // AuditQueryService reads the org's audit trail.
+//
+// Every read is recorded as exactly one audit:read record carrying both the
+// search as sent and the HTTP status the caller received. ListEvents records a
+// read that reached the service; RecordRejectedRead records one the controller
+// refused before it got here (an unparseable limit, sort or time). Either way
+// the route's envelope record is suppressed, so the trail never holds a second,
+// filter-less record of the same request.
 type AuditQueryService interface {
 	ListEvents(ctx context.Context, q AuditQuery) (*spec.AuditEventListResponse, error)
+	RecordRejectedRead(ctx context.Context, q AuditQuery, reason *AuditParamError)
+}
+
+// AuditParamError is a request parameter the controller could not parse. Its
+// message is safe to return to the caller.
+type AuditParamError struct {
+	Param   string
+	Message string
+}
+
+func (e *AuditParamError) Error() string { return e.Message }
+
+// Unwrap makes a parameter error an invalid query, so it maps to 400.
+func (e *AuditParamError) Unwrap() error { return ErrAuditInvalidQuery }
+
+// AuditQueryStatus is the HTTP status a ListEvents result is answered with.
+// The controller answers with it and the audit:read record carries it, so the
+// two cannot disagree.
+func AuditQueryStatus(err error) int {
+	switch {
+	case err == nil:
+		return http.StatusOK
+	case errors.Is(err, ErrAuditInvalidQuery):
+		return http.StatusBadRequest
+	case errors.Is(err, ErrAuditQueryDisabled):
+		return http.StatusServiceUnavailable
+	case errors.Is(err, ErrAuditStoreUnavailable):
+		return http.StatusBadGateway
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 type auditQueryService struct {
@@ -96,12 +135,25 @@ type osSearchResponse struct {
 }
 
 func (s *auditQueryService) ListEvents(ctx context.Context, q AuditQuery) (*spec.AuditEventListResponse, error) {
-	if !s.enabled {
-		return nil, ErrAuditQueryDisabled
+	var resp *spec.AuditEventListResponse
+	var err error
+	if s.enabled {
+		resp, err = s.listEvents(ctx, &q)
+	} else {
+		err = ErrAuditQueryDisabled
 	}
-	resp, err := s.listEvents(ctx, &q)
-	recordAuditRead(ctx, &q, resp, err)
+	recordAuditRead(ctx, &q, resp, err, "")
 	return resp, err
+}
+
+func (s *auditQueryService) RecordRejectedRead(ctx context.Context, q AuditQuery, reason *AuditParamError) {
+	param := ""
+	var err error = ErrAuditInvalidQuery
+	if reason != nil {
+		param = reason.Param
+		err = reason
+	}
+	recordAuditRead(ctx, &q, nil, err, param)
 }
 
 // auditSearchDetailMax bounds the recorded search text. A valid query is
@@ -116,9 +168,10 @@ const auditSearchDetailMax = 256
 //
 // q is the query after Normalize when that succeeded, so the time range is the
 // effective one (defaults applied); a rejected query is recorded as sent. The cursor value is never recorded, only
-// whether one was sent. A failed request is also recorded by the route's
-// envelope with its HTTP status; this record adds what was searched.
-func recordAuditRead(ctx context.Context, q *AuditQuery, resp *spec.AuditEventListResponse, err error) {
+// whether one was sent. The record carries the HTTP status the caller got, and
+// replaces the route's envelope record (audit.Skip), so one read is one record.
+// rejectedParam names the parameter the controller could not parse, if any.
+func recordAuditRead(ctx context.Context, q *AuditQuery, resp *spec.AuditEventListResponse, err error, rejectedParam string) {
 	search := q.Search
 	truncated := false
 	if r := []rune(search); len(r) > auditSearchDetailMax {
@@ -144,6 +197,11 @@ func recordAuditRead(ctx context.Context, q *AuditQuery, resp *spec.AuditEventLi
 		audit.Detail("sort", sort),
 		audit.Detail("cursorUsed", q.Cursor != ""),
 		audit.Result(auditReadResultError(err)),
+		// After Result: the outcome follows the status the caller received.
+		audit.Status(AuditQueryStatus(err)),
+	}
+	if rejectedParam != "" {
+		opts = append(opts, audit.Detail("rejectedParameter", rejectedParam))
 	}
 	if !q.Start.IsZero() {
 		opts = append(opts, audit.Detail("startTime", q.Start.UTC().Format(time.RFC3339)))
@@ -158,6 +216,7 @@ func recordAuditRead(ctx context.Context, q *AuditQuery, resp *spec.AuditEventLi
 	}
 	opts = append(opts, audit.Detail("resultCount", resultCount))
 	audit.Record(ctx, audit.ActionAuditRead, opts...)
+	audit.Skip(ctx)
 }
 
 // auditReadResultError reduces a query error to what the record may carry. A
@@ -167,7 +226,7 @@ func auditReadResultError(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, ErrAuditInvalidQuery):
+	case errors.Is(err, ErrAuditInvalidQuery), errors.Is(err, ErrAuditQueryDisabled):
 		return err
 	case errors.Is(err, ErrAuditStoreUnavailable):
 		return ErrAuditStoreUnavailable
