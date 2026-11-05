@@ -513,6 +513,15 @@ data:
           - { name: Log Read, handle: log-read, description: "Read agent runtime logs" }
           - { name: Build Log Read, handle: build-log-read, description: "Read agent build logs" }
           - { name: Metric Read, handle: metric-read, description: "Read agent and system metrics" }
+      - name: Audit
+        handle: audit
+        parent: amp
+        description: Organization audit trail
+        # Separate from observability:log-read on purpose: the audit trail is
+        # org-wide (every project, other users' role and credential operations,
+        # client IPs, delegation subjects), so only Admin holds it by default.
+        actions:
+          - { name: Read, handle: read, description: "Read the organization audit trail" }
       - name: Role
         handle: role
         parent: amp
@@ -702,6 +711,7 @@ data:
           - "amp:observability:log-read"
           - "amp:observability:build-log-read"
           - "amp:observability:metric-read"
+          - "amp:audit:read"
           - "amp:role:create"
           - "amp:role:read"
           - "amp:role:update"

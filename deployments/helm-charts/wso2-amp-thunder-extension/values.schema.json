@@ -1294,6 +1294,7 @@
                 "amp:observability:log-read",
                 "amp:observability:build-log-read",
                 "amp:observability:metric-read",
+                "amp:audit:read",
                 "amp:role:create",
                 "amp:role:read",
                 "amp:role:update",

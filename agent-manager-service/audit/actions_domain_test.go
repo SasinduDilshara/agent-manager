@@ -42,7 +42,7 @@ func TestDomainActionsMatchRouteDerivedActions(t *testing.T) {
 		perms   []rbac.Permission
 		action  Action
 	}{
-		{"GET /orgs/{orgName}/audit/events", []rbac.Permission{rbac.ObservabilityLogRead}, ActionAuditRead},
+		{"GET /orgs/{orgName}/audit/events", []rbac.Permission{rbac.AuditRead}, ActionAuditRead},
 		{"POST /orgs/{orgName}/git-secrets", []rbac.Permission{rbac.GitSecretCreate}, ActionGitSecretCreate},
 		{"DELETE /orgs/{orgName}/git-secrets/{secretName}", []rbac.Permission{rbac.GitSecretDelete}, ActionGitSecretDelete},
 		{

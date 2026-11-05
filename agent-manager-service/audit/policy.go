@@ -235,11 +235,6 @@ var actionOverrides = map[string]Action{
 	// Gating permission names a different resource than the effect.
 	"POST /orgs/{orgName}/projects/{projName}/agents/{agentName}/publish-kind": "agent-kind:publish",
 
-	// Gated by the generic log-read permission, but the operation is a search
-	// of the audit trail. The service emits audit:read with the search
-	// parameters; the envelope (written for rejected requests) must agree.
-	"GET /orgs/{orgName}/audit/events": ActionAuditRead,
-
 	// One permission, several operations — deployment lifecycle.
 	"POST /orgs/{orgName}/projects/{projName}/agents/{agentName}/deployments": "agent:deploy",
 	// Gated on the environment tier, not on a promote-specific scope, so the

@@ -205,5 +205,8 @@ export interface ListAuditEventsQuery {
 
 export type ListAuditEventsPathParams = OrgPathParams;
 
-/** Scope the audit API requires (permission observability:log-read). */
-export const AUDIT_READ_SCOPE = "amp:observability:log-read";
+/**
+ * Scope the audit API requires (permission audit:read). Separate from
+ * observability:log-read: the org audit trail is held by administrators only.
+ */
+export const AUDIT_READ_SCOPE = "amp:audit:read";

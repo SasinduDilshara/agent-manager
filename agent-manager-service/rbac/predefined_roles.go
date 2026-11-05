@@ -51,6 +51,7 @@ var PredefinedRolePermissions = map[string][]Permission{
 		MonitorScoreRead, MonitorScorePublish,
 		ObservabilityTraceRead, ObservabilityLogRead,
 		ObservabilityBuildLogRead, ObservabilityMetricRead,
+		AuditRead,
 		RoleCreate, RoleRead, RoleUpdate, RoleDelete,
 		GroupCreate, GroupRead, GroupUpdate, GroupDelete,
 		AgentIdentityRead, AgentIdentityCreate, AgentIdentityUpdate, AgentIdentityDelete,

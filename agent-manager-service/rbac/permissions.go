@@ -224,6 +224,15 @@ const (
 	ObservabilityMetricRead   Permission = "observability:metric-read"
 )
 
+// Audit trail permissions. Reading the org audit trail is its own grant, not
+// part of observability:log-read: the trail spans every project and carries
+// other users' role, permission and credential operations, client IPs and
+// delegation subjects, so it is held by administrators (and any custom auditor
+// role an org creates), not by every developer who can read runtime logs.
+const (
+	AuditRead Permission = "audit:read"
+)
+
 // Role management permissions
 const (
 	RoleCreate Permission = "role:create"

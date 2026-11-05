@@ -95,15 +95,23 @@ func callAudit(t *testing.T, mux *http.ServeMux, target string, claims *jwtasser
 }
 
 func auditReader(ouID, handle string) *jwtassertion.TokenClaims {
-	return &jwtassertion.TokenClaims{Sub: "user-a", OuId: ouID, OuHandle: handle, Scope: rbac.ObservabilityLogRead.Scope()}
+	return &jwtassertion.TokenClaims{Sub: "user-a", OuId: ouID, OuHandle: handle, Scope: rbac.AuditRead.Scope()}
 }
 
-func TestAuditRoute_RequiresLogReadPermission(t *testing.T) {
+func TestAuditRoute_RequiresAuditReadPermission(t *testing.T) {
 	store := &clientmocks.AuditStoreClientMock{} // Search nil: a call would panic
 	mux := auditMux(t, true, store)
 
 	rec := callAudit(t, mux, "/orgs/acme/audit/events", &jwtassertion.TokenClaims{
 		Sub: "user-a", OuId: "ou-a", OuHandle: "acme", Scope: rbac.AgentRead.Scope(),
+	})
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Empty(t, store.SearchCalls())
+
+	// Reading runtime logs is not reading the org audit trail.
+	rec = callAudit(t, mux, "/orgs/acme/audit/events", &jwtassertion.TokenClaims{
+		Sub: "dev", OuId: "ou-a", OuHandle: "acme",
+		Scope: rbac.ObservabilityLogRead.Scope() + " " + rbac.ObservabilityTraceRead.Scope() + " " + rbac.AgentRead.Scope(),
 	})
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Empty(t, store.SearchCalls())
@@ -210,7 +218,7 @@ func TestAuditRoute_DisabledIs503(t *testing.T) {
 
 func TestAuditRoute_ReadingTheTrailIsAudited(t *testing.T) {
 	meta := audit.NewRouteMeta("GET /orgs/{orgName}/audit/events", []string{"orgName"},
-		[]rbac.Permission{rbac.ObservabilityLogRead})
+		[]rbac.Permission{rbac.AuditRead})
 	assert.True(t, meta.Audited, "reading the audit trail must itself be recorded")
 	assert.Equal(t, audit.ActionAuditRead, meta.Action)
 	assert.Equal(t, audit.ClassRead, meta.Action.Class())
@@ -303,4 +311,18 @@ func TestAuditRoute_DeniedReadIsRecordedByTheEnvelope(t *testing.T) {
 	require.Len(t, sink.events, 1)
 	assert.Equal(t, audit.OutcomeDeny, sink.events[0].Outcome)
 	assert.Equal(t, http.StatusForbidden, sink.events[0].StatusCode)
+}
+
+// Only the administrator role holds the audit trail by default: Developer, AI
+// Lead and Platform Engineer read logs and traces, not the org-wide trail.
+func TestAuditRoute_OnlyAdminHoldsAuditReadByDefault(t *testing.T) {
+	for role, perms := range rbac.PredefinedRolePermissions {
+		held := false
+		for _, p := range perms {
+			if p == rbac.AuditRead {
+				held = true
+			}
+		}
+		assert.Equal(t, role == rbac.RoleAdmin, held, "role %q", role)
+	}
 }

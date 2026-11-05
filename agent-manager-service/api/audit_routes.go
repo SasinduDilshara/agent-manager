@@ -24,6 +24,9 @@ import (
 
 // registerAuditRoutes registers the org audit trail read API. Reading the trail
 // is itself audited: the path is listed in audit.sensitiveReadPaths.
+//
+// Gated by its own permission (audit:read, Admin only by default), not by
+// observability:log-read: the trail is org-wide, across every project.
 func registerAuditRoutes(rr *middleware.RouteRegistrar, ctrl controllers.AuditController) {
-	rr.HandleFuncWithValidationAndAuthz("GET /orgs/{orgName}/audit/events", rbac.ObservabilityLogRead, ctrl.ListAuditEvents)
+	rr.HandleFuncWithValidationAndAuthz("GET /orgs/{orgName}/audit/events", rbac.AuditRead, ctrl.ListAuditEvents)
 }

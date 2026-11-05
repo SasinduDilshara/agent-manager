@@ -20,7 +20,7 @@ AMS stdout (audit) ─────┘   amp-fluent-bit       └─> amp-audit-*
 | `amp-fluent-bit` ConfigMap | `wso2-amp-observability-extension` (`audit.*`) | The logs module's own Fluent Bit configuration, kept verbatim, with additions. Gateway and audit lines are copied to an `audit.*` tag and the original still goes to `container-logs-*`. Grep filters keep only lines from the gateway runtime (container name and `openchoreo.dev/system-component` label) and from Agent Manager (container name and namespace). The lines are parsed as JSON, stamped with `audit_source` (`gateway` or `control-plane`), and written to `amp-audit-*` through a filesystem buffer with unlimited retries. |
 | Setup Job (`*-audit-setup`) | same chart, post-install/post-upgrade hook | Creates the `amp-audit` index template (keyword mappings and `flat_object` for free-form fields), the `amp-audit-retention` ISM policy, and a read-only `amp_audit_reader` role and user. It is idempotent. |
 | Gateway traffic logging | `wso2-amp-api-platform-gateway-extension` (`audit.trafficLogging.*`) | Appends `[collector]` (all capture off) and `[traffic_logging]` (stdout, `gateway_id`, `organization`, `environment`, `audit_claims`, `token_fingerprint_key`) to the gateway's `config.toml`. |
-| Audit query API | `wso2-agent-manager` (`agentManagerService.config.auditQuery.*`) | `GET /orgs/{orgName}/audit/events`, permission `observability:log-read`. It is off by default. |
+| Audit query API | `wso2-agent-manager` (`agentManagerService.config.auditQuery.*`) | `GET /orgs/{orgName}/audit/events`, permission `audit:read`. It is off by default. |
 | Console page | `wso2-agent-manager` (`console.config.featureFlags.enableAuditLogs`) | Shows the Audit Logs page. It is off by default. |
 | Installer | `quick-start/install.sh` | Turns all of the above on when log collection is installed. |
 
@@ -88,7 +88,7 @@ The `amp-audit-retention` ISM policy deletes each daily index 186 days after cre
 
 ## Security considerations
 
-- The audit query API requires `observability:log-read` and is scoped to the caller's organization. Reading the trail is itself recorded as `audit:read`, because the route is listed in `sensitiveReadPaths`. The record carries the filters used (time range, category, agent, project, environment, outcome, actor, search text up to 256 characters, limit, and whether a cursor was sent) and the number of records returned, plus the HTTP status of the response. Each read is one record, including rejected ones. It never carries the cursor value.
+- The audit query API requires `audit:read` and is scoped to the caller's organization. Only the Agent Manager Admin role holds it by default; Developer, AI Lead and Platform Engineer, who hold `observability:log-read` for runtime logs, do not. To let someone else review the trail, create a custom role with `amp:audit:read`. Reading the trail is itself recorded as `audit:read`, because the route is listed in `sensitiveReadPaths`. The record carries the filters used (time range, category, agent, project, environment, outcome, actor, search text up to 256 characters, limit, and whether a cursor was sent) and the number of records returned, plus the HTTP status of the response. Each read is one record, including rejected ones. It never carries the cursor value.
 - Each event's `outcome` is `SUCCESS`, `DENIED`, `FAILED` or `STARTED`. `STARTED` marks a control-plane intent record written before a privileged operation; the operation's result is a separate record whose `details.attemptEventId` points back to it. `outcome=SUCCESS` matches only completed successes.
 - AMS reads OpenSearch with a dedicated identity that can only read and search `amp-audit-*`. Fluent Bit and the setup Job use the logs module's admin credentials, as the module already does.
 - Only records from the expected containers are copied into the audit indices: the gateway runtime container with its system-component label, and the Agent Manager container in its namespace. The `audit_source` field is set by Fluent Bit, never taken from the line itself. Anyone who can create pods with those names and labels in the cluster is trusted to the same degree as the platform components.
@@ -160,7 +160,7 @@ kubectl exec -n "$OBS_NS" opensearch-master-0 -c opensearch -- sh -c \
   'curl -sk -u "admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD" "https://localhost:9200/_cat/indices/amp-audit-*?v"'
 # Fluent Bit is not reporting delivery errors:
 kubectl logs -n "$OBS_NS" daemonset/fluent-bit | grep -i "amp-audit\|error" | tail
-# The API answers (with a token holding observability:log-read):
+# The API answers (with a token holding amp:audit:read):
 curl -H "Authorization: Bearer $TOKEN" "$AMP_API/api/v1/orgs/default/audit/events?limit=5"
 ```
 

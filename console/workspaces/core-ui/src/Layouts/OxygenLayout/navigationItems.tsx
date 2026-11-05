@@ -184,7 +184,7 @@ export function useNavigationItems(): Array<
       // the org scopes and gate the Settings tabs; these pages read the
       // agent-identity API and belong to its scope.
       agentIdentities: s.has("amp:agent-identity:read"),
-      // The audit query API is authorized by observability:log-read.
+      // The audit query API is authorized by its own audit:read scope.
       auditLogs: s.has(AUDIT_READ_SCOPE),
     };
   }, [enforced, scopes]);

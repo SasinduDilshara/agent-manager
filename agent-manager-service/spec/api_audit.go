@@ -123,7 +123,8 @@ ListAuditEvents Query the organization's audit trail
 
 Returns gateway traffic records and control-plane audit records for the caller's
 organization, normalised to one shape, newest first by default. Requires
-`observability:log-read`. Reading the audit trail is itself recorded in the audit trail.
+`audit:read` (held by the Agent Manager Admin role; `observability:log-read`
+is not enough). Reading the audit trail is itself recorded in the audit trail.
 The organization is always the caller's own, taken from the token.
 
 `categoryCounts` is computed over every filter except `category`, so the
