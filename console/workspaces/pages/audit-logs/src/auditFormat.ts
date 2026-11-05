@@ -197,8 +197,9 @@ export function displayRaw(raw: AuditEvent["raw"]): Record<string, unknown> | un
   const out: Record<string, unknown> = { ...raw };
   const k8s = out.kubernetes;
   if (k8s && typeof k8s === "object" && !Array.isArray(k8s)) {
+    const meta = k8s as Record<string, unknown>;
     const kept = Object.fromEntries(
-      RAW_KUBERNETES_FIELDS.filter((k) => k in k8s).map((k) => [k, (k8s as Record<string, unknown>)[k]]),
+      RAW_KUBERNETES_FIELDS.filter((k) => k in meta).map((k) => [k, meta[k]]),
     );
     if (Object.keys(kept).length) out.kubernetes = kept;
     else delete out.kubernetes;

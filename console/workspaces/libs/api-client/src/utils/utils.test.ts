@@ -18,7 +18,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  httpGET, isNotFoundError, nullIfNotFound, pendingRefetchInterval, POLL_INTERVAL, transitionRefetchInterval,
+  httpGET, isNotFoundError, nullIfNotFound, pendingRefetchInterval, POLL_INTERVAL,
+  transitionRefetchInterval,
 } from "./utils";
 
 describe("pendingRefetchInterval", () => {

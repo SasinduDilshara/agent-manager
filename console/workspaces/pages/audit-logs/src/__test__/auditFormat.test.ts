@@ -148,7 +148,8 @@ describe("raw view", () => {
   });
 
   it("exports JSON without platform metadata", () => {
-    const json = toJson([{ ...llmChatOk, raw: { ...(llmChatOk.raw ?? {}), kubernetes: platform } }]);
+    const leaky = { ...llmChatOk, raw: { ...(llmChatOk.raw ?? {}), kubernetes: platform } };
+    const json = toJson([leaky]);
     for (const leak of ["pod_ip", "10.42.0.37", "node-0", "sha256:deadbeef", "checksum/secret", "pod-template-hash"]) {
       expect(json).not.toContain(leak);
     }
