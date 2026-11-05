@@ -139,8 +139,14 @@ networkPolicy:
 # observability-logs-opensearch module, with its Fluent Bit switched to this
 # configuration (fluent-bit.existingConfigMap=amp-fluent-bit). See
 # deployments/AUDIT_LOGS.md.
+#
+# Off by default: it needs the logs module's OpenSearch, which this chart does
+# not install (and which may be absent, failed, or external). The quick-start
+# installer turns it on only when log collection is installed. Even when on,
+# the setup Job does not fail this release when OpenSearch cannot be reached
+# (see setupJob.failOnError), so trace observability never depends on it.
 audit:
-  enabled: true
+  enabled: false
   # Indices are <indexPrefix>-YYYY-MM-DD.
   indexPrefix: amp-audit
   fluentBit:
@@ -208,7 +214,16 @@ audit:
       app.kubernetes.io/component: agent-manager-service
   setupJob:
     image: alpine/k8s:1.32.3
-    backoffLimit: 6
+    # false (default): when OpenSearch, its admin Secret or the reader Secret
+    # is missing, or a setup call fails, the Job logs a WARNING and exits 0, so
+    # the extension install or upgrade still succeeds; re-run the upgrade once
+    # OpenSearch is ready. true: the Job fails and so does the Helm release.
+    failOnError: false
+    # How long to wait for OpenSearch to answer (seconds).
+    waitSeconds: 120
+    # Hard bound on the Job, so a hook can never hold the release for long.
+    activeDeadlineSeconds: 600
+    backoffLimit: 1
     ttlSecondsAfterFinished: 86400
     resources:
       requests:

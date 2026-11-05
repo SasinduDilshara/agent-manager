@@ -157,11 +157,12 @@ fi
 
 # --- AMP audit log collection ----------------------------------------------------
 # check <label> <expect: yes|no> <pattern> [helm --set args...]: whether the
-# rendered chart contains a fixed string. A render failure is a FAIL, not "no".
+# rendered chart, with audit.enabled=true unless the args override it, contains
+# a fixed string. A render failure is a FAIL, not "no".
 check() {
   local label="$1" expect="$2" pattern="$3" rendered got=no
   shift 3
-  if ! rendered="$(helm template test-release "$CHART_DIR" -n openchoreo-observability-plane "$@" 2>&1)"; then
+  if ! rendered="$(helm template test-release "$CHART_DIR" -n openchoreo-observability-plane --set audit.enabled=true "$@" 2>&1)"; then
     printf 'FAIL - %s: helm template failed: %s\n' "$label" "$rendered"
     FAILURES=$((FAILURES + 1))
     return
@@ -175,7 +176,18 @@ check() {
   fi
 }
 
-check "the amp-fluent-bit ConfigMap is rendered by default" yes "name: amp-fluent-bit"
+# Off by default: the extension must install and upgrade where the logs
+# module's OpenSearch is absent.
+default_render="$(helm template test-release "$CHART_DIR" -n openchoreo-observability-plane 2>&1)"
+for name in amp-fluent-bit audit-setup amp-audit-opensearch "kind: Job"; do
+  if grep -qF -- "$name" <<<"$default_render"; then
+    printf 'FAIL - audit is off by default, but the render contains %s\n' "$name"; FAILURES=$((FAILURES + 1))
+  else
+    printf 'ok   - audit is off by default: no %s\n' "$name"
+  fi
+done
+
+check "the amp-fluent-bit ConfigMap is rendered when audit is on" yes "name: amp-fluent-bit"
 check "container logs keep their upstream output" yes "Logstash_Prefix container-logs"
 check "audit records go to amp-audit indices" yes "Logstash_Prefix amp-audit"
 check "audit delivery is retried until it succeeds" yes "Retry_Limit no_limits"
@@ -197,13 +209,32 @@ check "a reader Secret is generated when none is given" yes "name: amp-audit-ope
 check "an existing reader Secret is used, not generated" no "templates/audit/reader-secret.yaml" \
   --set audit.reader.existingSecret=amp-audit-opensearch-reader
 check "the setup Job is a post-install/upgrade hook" yes "helm.sh/hook: post-install,post-upgrade"
+# The setup Job must not fail the release when OpenSearch is absent.
+check "the setup Job reads its Secrets as optional" yes "optional: true"
+check "the setup Job is time-bounded" yes "activeDeadlineSeconds: 600"
+check "the setup Job retries once by default" yes "backoffLimit: 1"
+check "the setup script gives up with a warning, not a failure" yes 'echo "WARNING: $*" >&2'
+fail_on_error() {
+  helm template test-release "$CHART_DIR" -n openchoreo-observability-plane --set audit.enabled=true "$@" 2>/dev/null |
+    awk '/name: FAIL_ON_ERROR/ {f=1; next} f && /value:/ {gsub(/"/, "", $2); print $2; exit}'
+}
+if [[ "$(fail_on_error)" == "false" ]]; then
+  printf 'ok   - the setup Job tolerates a missing OpenSearch by default\n'
+else
+  printf 'FAIL - the setup Job does not default to FAIL_ON_ERROR=false\n'; FAILURES=$((FAILURES + 1))
+fi
+if [[ "$(fail_on_error --set audit.setupJob.failOnError=true)" == "true" ]]; then
+  printf 'ok   - failOnError makes setup problems fatal\n'
+else
+  printf 'FAIL - failOnError=true does not reach the Job\n'; FAILURES=$((FAILURES + 1))
+fi
 check "Agent Manager may reach OpenSearch" yes "name: amp-audit-opensearch-from-agent-manager"
 for name in amp-fluent-bit audit-setup amp-audit-opensearch; do
   check "audit.enabled=false renders no $name" no "$name" --set audit.enabled=false
 done
 # The installer's release name is long; a Job name over 63 characters is
 # rejected because it becomes the pods' job-name label.
-job_name="$(helm template amp-observability-traces "$CHART_DIR" -n openchoreo-observability-plane |
+job_name="$(helm template amp-observability-traces "$CHART_DIR" -n openchoreo-observability-plane --set audit.enabled=true |
   awk '/^kind: Job/ {j = 1} j && /^  name:/ {print $2; exit}')"
 if [[ -n "$job_name" && ${#job_name} -le 63 ]]; then
   printf 'ok   - the setup Job name fits in 63 characters (%s)\n' "$job_name"
@@ -211,7 +242,7 @@ else
   printf 'FAIL - setup Job name %q is empty or longer than 63 characters\n' "$job_name"
   FAILURES=$((FAILURES + 1))
 fi
-if helm template test-release "$CHART_DIR" --set audit.retention.days=90 >/dev/null 2>&1; then
+if helm template test-release "$CHART_DIR" --set audit.enabled=true --set audit.retention.days=90 >/dev/null 2>&1; then
   printf 'FAIL - retention under 186 days rendered\n'
   FAILURES=$((FAILURES + 1))
 else

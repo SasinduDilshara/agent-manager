@@ -18,11 +18,11 @@ AMS stdout (audit) ─────┘   amp-fluent-bit       └─> amp-audit-*
 | Piece | Chart / script | What it does |
 |---|---|---|
 | `amp-fluent-bit` ConfigMap | `wso2-amp-observability-extension` (`audit.*`) | The logs module's own Fluent Bit configuration, kept verbatim, with additions. Gateway and audit lines are copied to an `audit.*` tag and the original still goes to `container-logs-*`. Grep filters keep only lines from the gateway runtime (container name and `openchoreo.dev/system-component` label) and from Agent Manager (container name and namespace). The Kubernetes metadata is reduced to the namespace, pod and container names (node, pod IP, image, labels and annotations of the platform pods are not stored), the lines are parsed as JSON, stamped with `audit_source` (`gateway` or `control-plane`), and written to `amp-audit-*` through a filesystem buffer with unlimited retries. |
-| Setup Job (`*-audit-setup`) | same chart, post-install/post-upgrade hook | Creates the `amp-audit` index template (keyword mappings and `flat_object` for free-form fields), the `amp-audit-retention` ISM policy, and a read-only `amp_audit_reader` role and user. It is idempotent. |
+| Setup Job (`*-audit-setup`) | same chart, post-install/post-upgrade hook | Creates the `amp-audit` index template (keyword mappings and `flat_object` for free-form fields), the `amp-audit-retention` ISM policy, and a read-only `amp_audit_reader` role and user. It is idempotent. By default it never fails the release: a missing OpenSearch, admin Secret or reader Secret, or a failed call, is a `WARNING` in its log and exit 0 (`audit.setupJob.failOnError=true` makes it fatal). |
 | Gateway traffic logging | `wso2-amp-api-platform-gateway-extension` (`audit.trafficLogging.*`) | Appends `[collector]` (all capture off) and `[traffic_logging]` (stdout, `gateway_id`, `organization`, `environment`, `audit_claims`, `token_fingerprint_key`) to the gateway's `config.toml`. |
 | Audit query API | `wso2-agent-manager` (`agentManagerService.config.auditQuery.*`) | `GET /orgs/{orgName}/audit/events`, permission `audit:read`. It is off by default. |
 | Console page | `wso2-agent-manager` (`console.config.featureFlags.enableAuditLogs`) | Shows the Audit Logs page. It is off by default. |
-| Installer | `quick-start/install.sh` | Turns all of the above on when log collection is installed. |
+| Installer | `quick-start/install.sh` | Every piece above is off by default in its chart. The installer turns them all on (`audit.enabled`, `audit.trafficLogging.enabled`, `auditQuery.enabled`, `enableAuditLogs`) only when log collection is installed. |
 
 ### Organization scoping
 
@@ -51,7 +51,7 @@ AMS maps the identifiers in each record to an agent, using its own database (cac
 
 | Value | Default | Notes |
 |---|---|---|
-| `audit.enabled` | `true` | Renders the ConfigMap, setup Job, reader Secret and NetworkPolicy. |
+| `audit.enabled` | `false` | Renders the ConfigMap, setup Job, reader Secret and NetworkPolicy. Needs the logs module's OpenSearch. |
 | `audit.fluentBit.openSearchHost` / `openSearchPort` / `openSearchVHost` | `gateway-default.openchoreo-observability-plane.svc.cluster.local` / `11443` / `opensearch.observability.openchoreo.localhost` | Must match the logs module's `fluent-bit.openSearch*` values (`deployments/values/observability-logs-opensearch.yaml`). Releases that ship straight to the in-namespace service use `opensearch` / `9200` / `opensearch`. |
 | `audit.fluentBit.storageTotalLimitSize` | `2G` | Disk buffer for undelivered audit records, per node. Beyond it, the oldest chunks are dropped. |
 | `audit.sources.controlPlane.namespace` | `wso2-amp` | Namespace Agent Manager runs in. |
@@ -59,10 +59,12 @@ AMS maps the identifiers in each record to an agent, using its own database (cac
 | `audit.retention.readOnlyAfter` | `""` | Optional read-only phase. It is off by default because, after a long store outage, Fluent Bit writes its backlog to older daily indices. |
 | `audit.reader.create` / `existingSecret` | `true` / `""` | Read-only OpenSearch identity. When `existingSecret` is empty, the chart generates `amp-audit-opensearch-reader` and keeps it across upgrades. |
 | `audit.networkPolicy.allowAgentManager` | `true` | Admits the Agent Manager API pods to OpenSearch on port 9200. |
+| `audit.setupJob.failOnError` / `waitSeconds` / `activeDeadlineSeconds` / `backoffLimit` | `false` / `120` / `600` / `1` | With `failOnError=false` the setup Job logs a warning and exits 0 when it cannot set the indices up, so the extension (trace observability) installs and upgrades without OpenSearch. Check `kubectl logs job/<release>-audit-setup` after an install. |
 
 **Gateway extension (`audit.trafficLogging.*`):**
 
-- `enabled` (default `true`), `auditClaims` (default `["act"]`) and `maskedHeaders`.
+- `enabled` (default `false`), `auditClaims` (default `["act"]`) and `maskedHeaders`. Off by default: the records go to stdout, so they also reach `container-logs-*` with that index's retention and readership, and they carry subjects, client IPs and delegation claims. Gateways added later with `deployments/scripts/add-environment.sh` need `--set audit.trafficLogging.enabled=true` passed through its Helm arguments.
+- **Gateway image.** The `gateway_id`, `organization`, `environment`, `audit_claims` and `token_fingerprint_key` keys and the `eventId`/`gateway`/`auth` record blocks come from the audit-fields gateway change, which is not in the stock `2026.09.24` image. On a gateway without it, records carry no `gateway.organization`, so the audit API never returns them (only `AUDIT_GATEWAY_NAMESPACE_FALLBACK` would), while the lines still reach `container-logs-*`. Enable traffic logging only on gateways built with that change.
 - `fingerprintKeySecret.name`: when empty, a 48-character key is generated per gateway and kept.
 
 With `enabled=false`, the rendered chart is byte-identical to the previous release. If your own `config_toml` defines `[collector]` or `[traffic_logging]`, the render fails. In that case, remove those tables or disable this setting.
@@ -110,6 +112,8 @@ AMP_NS=wso2-amp
 SECRET=amp-audit-opensearch-reader
 ```
 
+Use `--reset-then-reuse-values` when the chart version changes: `--reuse-values` keeps the old values and ignores new chart defaults such as `audit.*` (Helm 3.14+).
+
 1. **Reader Secret in both namespaces, with the same password:**
 
    ```bash
@@ -121,13 +125,12 @@ SECRET=amp-audit-opensearch-reader
    done
    ```
 
-Use `--reset-then-reuse-values` when the chart version changes: `--reuse-values` keeps the old values and ignores new chart defaults such as `audit.*` (Helm 3.14+).
-
 2. **Observability extension.** This creates the ConfigMap, the index template, the retention policy and the reader user:
 
    ```bash
    helm upgrade amp-observability-traces oci://ghcr.io/wso2/helm-charts/wso2-amp-observability-extension \
      -n "$OBS_NS" --version <version> --reset-then-reuse-values \
+     --set audit.enabled=true \
      --set audit.reader.existingSecret="$SECRET" --set audit.sources.controlPlane.namespace="$AMP_NS"
    # Releases whose Fluent Bit ships to opensearch:9200 directly (no TLS passthrough route):
    #   --set audit.fluentBit.openSearchHost=opensearch --set audit.fluentBit.openSearchPort=9200 \
@@ -146,7 +149,7 @@ Use `--reset-then-reuse-values` when the chart version changes: `--reuse-values`
 
    To roll back, set `fluent-bit.existingConfigMap=fluent-bit` and restart the DaemonSet.
 
-4. **Gateways.** Upgrade each `wso2-amp-api-platform-gateway-extension` release with the new chart version. Traffic logging is on by default. The gateway operator rolls the gateway.
+4. **Gateways.** Upgrade each `wso2-amp-api-platform-gateway-extension` release with the new chart version and `--set audit.trafficLogging.enabled=true` (it is off by default; see the gateway image note above). The gateway operator rolls the gateway.
 
 5. **Agent Manager:**
 

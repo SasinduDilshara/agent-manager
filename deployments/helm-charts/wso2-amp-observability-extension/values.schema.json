@@ -282,8 +282,8 @@
       "description": "AMP audit log collection: copies gateway traffic records and Agent Manager control-plane audit records into amp-audit-* indices through the logs module Fluent Bit. See deployments/AUDIT_LOGS.md.",
       "properties": {
         "enabled": {
-          "default": true,
-          "description": "Render the audit ConfigMap, setup Job and related resources.",
+          "default": false,
+          "description": "Render the audit ConfigMap, setup Job and related resources. Off by default; needs the logs module's OpenSearch.",
           "title": "enabled",
           "type": "boolean"
         },
@@ -538,8 +538,29 @@
               "title": "image",
               "type": "string"
             },
+            "failOnError": {
+              "default": false,
+              "description": "Fail the Job (and the Helm release) when OpenSearch or its Secrets are missing or a setup call fails. Off: log a warning and exit 0.",
+              "title": "failOnError",
+              "type": "boolean"
+            },
+            "waitSeconds": {
+              "default": 120,
+              "description": "Seconds to wait for OpenSearch to answer.",
+              "minimum": 5,
+              "maximum": 1800,
+              "title": "waitSeconds",
+              "type": "integer"
+            },
+            "activeDeadlineSeconds": {
+              "default": 600,
+              "description": "Hard time bound on the setup Job.",
+              "minimum": 60,
+              "title": "activeDeadlineSeconds",
+              "type": "integer"
+            },
             "backoffLimit": {
-              "default": 6,
+              "default": 1,
               "description": "Job retries.",
               "minimum": 0,
               "title": "backoffLimit",

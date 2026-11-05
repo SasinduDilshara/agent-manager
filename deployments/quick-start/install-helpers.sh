@@ -322,9 +322,15 @@ prepare_audit_logs() {
         --set agentManagerService.config.auditQuery.insecureSkipVerify=true
         --set console.config.featureFlags.enableAuditLogs=true
     )
+    # Both pipeline pieces are off by default in their charts and opted in
+    # here, only when the logs module is installed.
     OBSERVABILITY_HELM_ARGS+=(
+        --set audit.enabled=true
         --set audit.reader.existingSecret="${AUDIT_READER_SECRET}"
         --set audit.sources.controlPlane.namespace="${AMP_NS}"
+    )
+    GATEWAY_HELM_ARGS+=(
+        --set audit.trafficLogging.enabled=true
     )
     AUDIT_LOGS_PREPARED=true
 }

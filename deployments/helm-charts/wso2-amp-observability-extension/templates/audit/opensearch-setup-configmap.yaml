@@ -150,6 +150,25 @@ data:
     # upgrade converges the cluster to the chart's values.
     set -eu
 
+    # Tolerant by default: the audit indices are an add-on to the logs module,
+    # and a missing or not-yet-ready OpenSearch must not fail the install or
+    # upgrade of this release (trace observability). FAIL_ON_ERROR=true makes
+    # every problem below fatal instead.
+    give_up() {
+      if [ "${FAIL_ON_ERROR:-false}" = "true" ]; then
+        echo "ERROR: $*" >&2
+        exit 1
+      fi
+      echo "WARNING: $*" >&2
+      echo "WARNING: AMP audit indices are NOT set up. Audit records are not collected until this Job succeeds;" >&2
+      echo "WARNING: fix the cause and re-run 'helm upgrade' of this release (see deployments/AUDIT_LOGS.md)." >&2
+      exit 0
+    }
+
+    if [ -z "${OPENSEARCH_USERNAME:-}" ] || [ -z "${OPENSEARCH_PASSWORD:-}" ]; then
+      give_up "OpenSearch admin credentials Secret {{ .Values.audit.openSearch.adminSecretName | quote }} is missing (is the OpenChoreo logs module installed in this namespace?)"
+    fi
+
     OS="${OPENSEARCH_URL%/}"
     POLICY="amp-audit-retention"
     PATTERN={{ printf "%s-*" $prefix | quote }}
@@ -175,11 +194,15 @@ data:
 
     echo "Waiting for OpenSearch at $OS ..."
     i=0
+    tries=$(( ${WAIT_SECONDS:-120} / 5 ))
     until oscurl -o /dev/null -f "$OS/_cluster/health?wait_for_status=yellow&timeout=5s" 2>/dev/null; do
       i=$((i + 1))
-      if [ "$i" -ge 60 ]; then echo "OpenSearch did not become ready" >&2; exit 1; fi
+      if [ "$i" -ge "$tries" ]; then give_up "OpenSearch at $OS did not answer within ${WAIT_SECONDS:-120}s"; fi
       sleep 5
     done
+
+    # From here on any failed call is reported through give_up as well.
+    trap 'rc=$?; if [ "$rc" -ne 0 ]; then trap - EXIT; give_up "a setup call failed (exit $rc), see the messages above"; fi' EXIT
 
     echo "Index template amp-audit"
     call PUT /_index_template/amp-audit /config/index-template.json >/dev/null
@@ -200,6 +223,9 @@ data:
     call POST "/_plugins/_ism/change_policy/$PATTERN" /tmp/add.json >/dev/null || true
 
     {{- if .Values.audit.reader.create }}
+    if [ -z "${READER_USERNAME:-}" ] || [ -z "${READER_PASSWORD:-}" ]; then
+      give_up "reader Secret {{ include "amp-observability-extension.auditReaderSecretName" . | quote }} is missing; the amp_audit_reader user was not created"
+    fi
     echo "Read-only role and user {{ .Values.audit.reader.username }}"
     call PUT /_plugins/_security/api/roles/amp_audit_reader /config/reader-role.json >/dev/null
     jq -n --arg p "$READER_PASSWORD" \

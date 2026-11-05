@@ -3,6 +3,8 @@
 # Creates the amp-audit index template, the retention policy and (unless
 # audit.reader.create is false) a read-only OpenSearch user for the Agent
 # Manager audit query API. Runs after every install and upgrade; idempotent.
+# Tolerant by default (setupJob.failOnError=false): Secrets are optional and a
+# missing or unreachable OpenSearch is a logged warning, not a failed release.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -17,6 +19,7 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
   backoffLimit: {{ $job.backoffLimit }}
+  activeDeadlineSeconds: {{ $job.activeDeadlineSeconds }}
   ttlSecondsAfterFinished: {{ $job.ttlSecondsAfterFinished }}
   template:
     metadata:
@@ -43,27 +46,35 @@ spec:
           env:
             - name: OPENSEARCH_URL
               value: {{ .Values.audit.openSearch.url | quote }}
+            - name: FAIL_ON_ERROR
+              value: {{ $job.failOnError | quote }}
+            - name: WAIT_SECONDS
+              value: {{ $job.waitSeconds | int | quote }}
             - name: OPENSEARCH_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.audit.openSearch.adminSecretName }}
                   key: username
+                  optional: true
             - name: OPENSEARCH_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.audit.openSearch.adminSecretName }}
                   key: password
+                  optional: true
             {{- if .Values.audit.reader.create }}
             - name: READER_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: {{ include "amp-observability-extension.auditReaderSecretName" . }}
                   key: username
+                  optional: true
             - name: READER_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "amp-observability-extension.auditReaderSecretName" . }}
                   key: password
+                  optional: true
             {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
