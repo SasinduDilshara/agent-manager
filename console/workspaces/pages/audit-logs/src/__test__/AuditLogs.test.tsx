@@ -48,6 +48,7 @@ import { useAuditEvents, useTokenScopes } from "@agent-management-platform/api-c
 import { AuditLogsOrganization } from "../AuditLogs.Organization";
 import {
   ALL_EVENTS,
+  cpIdentityProvisionStarted,
   llmChatOk,
   mcpOboToolsCallDenied,
   PAGE_ONE,
@@ -141,6 +142,15 @@ describe("filters ↔ URL", () => {
     expect(screen.getByRole("button", { name: /clear filters \(4\)/i })).toBeInTheDocument();
   });
 
+  it("offers Started as an outcome filter", () => {
+    renderPage();
+    const chip = screen.getByTestId("outcome-filter-STARTED");
+    expect(chip).toHaveTextContent("Started");
+    fireEvent.click(chip);
+    expect(new URLSearchParams(currentSearch).getAll("outcome")).toEqual(["STARTED"]);
+    expect(lastListQuery().outcome).toEqual(["STARTED"]);
+  });
+
   it("writes outcome chip toggles to the URL", () => {
     renderPage();
     fireEvent.click(screen.getByTestId("outcome-filter-DENIED"));
@@ -205,6 +215,18 @@ describe("results table", () => {
     expect(screen.getAllByTestId("outcome-FAILED")[0].className).toMatch(/colorError/);
   });
 
+  it("shows an intent record as a neutral Started chip", () => {
+    mockUseAuditEvents.mockImplementation(() =>
+      hookResult({ events: [...ALL_EVENTS, cpIdentityProvisionStarted] }),
+    );
+    renderPage();
+    const row = rowFor(cpIdentityProvisionStarted);
+    const started = within(row).getByTestId("outcome-STARTED");
+    expect(started).toHaveTextContent("Started");
+    expect(started.className).not.toMatch(/colorSuccess|colorWarning|colorError/);
+    expect(row).toHaveTextContent("(started)");
+  });
+
   it("badges delegated calls", () => {
     renderPage();
     expect(within(rowFor(mcpOboToolsCallDenied)).getByText("on behalf of")).toBeInTheDocument();
@@ -261,6 +283,18 @@ describe("detail drawer", () => {
     expect(mcp).toHaveTextContent(mcpOboToolsCallDenied.mcp!.sessionId!);
 
     expect(screen.getByTestId("raw-json")).toHaveTextContent('"terminalReason": "policy_denied"');
+  });
+
+  it("explains an intent record", async () => {
+    mockUseAuditEvents.mockImplementation(() =>
+      hookResult({ events: [...ALL_EVENTS, cpIdentityProvisionStarted] }),
+    );
+    renderPage();
+    fireEvent.click(rowFor(cpIdentityProvisionStarted));
+    const alert = await screen.findByTestId("started-alert");
+    expect(alert).toHaveTextContent(/intent record/i);
+    expect(alert).toHaveTextContent(cpIdentityProvisionStarted.id);
+    expect(screen.queryByTestId("denied-alert")).toBeNull();
   });
 
   it("opens from the keyboard and shows LLM details", async () => {

@@ -80,6 +80,13 @@ describe("buildAuditEventsSearchParams", () => {
     expect(new URLSearchParams(sp).getAll("outcome")).toEqual(["DENIED", "FAILED"]);
   });
 
+  it("sends the STARTED outcome like any other", () => {
+    expect(buildAuditEventsSearchParams({ outcome: ["SUCCESS", "STARTED"] })).toEqual([
+      ["outcome", "SUCCESS"],
+      ["outcome", "STARTED"],
+    ]);
+  });
+
   it("drops blank text filters", () => {
     expect(buildAuditEventsSearchParams({ actor: "  ", search: "" })).toEqual([]);
   });

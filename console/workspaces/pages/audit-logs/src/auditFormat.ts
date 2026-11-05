@@ -43,13 +43,22 @@ export const OUTCOME_LABEL: Record<AuditOutcome, string> = {
   SUCCESS: "Success",
   DENIED: "Denied",
   FAILED: "Failed",
+  STARTED: "Started",
 };
 
-/** Green / amber / red. */
-export const OUTCOME_COLOR: Record<AuditOutcome, "success" | "warning" | "error"> = {
+/** Green / amber / red; neutral for an intent record, which has no result yet. */
+export const OUTCOME_COLOR: Record<AuditOutcome, "success" | "warning" | "error" | "default"> = {
   SUCCESS: "success",
   DENIED: "warning",
   FAILED: "error",
+  STARTED: "default",
+};
+
+export const OUTCOME_DESCRIPTION: Record<AuditOutcome, string> = {
+  SUCCESS: "The operation or request succeeded",
+  DENIED: "Refused by an authorization or policy check",
+  FAILED: "The operation or request failed",
+  STARTED: "Intent record written before a privileged operation; its result is a separate record",
 };
 
 const ACTOR_TYPE_LABEL: Record<AuditActor["type"], string> = {

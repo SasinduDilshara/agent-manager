@@ -23,6 +23,8 @@ import {
   agentLabel,
   delegationPath,
   hasDelegation,
+  OUTCOME_COLOR,
+  OUTCOME_LABEL,
   toCsv,
   toJson,
 } from "../auditFormat";
@@ -108,5 +110,13 @@ describe("export", () => {
 
   it("exports JSON as the events array", () => {
     expect(JSON.parse(toJson([llmChatOk]))).toEqual([llmChatOk]);
+  });
+});
+
+describe("outcome presentation", () => {
+  it("labels every API outcome, with STARTED neutral", () => {
+    expect(OUTCOME_LABEL.STARTED).toBe("Started");
+    expect(OUTCOME_COLOR.STARTED).toBe("default");
+    expect(OUTCOME_COLOR.SUCCESS).toBe("success");
   });
 });

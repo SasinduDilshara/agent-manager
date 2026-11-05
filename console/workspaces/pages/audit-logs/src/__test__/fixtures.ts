@@ -1396,6 +1396,29 @@ export const cpAgentCreate: AuditEvent = {
   }
 };
 
+/**
+ * An audit.Begin intent record (outcome "unknown" in the store), as the API
+ * returns it. Kept out of ALL_EVENTS so the page totals stay those of the
+ * live sample.
+ */
+export const cpIdentityProvisionStarted: AuditEvent = {
+  ...cpAgentCreate,
+  "id": "8d2bb99e-6669-45ce-9413-4405fb4d613b",
+  "action": "agent-identity:provision",
+  "outcome": "STARTED",
+  "statusCode": null,
+  "summary": "01900000-0000-7000-8000-000000000030 agent-identity:provision agent-identity ext-audit-agent (started)",
+  "resource": { "type": "agent-identity", "name": "ext-audit-agent" },
+  "raw": {
+    "log_type": "audit",
+    "event": {
+      "eventId": "8d2bb99e-6669-45ce-9413-4405fb4d613b",
+      "action": "agent-identity:provision",
+      "outcome": "unknown",
+    },
+  },
+};
+
 /** All fixtures, newest first. */
 export const ALL_EVENTS: AuditEvent[] = [
   a2aSendMessageOk,

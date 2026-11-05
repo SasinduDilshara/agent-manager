@@ -69,6 +69,11 @@ describe("parseAuditFilters", () => {
     });
   });
 
+  it("reads and writes the STARTED outcome", () => {
+    expect(parseAuditFilters(sp("outcome=STARTED&outcome=SUCCESS")).outcomes).toEqual(["STARTED", "SUCCESS"]);
+    expect(withAuditFilters(sp(""), { outcomes: ["STARTED"] }).getAll("outcome")).toEqual(["STARTED"]);
+  });
+
   it("drops unknown enum values, duplicates and malformed ranges", () => {
     const f = parseAuditFilters(
       sp(

@@ -19,6 +19,7 @@
 import { Chip, Tooltip } from "@wso2/oxygen-ui";
 import {
   CircleCheck,
+  CircleDashed,
   CircleX,
   ShieldX,
   Users,
@@ -28,6 +29,7 @@ import {
   CATEGORY_DESCRIPTION,
   CATEGORY_LABEL,
   OUTCOME_COLOR,
+  OUTCOME_DESCRIPTION,
   OUTCOME_LABEL,
 } from "../auditFormat";
 
@@ -35,19 +37,22 @@ const OUTCOME_ICON = {
   SUCCESS: CircleCheck,
   DENIED: ShieldX,
   FAILED: CircleX,
+  STARTED: CircleDashed,
 } as const;
 
 export function OutcomeChip({ outcome }: { outcome: AuditOutcome }) {
   const Icon = OUTCOME_ICON[outcome] ?? CircleX;
   return (
-    <Chip
-      size="small"
-      variant="outlined"
-      color={OUTCOME_COLOR[outcome] ?? "default"}
-      icon={<Icon size={14} aria-hidden />}
-      label={OUTCOME_LABEL[outcome] ?? outcome}
-      data-testid={`outcome-${outcome}`}
-    />
+    <Tooltip title={OUTCOME_DESCRIPTION[outcome] ?? ""}>
+      <Chip
+        size="small"
+        variant="outlined"
+        color={OUTCOME_COLOR[outcome] ?? "default"}
+        icon={<Icon size={14} aria-hidden />}
+        label={OUTCOME_LABEL[outcome] ?? outcome}
+        data-testid={`outcome-${outcome}`}
+      />
+    </Tooltip>
   );
 }
 

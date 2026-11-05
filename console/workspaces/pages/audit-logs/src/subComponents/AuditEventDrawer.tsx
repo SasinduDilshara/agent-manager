@@ -224,6 +224,14 @@ export function AuditEventDetails({ event, onClose }: { event: AuditEvent; onClo
           <Typography variant="body2" color="text.secondary">{event.summary}</Typography>
         )}
 
+        {event.outcome === "STARTED" && (
+          <Alert severity="info" data-testid="started-alert">
+            Intent record, written before the operation ran. Its result is the
+            record whose <code>attemptEventId</code> is <code>{event.id}</code>;
+            with no such record, the result was never recorded.
+          </Alert>
+        )}
+
         {event.outcome === "DENIED" && denied?.policy && (
           <Alert severity="warning" data-testid="denied-alert">
             Denied by policy <strong>{denied.policy}</strong>

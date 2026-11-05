@@ -31,7 +31,12 @@ export const AUDIT_CATEGORIES = [
 ] as const;
 export type AuditCategory = (typeof AUDIT_CATEGORIES)[number];
 
-export const AUDIT_OUTCOMES = ["SUCCESS", "DENIED", "FAILED"] as const;
+/**
+ * STARTED is a control-plane intent record, written before a privileged
+ * operation. Its result is a separate record whose `details.attemptEventId`
+ * names it, so a STARTED record is neither a success nor a failure.
+ */
+export const AUDIT_OUTCOMES = ["SUCCESS", "DENIED", "FAILED", "STARTED"] as const;
 export type AuditOutcome = (typeof AUDIT_OUTCOMES)[number];
 
 export type AuditSource = "GATEWAY" | "CONTROL_PLANE";
