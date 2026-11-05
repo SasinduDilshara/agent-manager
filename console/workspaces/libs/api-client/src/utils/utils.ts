@@ -178,6 +178,13 @@ export async function httpGET(
         if (!response.ok) {
             const err = new Error(`HTTP error! status: ${response.status}`) as HttpErrorWithStatus;
             err.status = response.status;
+            // The parsed error body, when there is one, for callers that show
+            // the server's message. The thrown message itself is unchanged.
+            try {
+                err.body = await response.json();
+            } catch {
+                err.body = undefined;
+            }
             throw err;
         }
         await sleep(DEFAULT_TIMEOUT);

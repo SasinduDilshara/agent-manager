@@ -120,7 +120,7 @@ beforeEach(() => {
   mockUseTokenScopes.mockReturnValue({
     enforced: true,
     resolved: true,
-    scopes: new Set(["amp:observability:log-read"]),
+    scopes: new Set(["amp:audit:read"]),
   });
 });
 
@@ -168,8 +168,12 @@ describe("filters ↔ URL", () => {
     expect(currentSearch).toBe("?timeRange=1h");
   });
 
-  it("does not query without the log-read scope", () => {
-    mockUseTokenScopes.mockReturnValue({ enforced: true, resolved: true, scopes: new Set() });
+  it("does not query without the audit read scope, even with log-read", () => {
+    mockUseTokenScopes.mockReturnValue({
+      enforced: true,
+      resolved: true,
+      scopes: new Set(["amp:observability:log-read", "amp:observability:trace-read"]),
+    });
     renderPage();
     expect(screen.getByText(/don't have permission to view audit logs/i)).toBeInTheDocument();
     for (const [, , opts] of mockUseAuditEvents.mock.calls) {
@@ -250,12 +254,49 @@ describe("results table", () => {
     expect(screen.getByText(/no events match these filters/i)).toBeInTheDocument();
   });
 
-  it("explains an unreachable audit store", () => {
+  it.each([502, 504])("explains an unreachable audit store (%i)", (status) => {
     mockUseAuditEvents.mockImplementation(() =>
-      hookResult({ events: [], error: Object.assign(new Error("x"), { status: 502 }) }),
+      hookResult({ events: [], error: Object.assign(new Error("x"), { status }) }),
     );
     renderPage();
     expect(screen.getByText(/audit store is unreachable/i)).toBeInTheDocument();
+  });
+
+  it("reports a disabled audit API (503) as not enabled, not as unreachable", () => {
+    mockUseAuditEvents.mockImplementation(() =>
+      hookResult({ events: [], error: Object.assign(new Error("x"), { status: 503 }) }),
+    );
+    renderPage();
+    expect(screen.getByText(/aren't available on this deployment/i)).toBeInTheDocument();
+    expect(screen.getByText(/audit query API is not enabled/i)).toBeInTheDocument();
+    expect(screen.queryByText(/unreachable/i)).not.toBeInTheDocument();
+  });
+
+  it("explains a missing permission (403)", () => {
+    mockUseAuditEvents.mockImplementation(() =>
+      hookResult({ events: [], error: Object.assign(new Error("x"), { status: 403 }) }),
+    );
+    renderPage();
+    expect(screen.getByText(/don't have access to audit logs/i)).toBeInTheDocument();
+  });
+
+  it("shows the server's message for a rejected query (400)", () => {
+    const error = Object.assign(new Error("HTTP error! status: 400"), {
+      status: 400,
+      body: { message: "invalid audit query: actor and search may be at most 256 characters" },
+    });
+    mockUseAuditEvents.mockImplementation(() => hookResult({ events: [], error }));
+    renderPage();
+    expect(screen.getByText(/filters can't be used/i)).toBeInTheDocument();
+    expect(screen.getByText(/at most 256 characters/i)).toBeInTheDocument();
+  });
+
+  it("falls back to a generic hint for a 400 without a message", () => {
+    mockUseAuditEvents.mockImplementation(() =>
+      hookResult({ events: [], error: Object.assign(new Error("x"), { status: 400 }) }),
+    );
+    renderPage();
+    expect(screen.getByText(/check the filters and the time range/i)).toBeInTheDocument();
   });
 });
 

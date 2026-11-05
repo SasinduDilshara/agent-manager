@@ -16,9 +16,9 @@
  * under the License.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  isNotFoundError, nullIfNotFound, pendingRefetchInterval, POLL_INTERVAL, transitionRefetchInterval,
+  httpGET, isNotFoundError, nullIfNotFound, pendingRefetchInterval, POLL_INTERVAL, transitionRefetchInterval,
 } from "./utils";
 
 describe("pendingRefetchInterval", () => {
@@ -57,5 +57,24 @@ describe("nullIfNotFound", () => {
       .rejects.toMatchObject({ status: 503 });
     await expect(nullIfNotFound(Promise.resolve("ok"))).resolves.toBe("ok");
     expect(isNotFoundError(null)).toBe(false);
+  });
+});
+
+describe("httpGET errors", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps the status and attaches the parsed error body without changing the message", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ message: "invalid audit query: bad agent" }), { status: 400 })));
+    await expect(httpGET("/x", { baseUrl: "http://h" })).rejects.toMatchObject({
+      status: 400,
+      message: "HTTP error! status: 400",
+      body: { message: "invalid audit query: bad agent" },
+    });
+  });
+
+  it("tolerates an error response that is not JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>", { status: 502 })));
+    await expect(httpGET("/x", { baseUrl: "http://h" })).rejects.toMatchObject({ status: 502, body: undefined });
   });
 });

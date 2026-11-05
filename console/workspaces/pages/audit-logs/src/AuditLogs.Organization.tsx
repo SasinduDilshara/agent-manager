@@ -75,20 +75,29 @@ function errorStatus(error: unknown): number | undefined {
   return typeof s === "number" ? s : undefined;
 }
 
+/** The server's own error message, which the audit API keeps safe to show. */
+function serverMessage(error: unknown): string | undefined {
+  const body = (error as { body?: unknown } | null)?.body;
+  const message = (body as { message?: unknown } | null | undefined)?.message;
+  return typeof message === "string" && message.trim() ? message.trim() : undefined;
+}
+
 function errorMessage(error: unknown): { title: string; detail: string } {
   switch (errorStatus(error)) {
     case 403:
       return {
         title: "You don't have access to audit logs.",
-        detail: "Ask an organization administrator for the log-read permission.",
+        detail: "Ask an organization administrator for the audit read permission.",
       };
+    // The backend answers 503 when the audit query API is switched off on
+    // this deployment (the page flag can be on while the API is off).
     case 404:
+    case 503:
       return {
         title: "Audit logs aren't available on this deployment.",
         detail: "The audit query API is not enabled. Ask your platform administrator.",
       };
     case 502:
-    case 503:
     case 504:
       return {
         title: "The audit store is unreachable right now.",
@@ -97,7 +106,7 @@ function errorMessage(error: unknown): { title: string; detail: string } {
     case 400:
       return {
         title: "These filters can't be used.",
-        detail: "Check the time range (at most 186 days) and try again.",
+        detail: serverMessage(error) ?? "Check the filters and the time range, then try again.",
       };
     default:
       return { title: "Couldn't load audit events.", detail: "Try again in a moment." };
@@ -268,7 +277,7 @@ export function AuditLogsOrganization() {
       <PageLayout title={TITLE} description={DESCRIPTION} disableIcon>
         <Alert severity="info">
           You don&apos;t have permission to view audit logs. Ask an organization
-          administrator for the log-read permission.
+          administrator for the audit read permission (audit:read).
         </Alert>
       </PageLayout>
     );
