@@ -18,6 +18,7 @@ package services
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,8 +212,12 @@ func TestNormalizeAuditDocument_LiveControlPlaneRecords(t *testing.T) {
 		assert.True(t, evalOS(t, auditOutcomeQuery(string(e.Outcome)), doc), "outcome query for %s", docString(ev, "outcome"))
 
 		switch docString(ev, "outcome") {
-		case "success", "unknown":
+		case "success":
 			assert.Equal(t, "SUCCESS", string(e.Outcome))
+		case "unknown":
+			assert.Equal(t, "STARTED", string(e.Outcome))
+			assert.True(t, strings.HasSuffix(e.Summary, " (started)"), e.Summary)
+			assert.False(t, evalOS(t, auditOutcomeQuery("SUCCESS"), doc), "an intent record is not a success")
 		case "failure":
 			assert.Equal(t, "FAILED", string(e.Outcome))
 		case "deny":
@@ -244,6 +249,60 @@ func TestNormalizeAuditDocument_LiveControlPlaneRecords(t *testing.T) {
 	sync := normalizeAuditDocument("", byID["0fe9e381-a07b-44bc-9b4c-300e06b90278"], idx)
 	assert.Equal(t, "GATEWAY", sync.Actor.Type)
 	assert.Equal(t, "10.42.0.87", sync.Network.ClientIp)
+}
+
+// An intent record and the failure that resolves it must not read as a success
+// next to a failure: the intent is STARTED, and only the outcome record is
+// FAILED.
+func TestNormalizeAuditDocument_IntentRecordIsStarted(t *testing.T) {
+	docs := loadControlPlaneFixture(t)
+	byID := map[string]map[string]any{}
+	for _, d := range docs {
+		byID[docString(d, "event", "eventId")] = d
+	}
+	pairs := 0
+	for _, outcomeDoc := range docs {
+		attemptID := docString(outcomeDoc, "event", "details", "attemptEventId")
+		intent, ok := byID[attemptID]
+		if attemptID == "" || !ok {
+			continue
+		}
+		pairs++
+		require.Equal(t, "unknown", docString(intent, "event", "outcome"))
+
+		in := normalizeAuditDocument("", intent, nil)
+		out := normalizeAuditDocument("", outcomeDoc, nil)
+		assert.Equal(t, "STARTED", string(in.Outcome))
+		assert.NotEqual(t, "STARTED", string(out.Outcome), "the outcome record carries the result")
+		assert.True(t, evalOS(t, auditOutcomeQuery("STARTED"), intent))
+		assert.False(t, evalOS(t, auditOutcomeQuery("STARTED"), outcomeDoc))
+		for _, o := range []string{"SUCCESS", "DENIED", "FAILED"} {
+			assert.False(t, evalOS(t, auditOutcomeQuery(o), intent), "intent record matched outcome=%s", o)
+		}
+	}
+	assert.Positive(t, pairs, "fixture has no intent/outcome pair; the test proves nothing")
+
+	// A failed privileged operation is one FAILED and one STARTED record.
+	failed := map[string]any{
+		"audit_source": auditSourceControlPlane,
+		"event":        map[string]any{"action": "git-secret:create", "outcome": "failure", "details": map[string]any{"attemptEventId": "a-1"}},
+	}
+	attempt := map[string]any{
+		"audit_source": auditSourceControlPlane,
+		"event":        map[string]any{"eventId": "a-1", "action": "git-secret:create", "outcome": "unknown"},
+	}
+	assert.Equal(t, "FAILED", string(normalizeAuditDocument("", failed, nil).Outcome))
+	assert.Equal(t, "STARTED", string(normalizeAuditDocument("", attempt, nil).Outcome))
+	assert.False(t, evalOS(t, auditOutcomeQuery("SUCCESS"), attempt))
+	assert.False(t, evalOS(t, auditOutcomeQuery("SUCCESS"), failed))
+}
+
+// Gateway records have no intent phase, so STARTED never matches them.
+func TestAuditOutcomeQuery_StartedExcludesGateway(t *testing.T) {
+	for _, doc := range loadGatewayFixture(t) {
+		assert.False(t, evalOS(t, auditOutcomeQuery("STARTED"), doc))
+		assert.NotEqual(t, "STARTED", string(normalizeAuditDocument("", doc, nil).Outcome))
+	}
 }
 
 func TestNormalizeAuditDocument_ControlPlaneAgentAttribution(t *testing.T) {

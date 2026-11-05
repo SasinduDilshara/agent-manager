@@ -187,13 +187,19 @@ func auditGatewayOutcome(doc map[string]any) string {
 // auditControlPlaneOutcome maps the AMS record outcome. "unknown" marks an
 // intent record written before an external mutation; its result is recorded
 // by a later record that links back to it (details.attemptEventId), so the
-// intent itself is not shown as a failure.
+// intent is reported as STARTED rather than as a success or a failure.
+//
+// The recorder always writes one of the four values (an empty outcome is
+// written as "success"), so the default branch only covers records from a
+// future schema; auditOutcomeQuery matches the four values exactly.
 func auditControlPlaneOutcome(outcome string) string {
 	switch outcome {
 	case "deny":
 		return AuditOutcomeDenied
 	case "failure":
 		return AuditOutcomeFailed
+	case "unknown":
+		return AuditOutcomeStarted
 	default:
 		return AuditOutcomeSuccess
 	}

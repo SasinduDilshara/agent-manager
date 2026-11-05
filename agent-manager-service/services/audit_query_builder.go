@@ -64,6 +64,11 @@ const (
 	AuditOutcomeSuccess = "SUCCESS"
 	AuditOutcomeDenied  = "DENIED"
 	AuditOutcomeFailed  = "FAILED"
+	// AuditOutcomeStarted is a control-plane intent record (outcome "unknown"),
+	// written before a privileged external mutation. Its result is a separate
+	// record linked by details.attemptEventId, so the intent is neither a
+	// success nor a failure. Gateway records never carry it.
+	AuditOutcomeStarted = "STARTED"
 )
 
 // AuditCategories lists every category in display order.
@@ -71,7 +76,7 @@ var AuditCategories = []string{
 	AuditCategoryOperational, AuditCategoryLLM, AuditCategoryMCP, AuditCategoryA2A, AuditCategoryOther,
 }
 
-var auditOutcomes = []string{AuditOutcomeSuccess, AuditOutcomeDenied, AuditOutcomeFailed}
+var auditOutcomes = []string{AuditOutcomeSuccess, AuditOutcomeDenied, AuditOutcomeFailed, AuditOutcomeStarted}
 
 // llmAPIKinds are the gateway API kinds whose traffic is LLM traffic.
 var llmAPIKinds = []string{"LlmProxy", "LlmProvider"}
@@ -388,10 +393,15 @@ func auditOutcomeQuery(outcome string) osQuery {
 			osBool(map[string][]osQuery{"filter": {gw, auditGatewayFailed()}, "must_not": {auditGatewayDenied()}}),
 			osAnd(cp, osTerm("event.outcome", "failure")),
 		)
+	case AuditOutcomeStarted:
+		// Intent records exist only on the control plane.
+		return osAnd(cp, osTerm("event.outcome", "unknown"))
 	default: // AuditOutcomeSuccess
+		// Only "success": an intent record ("unknown") is STARTED, so a failed
+		// or refused privileged operation does not also appear as a success.
 		return osOr(
 			osBool(map[string][]osQuery{"filter": {gw}, "must_not": {auditGatewayDenied(), auditGatewayFailed()}}),
-			osAnd(cp, osTerms("event.outcome", []string{"success", "unknown"})),
+			osAnd(cp, osTerm("event.outcome", "success")),
 		)
 	}
 }

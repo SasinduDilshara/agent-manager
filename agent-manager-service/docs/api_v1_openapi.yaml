@@ -11929,12 +11929,14 @@ paths:
             maxLength: 128
         - name: outcome
           in: query
-          description: Outcome. Repeatable.
+          description: >-
+            Outcome. Repeatable. STARTED matches the intent records written
+            before a privileged operation; its result is a separate record.
           style: form
           explode: true
           schema:
             type: array
-            maxItems: 3
+            maxItems: 4
             items:
               $ref: "#/components/schemas/AuditEventOutcome"
         - name: actor
@@ -12076,8 +12078,12 @@ components:
       enum: [OPERATIONAL, LLM, MCP, A2A, OTHER]
     AuditEventOutcome:
       type: string
-      description: Normalised outcome.
-      enum: [SUCCESS, DENIED, FAILED]
+      description: >-
+        Normalised outcome. STARTED is an intent record, written before a
+        privileged operation whose result is recorded by a later record that
+        links back to it (details.attemptEventId). A STARTED record with no
+        linked result means the operation's result was never recorded.
+      enum: [SUCCESS, DENIED, FAILED, STARTED]
     AuditEventListResponse:
       type: object
       required: [events, nextCursor, total, totalRelation, categoryCounts]

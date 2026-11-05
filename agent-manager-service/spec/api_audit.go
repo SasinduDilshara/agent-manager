@@ -78,7 +78,7 @@ func (r ApiListAuditEventsRequest) Environment(environment string) ApiListAuditE
 	return r
 }
 
-// Outcome. Repeatable.
+// Outcome. Repeatable. STARTED matches the intent records written before a privileged operation; its result is a separate record.
 func (r ApiListAuditEventsRequest) Outcome(outcome []AuditEventOutcome) ApiListAuditEventsRequest {
 	r.outcome = &outcome
 	return r

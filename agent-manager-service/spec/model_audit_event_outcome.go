@@ -15,7 +15,7 @@ import (
 	"fmt"
 )
 
-// AuditEventOutcome Normalised outcome.
+// AuditEventOutcome Normalised outcome. STARTED is an intent record, written before a privileged operation whose result is recorded by a later record that links back to it (details.attemptEventId). A STARTED record with no linked result means the operation's result was never recorded.
 type AuditEventOutcome string
 
 // List of AuditEventOutcome
@@ -23,6 +23,7 @@ const (
 	AUDITEVENTOUTCOME_SUCCESS AuditEventOutcome = "SUCCESS"
 	AUDITEVENTOUTCOME_DENIED  AuditEventOutcome = "DENIED"
 	AUDITEVENTOUTCOME_FAILED  AuditEventOutcome = "FAILED"
+	AUDITEVENTOUTCOME_STARTED AuditEventOutcome = "STARTED"
 )
 
 // All allowed values of AuditEventOutcome enum
@@ -30,6 +31,7 @@ var AllowedAuditEventOutcomeEnumValues = []AuditEventOutcome{
 	"SUCCESS",
 	"DENIED",
 	"FAILED",
+	"STARTED",
 }
 
 func (v *AuditEventOutcome) UnmarshalJSON(src []byte) error {
