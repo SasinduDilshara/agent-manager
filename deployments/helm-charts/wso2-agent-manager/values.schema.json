@@ -680,9 +680,36 @@
                   "title": "openSearchUrl",
                   "type": "string"
                 },
+                "ca": {
+                  "additionalProperties": false,
+                  "description": "PEM CA bundle trusted for the OpenSearch certificate, mounted from a Secret or a ConfigMap in this namespace. Verification stays on.",
+                  "properties": {
+                    "secretName": {
+                      "default": "",
+                      "description": "Secret holding the CA bundle.",
+                      "title": "secretName",
+                      "type": "string"
+                    },
+                    "configMapName": {
+                      "default": "",
+                      "description": "ConfigMap holding the CA bundle (instead of secretName).",
+                      "title": "configMapName",
+                      "type": "string"
+                    },
+                    "key": {
+                      "default": "ca.crt",
+                      "description": "Key of the PEM bundle.",
+                      "pattern": "^[A-Za-z0-9._-]+$",
+                      "title": "key",
+                      "type": "string"
+                    }
+                  },
+                  "title": "ca",
+                  "type": "object"
+                },
                 "insecureSkipVerify": {
-                  "default": true,
-                  "description": "Skip TLS verification of the OpenSearch certificate (the bundled OpenSearch serves a self-signed one).",
+                  "default": false,
+                  "description": "Skip TLS verification of the OpenSearch certificate. Development only (the quick-start installer sets it for the bundled, self-signed OpenSearch). Cannot be combined with ca.",
                   "title": "insecureSkipVerify",
                   "type": "boolean"
                 },

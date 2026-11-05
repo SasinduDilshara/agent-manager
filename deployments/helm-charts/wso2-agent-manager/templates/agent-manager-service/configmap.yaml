@@ -123,6 +123,9 @@ data:
   AUDIT_QUERY_ENABLED: {{ dig "enabled" false $auditQuery | quote }}
   AUDIT_OPENSEARCH_URL: {{ dig "openSearchUrl" "https://opensearch.openchoreo-observability-plane.svc.cluster.local:9200" $auditQuery | quote }}
   AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY: {{ dig "insecureSkipVerify" false $auditQuery | quote }}
+  {{- if include "agent-management-platform.auditQueryCAVolume" . }}
+  AUDIT_OPENSEARCH_CA_FILE: {{ printf "/etc/amp-audit-opensearch-ca/%s" (dig "ca" "key" "ca.crt" $auditQuery) | quote }}
+  {{- end }}
   AUDIT_INDEX_PATTERN: {{ dig "indexPattern" "amp-audit-*" $auditQuery | quote }}
   AUDIT_OPENSEARCH_TIMEOUT_SECONDS: {{ dig "timeoutSeconds" 15 $auditQuery | int | quote }}
   AUDIT_GATEWAY_NAMESPACE_FALLBACK: {{ dig "gatewayNamespaceFallback" false $auditQuery | quote }}

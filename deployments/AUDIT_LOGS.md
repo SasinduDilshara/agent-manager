@@ -73,7 +73,8 @@ With `enabled=false`, the rendered chart is byte-identical to the previous relea
 |---|---|---|
 | `enabled` | `AUDIT_QUERY_ENABLED` | `false` |
 | `openSearchUrl` | `AUDIT_OPENSEARCH_URL` | `https://opensearch.openchoreo-observability-plane.svc.cluster.local:9200` |
-| `insecureSkipVerify` | `AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY` | `true` in the chart (the bundled OpenSearch is self-signed), `false` in the service |
+| `ca.secretName` / `ca.configMapName`, `ca.key` | `AUDIT_OPENSEARCH_CA_FILE` | not set. A PEM CA bundle in this namespace, mounted read-only at `/etc/amp-audit-opensearch-ca/` and trusted alongside the system roots. Verification stays on. |
+| `insecureSkipVerify` | `AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY` | `false`. Development only: the reader credentials are then sent unverified, and AMS logs a warning at startup. The quick-start installer sets it to `true` for the bundled, self-signed OpenSearch. Cannot be combined with `ca`. |
 | `indexPattern` | `AUDIT_INDEX_PATTERN` | `amp-audit-*` |
 | `timeoutSeconds` | `AUDIT_OPENSEARCH_TIMEOUT_SECONDS` | `15` |
 | `gatewayNamespaceFallback` | `AUDIT_GATEWAY_NAMESPACE_FALLBACK` | `false` |
@@ -90,7 +91,7 @@ The `amp-audit-retention` ISM policy deletes each daily index 186 days after cre
 
 - The audit query API requires `audit:read` and is scoped to the caller's organization. Only the Agent Manager Admin role holds it by default; Developer, AI Lead and Platform Engineer, who hold `observability:log-read` for runtime logs, do not. To let someone else review the trail, create a custom role with `amp:audit:read`. Reading the trail is itself recorded as `audit:read`, because the route is listed in `sensitiveReadPaths`. The record carries the filters used (time range, category, agent, project, environment, outcome, actor, search text up to 256 characters, limit, and whether a cursor was sent) and the number of records returned, plus the HTTP status of the response. Each read is one record, including rejected ones. It never carries the cursor value.
 - Each event's `outcome` is `SUCCESS`, `DENIED`, `FAILED` or `STARTED`. `STARTED` marks a control-plane intent record written before a privileged operation; the operation's result is a separate record whose `details.attemptEventId` points back to it. `outcome=SUCCESS` matches only completed successes.
-- AMS reads OpenSearch with a dedicated identity that can only read and search `amp-audit-*`. Fluent Bit and the setup Job use the logs module's admin credentials, as the module already does.
+- AMS reads OpenSearch with a dedicated identity that can only read and search `amp-audit-*`, and verifies the store's TLS certificate (system roots plus `auditQuery.ca`). Skipping verification is a development-only opt-in; with it, anyone who can redirect in-cluster traffic to the OpenSearch service name could capture the reader credentials or serve forged records. Fluent Bit and the setup Job use the logs module's admin credentials, as the module already does.
 - Only records from the expected containers are copied into the audit indices: the gateway runtime container with its system-component label, and the Agent Manager container in its namespace. The `audit_source` field is set by Fluent Bit, never taken from the line itself. Anyone who can create pods with those names and labels in the cluster is trusted to the same degree as the platform components.
 - Traffic records carry no headers or bodies. Token claims are limited to `auditClaims`. API keys appear only as an HMAC fingerprint (`hmac-sha256:…`) when a fingerprint key is configured, and are omitted otherwise.
 - The audit indices are not write-once: anyone with OpenSearch admin access can change or delete them. If you need tamper evidence or separation of duties, forward the records to a store the platform administrators do not control.
@@ -149,7 +150,11 @@ Use `--reset-then-reuse-values` when the chart version changes: `--reuse-values`
    ```bash
    helm upgrade amp oci://ghcr.io/wso2/helm-charts/wso2-agent-manager -n "$AMP_NS" --version <version> --reset-then-reuse-values \
      --set agentManagerService.config.auditQuery.enabled=true \
+     --set agentManagerService.config.auditQuery.ca.secretName=<secret holding the OpenSearch CA as ca.crt> \
      --set console.config.featureFlags.enableAuditLogs=true
+   # Local clusters with the bundled, self-signed OpenSearch have no CA to trust.
+   # There, and only there, replace the ca line with:
+   #   --set agentManagerService.config.auditQuery.insecureSkipVerify=true
    ```
 
 ### Check that it works

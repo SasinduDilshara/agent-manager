@@ -18,10 +18,13 @@ package auditstoresvc
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -127,4 +130,69 @@ func TestNewAuditStoreClient_RejectsUnsafeIndexPattern(t *testing.T) {
 			t.Fatalf("pattern %q accepted", p)
 		}
 	}
+}
+
+// writeServerCA writes the TLS test server's certificate as a PEM CA bundle.
+func writeServerCA(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "ca.crt")
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(path, block, 0o600); err != nil {
+		t.Fatalf("write CA: %v", err)
+	}
+	return path
+}
+
+func TestSearch_TLSVerification(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"hits":{"hits":[]}}`))
+	}))
+	defer srv.Close()
+	base := Config{BaseURL: srv.URL, Username: "reader", Password: "pw", IndexPattern: "amp-audit-*", Timeout: time.Second}
+
+	t.Run("an unknown CA is refused by default", func(t *testing.T) {
+		c, err := NewAuditStoreClient(base)
+		if err != nil {
+			t.Fatalf("NewAuditStoreClient: %v", err)
+		}
+		if _, err := c.Search(context.Background(), []byte(`{}`)); !errors.Is(err, ErrStoreUnavailable) {
+			t.Fatalf("expected a TLS failure wrapped as ErrStoreUnavailable, got %v", err)
+		}
+	})
+	t.Run("a configured CA bundle is trusted, with verification on", func(t *testing.T) {
+		cfg := base
+		cfg.CAFile = writeServerCA(t, srv)
+		c, err := NewAuditStoreClient(cfg)
+		if err != nil {
+			t.Fatalf("NewAuditStoreClient: %v", err)
+		}
+		if _, err := c.Search(context.Background(), []byte(`{}`)); err != nil {
+			t.Fatalf("Search with the CA: %v", err)
+		}
+	})
+	t.Run("a CA file without a certificate is rejected at startup", func(t *testing.T) {
+		cfg := base
+		cfg.CAFile = filepath.Join(t.TempDir(), "empty.crt")
+		if err := os.WriteFile(cfg.CAFile, []byte("not a certificate"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewAuditStoreClient(cfg); err == nil || !strings.Contains(err.Error(), "no PEM certificate") {
+			t.Fatalf("expected a no-certificate error, got %v", err)
+		}
+	})
+	t.Run("a missing CA file is rejected at startup", func(t *testing.T) {
+		cfg := base
+		cfg.CAFile = filepath.Join(t.TempDir(), "missing.crt")
+		if _, err := NewAuditStoreClient(cfg); err == nil {
+			t.Fatal("expected an error for a missing CA file")
+		}
+	})
+	t.Run("a CA file with skip-verify is rejected", func(t *testing.T) {
+		cfg := base
+		cfg.CAFile = writeServerCA(t, srv)
+		cfg.InsecureSkipVerify = true
+		if _, err := NewAuditStoreClient(cfg); err == nil {
+			t.Fatal("expected mutually exclusive settings to be rejected")
+		}
+	})
 }

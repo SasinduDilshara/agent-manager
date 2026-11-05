@@ -27,11 +27,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -65,7 +67,10 @@ type Config struct {
 	Password           string
 	IndexPattern       string
 	InsecureSkipVerify bool
-	Timeout            time.Duration
+	// CAFile is a PEM bundle trusted, alongside the system roots, for the
+	// store's certificate. Empty uses the system roots only.
+	CAFile  string
+	Timeout time.Duration
 }
 
 type client struct {
@@ -90,13 +95,24 @@ func NewAuditStoreClient(cfg Config) (AuditStoreClient, error) {
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{
+	if cfg.CAFile != "" && cfg.InsecureSkipVerify {
+		return nil, errors.New("audit store CA file and insecure skip verify are mutually exclusive")
+	}
+	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		// Only for local clusters whose store presents a self-signed
 		// certificate; off unless AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY is set.
 		InsecureSkipVerify: cfg.InsecureSkipVerify, //nolint:gosec // operator opt-in for self-signed local stores
 	}
+	if cfg.CAFile != "" {
+		pool, err := loadCAPool(cfg.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig.RootCAs = pool
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
 	transport.ResponseHeaderTimeout = timeout
 	transport.MaxIdleConnsPerHost = 4
 
@@ -117,6 +133,25 @@ func NewAuditStoreClient(cfg Config) (AuditStoreClient, error) {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}, nil
+}
+
+// loadCAPool returns the system roots plus every certificate in the PEM file.
+// A file with no certificate is an error: trusting nothing new while the
+// operator believes a CA is configured would fail every query with an
+// unhelpful TLS error.
+func loadCAPool(path string) (*x509.CertPool, error) {
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read audit store CA file: %w", err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("audit store CA file %q contains no PEM certificate", path)
+	}
+	return pool, nil
 }
 
 func (c *client) Search(ctx context.Context, body []byte) ([]byte, error) {

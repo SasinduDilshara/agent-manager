@@ -170,10 +170,20 @@ agentManagerService:
       enabled: false
       # OpenSearch base URL. No credentials, query or fragment.
       openSearchUrl: "https://opensearch.openchoreo-observability-plane.svc.cluster.local:9200"
-      # Skip TLS verification of OpenSearch's certificate. The bundled
-      # OpenSearch serves a self-signed certificate; set false where AMS can
-      # verify it.
-      insecureSkipVerify: true
+      # TLS verification of OpenSearch's certificate is ON by default. To trust
+      # a private CA (the logs module's, cert-manager's), name a Secret or a
+      # ConfigMap in this namespace holding the PEM bundle under `ca`; it is
+      # mounted read-only and used in addition to the system roots.
+      ca:
+        secretName: ""
+        configMapName: ""
+        key: "ca.crt"
+      # Skip TLS verification instead. DEVELOPMENT ONLY: the reader credentials
+      # are then sent to whatever answers at openSearchUrl. The bundled
+      # OpenSearch serves a self-signed certificate with no CA to trust, so the
+      # quick-start installer sets this explicitly for local clusters. Cannot be
+      # combined with `ca`.
+      insecureSkipVerify: false
       indexPattern: "amp-audit-*"
       timeoutSeconds: 15
       # Scope gateway records that carry no gateway.organization by the

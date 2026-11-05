@@ -1250,6 +1250,15 @@ func TestValidateAuditQueryConfig(t *testing.T) {
 			mutate:      func(c *AuditQueryConfig) { c.RequestTimeoutSeconds = 0 },
 			wantErrors:  1,
 			errContains: "AUDIT_OPENSEARCH_TIMEOUT_SECONDS",
+		},		{
+			name:   "a CA file keeps verification on",
+			mutate: func(c *AuditQueryConfig) { c.CAFile = "/etc/amp/audit-opensearch-ca/ca.crt" },
+		},
+		{
+			name:        "a CA file with skip-verify is rejected",
+			mutate:      func(c *AuditQueryConfig) { c.CAFile, c.InsecureSkipVerify = "/ca.crt", true },
+			wantErrors:  1,
+			errContains: "mutually exclusive",
 		},
 	}
 	for _, tt := range tests {

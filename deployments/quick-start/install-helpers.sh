@@ -314,6 +314,12 @@ prepare_audit_logs() {
     AMP_HELM_ARGS+=(
         --set agentManagerService.config.auditQuery.enabled=true
         --set agentManagerService.config.auditQuery.existingSecret="${AUDIT_READER_SECRET}"
+        # WARNING: local quick-start only. The bundled OpenSearch serves a
+        # self-signed certificate with no CA that Agent Manager could trust, so
+        # verification is skipped here, explicitly. Never copy this to a shared
+        # or production cluster: give agentManagerService.config.auditQuery.ca
+        # the store's CA bundle instead (deployments/AUDIT_LOGS.md).
+        --set agentManagerService.config.auditQuery.insecureSkipVerify=true
         --set console.config.featureFlags.enableAuditLogs=true
     )
     OBSERVABILITY_HELM_ARGS+=(

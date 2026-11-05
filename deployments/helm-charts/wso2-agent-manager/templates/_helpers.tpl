@@ -359,3 +359,38 @@ Usage: include "agent-management-platform.image" (dict "image" .Values.console.i
 {{- end -}}
 {{- printf "%s:%s" $repository ($image.tag | default $ctx.Chart.AppVersion) -}}
 {{- end -}}
+
+{{/*
+Volume source for the audit query API's OpenSearch CA bundle, or "" when no CA
+is configured or the API is off. A CA and insecureSkipVerify together fail the
+render: the CA would be silently ignored.
+*/}}
+{{- define "agent-management-platform.auditQueryCAVolume" -}}
+{{- $q := dig "auditQuery" dict .Values.agentManagerService.config -}}
+{{- if dig "enabled" false $q -}}
+{{- $secret := dig "ca" "secretName" "" $q -}}
+{{- $cm := dig "ca" "configMapName" "" $q -}}
+{{- $key := dig "ca" "key" "ca.crt" $q -}}
+{{- if and $secret $cm -}}
+{{- fail "agentManagerService.config.auditQuery.ca: set secretName or configMapName, not both" -}}
+{{- end -}}
+{{- if and (or $secret $cm) (dig "insecureSkipVerify" false $q) -}}
+{{- fail "agentManagerService.config.auditQuery: ca and insecureSkipVerify are mutually exclusive" -}}
+{{- end -}}
+{{- if $secret }}
+secret:
+  secretName: {{ $secret }}
+  defaultMode: 0444
+  items:
+    - key: {{ $key }}
+      path: {{ $key }}
+{{- else if $cm }}
+configMap:
+  name: {{ $cm }}
+  defaultMode: 0444
+  items:
+    - key: {{ $key }}
+      path: {{ $key }}
+{{- end -}}
+{{- end -}}
+{{- end }}

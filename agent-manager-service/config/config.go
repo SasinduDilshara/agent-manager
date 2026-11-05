@@ -311,9 +311,14 @@ type AuditQueryConfig struct {
 	Username string
 	Password string `json:"-"`
 	// InsecureSkipVerify skips TLS verification of the log store's certificate.
-	// For local clusters with self-signed certificates only.
+	// For local clusters with self-signed certificates only: the reader
+	// credentials are then sent to whatever answers at OpenSearchURL.
 	// AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY.
 	InsecureSkipVerify bool
+	// CAFile is a PEM bundle of CAs trusted for the log store's certificate, in
+	// addition to the system roots. Verification stays on. Mutually exclusive
+	// with InsecureSkipVerify. AUDIT_OPENSEARCH_CA_FILE.
+	CAFile string
 	// IndexPattern selects the audit indices. AUDIT_INDEX_PATTERN.
 	IndexPattern string
 	// RequestTimeoutSeconds bounds one query to the log store.

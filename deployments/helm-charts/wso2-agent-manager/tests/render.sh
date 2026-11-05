@@ -580,6 +580,35 @@ else
   printf 'FAIL - enabling the audit query API without a Secret rendered\n'; FAILURES=$((FAILURES + 1))
 fi
 
+# TLS to OpenSearch is verified unless an operator opts out; a CA bundle keeps
+# verification on and is mounted read-only.
+assert_cm "TLS verification of OpenSearch is on by default" AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY "false" \
+  --set agentManagerService.config.auditQuery.enabled=true
+assert_cm "a CA Secret sets the CA file" AUDIT_OPENSEARCH_CA_FILE "/etc/amp-audit-opensearch-ca/ca.crt" \
+  --set agentManagerService.config.auditQuery.enabled=true --set agentManagerService.config.auditQuery.ca.secretName=os-ca
+assert_cm "a CA ConfigMap with a custom key sets the CA file" AUDIT_OPENSEARCH_CA_FILE "/etc/amp-audit-opensearch-ca/root.pem" \
+  --set agentManagerService.config.auditQuery.enabled=true --set agentManagerService.config.auditQuery.ca.configMapName=os-ca \
+  --set agentManagerService.config.auditQuery.ca.key=root.pem
+assert_cm "no CA means no CA file" AUDIT_OPENSEARCH_CA_FILE "" \
+  --set agentManagerService.config.auditQuery.enabled=true
+if audit_render --set agentManagerService.config.auditQuery.enabled=true --set agentManagerService.config.auditQuery.ca.secretName=os-ca |
+  awk '/- name: audit-opensearch-ca/ {f=1} f && /secretName: os-ca/ {print "yes"; exit}' | grep -q yes; then
+  printf 'ok   - the CA Secret is mounted\n'
+else
+  printf 'FAIL - the CA Secret is not mounted\n'; FAILURES=$((FAILURES + 1))
+fi
+if audit_render --set agentManagerService.config.auditQuery.enabled=true --set agentManagerService.config.auditQuery.ca.secretName=os-ca \
+  --set agentManagerService.config.auditQuery.insecureSkipVerify=true | grep -q "mutually exclusive"; then
+  printf 'ok   - a CA with skip-verify fails the render\n'
+else
+  printf 'FAIL - a CA with skip-verify rendered\n'; FAILURES=$((FAILURES + 1))
+fi
+if audit_render | grep -q audit-opensearch-ca; then
+  printf 'FAIL - a CA volume is rendered while the API is off\n'; FAILURES=$((FAILURES + 1))
+else
+  printf 'ok   - no CA volume while the API is off\n'
+fi
+
 if ((FAILURES > 0)); then
   printf '\n%d assertion(s) failed\n' "$FAILURES"
   exit 1

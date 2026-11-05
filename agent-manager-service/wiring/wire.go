@@ -325,12 +325,17 @@ func ProvideAuditStoreClient(cfg config.Config) (auditstoresvc.AuditStoreClient,
 	if !cfg.AuditQuery.Enabled {
 		return nil, nil //nolint:nilnil // a nil client is how a disabled audit query is represented
 	}
+	if cfg.AuditQuery.InsecureSkipVerify {
+		slog.Warn("audit query: TLS verification of the audit store is OFF (AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY); " +
+			"the reader credentials are sent to whatever answers at AUDIT_OPENSEARCH_URL. Use AUDIT_OPENSEARCH_CA_FILE outside local clusters.")
+	}
 	return auditstoresvc.NewAuditStoreClient(auditstoresvc.Config{
 		BaseURL:            cfg.AuditQuery.OpenSearchURL,
 		Username:           cfg.AuditQuery.Username,
 		Password:           cfg.AuditQuery.Password,
 		IndexPattern:       cfg.AuditQuery.IndexPattern,
 		InsecureSkipVerify: cfg.AuditQuery.InsecureSkipVerify,
+		CAFile:             cfg.AuditQuery.CAFile,
 		Timeout:            time.Duration(cfg.AuditQuery.RequestTimeoutSeconds) * time.Second,
 	})
 }

@@ -307,6 +307,11 @@ spec:
               mountPath: /app/data/certs
               readOnly: true
             {{- end }}
+            {{- if include "agent-management-platform.auditQueryCAVolume" . }}
+            - name: audit-opensearch-ca
+              mountPath: /etc/amp-audit-opensearch-ca
+              readOnly: true
+            {{- end }}
             {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -325,6 +330,10 @@ spec:
             secretName: {{ include "agent-management-platform.tlsCertsSecretName" . }}
             defaultMode: 0440
             optional: false
+        {{- end }}
+        {{- with include "agent-management-platform.auditQueryCAVolume" . }}
+        - name: audit-opensearch-ca
+          {{- . | trim | nindent 10 }}
         {{- end }}
         {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}

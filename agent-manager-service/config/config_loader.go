@@ -378,6 +378,7 @@ func loadEnvs() {
 		Username:                 r.readOptionalString("AUDIT_OPENSEARCH_USERNAME", ""),
 		Password:                 r.readOptionalString("AUDIT_OPENSEARCH_PASSWORD", ""),
 		InsecureSkipVerify:       r.readOptionalBool("AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY", false),
+		CAFile:                   r.readOptionalString("AUDIT_OPENSEARCH_CA_FILE", ""),
 		IndexPattern:             r.readOptionalString("AUDIT_INDEX_PATTERN", "amp-audit-*"),
 		RequestTimeoutSeconds:    int(r.readOptionalInt64("AUDIT_OPENSEARCH_TIMEOUT_SECONDS", 15)),
 		TokenFingerprintKey:      r.readOptionalString("AUDIT_TOKEN_FINGERPRINT_KEY", ""),
@@ -881,6 +882,11 @@ func validateAuditQueryConfig(cfg AuditQueryConfig) []error {
 	case cfg.Username == "" || cfg.Password == "":
 		// One without the other is a half-applied secret.
 		errs = append(errs, errors.New("AUDIT_OPENSEARCH_USERNAME and AUDIT_OPENSEARCH_PASSWORD must be set together"))
+	}
+	if cfg.CAFile != "" && cfg.InsecureSkipVerify {
+		// A CA is given to verify the store; skipping verification would
+		// silently ignore it.
+		errs = append(errs, errors.New("AUDIT_OPENSEARCH_CA_FILE and AUDIT_OPENSEARCH_INSECURE_SKIP_VERIFY are mutually exclusive"))
 	}
 	if !auditIndexPatternRe.MatchString(cfg.IndexPattern) {
 		errs = append(errs, fmt.Errorf("AUDIT_INDEX_PATTERN %q is not a valid index pattern", cfg.IndexPattern))
