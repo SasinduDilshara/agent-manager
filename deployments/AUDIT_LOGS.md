@@ -171,6 +171,17 @@ Use `--reset-then-reuse-values` when the chart version changes: `--reuse-values`
    #   --set agentManagerService.config.auditQuery.insecureSkipVerify=true
    ```
 
+6. **Grant `amp:audit:read` in ThunderID.** The Thunder extension's bootstrap runs on install only, so an upgrade does not add the new permission. Run the idempotent script once. It adds the `audit` resource with its `read` action, grants it to the Agent Manager Admin role, and adds it to the allowed scopes of the console, amctl, MCP and `amp-api-client` clients:
+
+   ```bash
+   THUNDER_URL=http://thunder.amp.localhost:8080 \
+   THUNDER_CLIENT_SECRET=<amp-system-client secret> \
+   CLIENT_SECRETS="amp-api-client=<its secret>" \
+     deployments/scripts/add-audit-read-permission.sh
+   ```
+
+   The script re-sends each client's configuration with PUT, so confidential clients need their secret in `CLIENT_SECRETS`. After it runs, users sign in again to get a token that carries the scope.
+
 ### Check that it works
 
 ```bash
