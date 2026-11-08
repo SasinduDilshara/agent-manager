@@ -133,7 +133,7 @@ export const llmChatOk: AuditEvent = {
       },
       "p_auth_scopes": [],
       "p_auth_subject": "",
-      "p_auth_token_id": "524b2519787bffeb1942018be9403b48b7e32b9bc7a93f0c8050176af8c1e43c",
+      "p_auth_token_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "p_auth_type": "apikey",
       "p_metadata": {
         "provider_name": "openai-audit",
@@ -375,7 +375,7 @@ export const llmGuardrailDenied: AuditEvent = {
       },
       "p_auth_scopes": [],
       "p_auth_subject": "",
-      "p_auth_token_id": "524b2519787bffeb1942018be9403b48b7e32b9bc7a93f0c8050176af8c1e43c",
+      "p_auth_token_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "p_auth_type": "apikey",
       "p_metadata": {
         "provider_name": "openai-audit",
@@ -501,7 +501,7 @@ export const llmUpstream404: AuditEvent = {
       },
       "p_auth_scopes": [],
       "p_auth_subject": "",
-      "p_auth_token_id": "524b2519787bffeb1942018be9403b48b7e32b9bc7a93f0c8050176af8c1e43c",
+      "p_auth_token_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "p_auth_type": "apikey",
       "p_metadata": {
         "provider_name": "openai-audit",
@@ -1174,7 +1174,7 @@ export const agentEndpointOk: AuditEvent = {
       },
       "p_auth_scopes": [],
       "p_auth_subject": "",
-      "p_auth_token_id": "a5b636f54e9fe69a2405ccbda9ad47a15ceeed53bbfafcfb6f4554ac9bb0fce0",
+      "p_auth_token_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "p_auth_type": "apikey",
       "p_metadata": {
         "cors_headers": {
@@ -1316,7 +1316,7 @@ export const a2aSendMessageOk: AuditEvent = {
       },
       "p_auth_scopes": [],
       "p_auth_subject": "",
-      "p_auth_token_id": "7a6fe28130cdd6ee81b4703fee52f397a41eee6f1b3924a590f0e49abfdfd89b",
+      "p_auth_token_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "p_auth_type": "apikey",
       "p_metadata": {
         "bodyResolved": true,
