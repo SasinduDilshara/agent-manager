@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "protoPayload": {
+        "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+        "status": {},
+        "authenticationInfo": {"principalEmail": "dev@example.com"},
+        "requestMetadata": {"callerIp": "203.0.113.5", "callerSuppliedUserAgent": "SECRET-PROMPT-MARKER-agent"},
+        "serviceName": "aiplatform.googleapis.com",
+        "methodName": "google.cloud.aiplatform.v1.ReasoningEngineService.CreateReasoningEngine",
+        "resourceName": "projects/my-agents-project/locations/us-central1/reasoningEngines/1234567890123456789",
+        "request": {
+          "@type": "type.googleapis.com/google.cloud.aiplatform.v1.CreateReasoningEngineRequest",
+          "reasoningEngine": {"spec": {"deploymentSpec": {"env": [{"name": "OPENAI_API_KEY", "value": "sk-test-SECRETSECRETSECRET"}]}}}
+        }
+      },
+      "insertId": "abc123",
+      "resource": {"type": "audited_resource", "labels": {"service": "aiplatform.googleapis.com", "method": "google.cloud.aiplatform.v1.ReasoningEngineService.CreateReasoningEngine", "project_id": "my-agents-project"}},
+      "timestamp": "2026-10-01T10:00:00.123Z",
+      "severity": "NOTICE",
+      "logName": "projects/my-agents-project/logs/cloudaudit.googleapis.com%2Factivity",
+      "receiveTimestamp": "2026-10-01T10:00:01.456Z"
+    },
+    {
+      "protoPayload": {
+        "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+        "authenticationInfo": {"principalEmail": "someone@example.com"},
+        "serviceName": "aiplatform.googleapis.com",
+        "methodName": "google.cloud.aiplatform.v1.EndpointService.DeployModel",
+        "resourceName": "projects/my-agents-project/locations/us-central1/endpoints/42"
+      },
+      "insertId": "abc124",
+      "resource": {"type": "audited_resource", "labels": {"service": "aiplatform.googleapis.com", "project_id": "my-agents-project"}},
+      "timestamp": "2026-10-02T09:00:00Z",
+      "severity": "NOTICE",
+      "logName": "projects/my-agents-project/logs/cloudaudit.googleapis.com%2Factivity"
+    },
+    {
+      "protoPayload": {
+        "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+        "authenticationInfo": {"principalEmail": "remover@example.com"},
+        "serviceName": "aiplatform.googleapis.com",
+        "methodName": "google.cloud.aiplatform.v1.ReasoningEngineService.DeleteReasoningEngine",
+        "resourceName": "projects/my-agents-project/locations/us-central1/reasoningEngines/1234567890123456789"
+      },
+      "insertId": "abc125",
+      "resource": {"type": "audited_resource", "labels": {"service": "aiplatform.googleapis.com", "project_id": "my-agents-project"}},
+      "timestamp": "2026-10-03T09:00:00Z",
+      "severity": "NOTICE",
+      "logName": "projects/my-agents-project/logs/cloudaudit.googleapis.com%2Factivity"
+    }
+  ],
+  "nextPageToken": "logs-page-2"
+}

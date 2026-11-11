@@ -233,6 +233,15 @@ var actionOverrides = map[string]Action{
 	// Event destinations and subscriptions are gated by the permission of
 	// the scope they belong to (events, project or agent), which says nothing
 	// about the operation.
+	// Shadow Agent Discovery: one manage permission gates every operation.
+	"POST /orgs/{orgName}/shadow-agents/connections":                                                      "shadow-connection:create",
+	"PUT /orgs/{orgName}/shadow-agents/connections/{connectionId}":                                        "shadow-connection:update",
+	"DELETE /orgs/{orgName}/shadow-agents/connections/{connectionId}":                                     "shadow-connection:delete",
+	"POST /orgs/{orgName}/shadow-agents/connections/{connectionId}/test":                                  "shadow-connection:test",
+	"POST /orgs/{orgName}/shadow-agents/scans":                                                            "shadow-scan:create",
+	"PATCH /orgs/{orgName}/shadow-agents/findings/{findingId}":                                            "shadow-finding:update",
+	"POST /orgs/{orgName}/shadow-agents/findings/{findingId}/onboarding":                                  "shadow-finding:onboard",
+	"POST /orgs/{orgName}/shadow-agents/findings/{findingId}/retirement/confirm":                          "shadow-finding:confirm-retirement",
 	"POST /orgs/{orgName}/events/destinations":                                                            "event-destination:create",
 	"PUT /orgs/{orgName}/events/destinations/{destinationId}":                                             "event-destination:update",
 	"DELETE /orgs/{orgName}/events/destinations/{destinationId}":                                          "event-destination:delete",

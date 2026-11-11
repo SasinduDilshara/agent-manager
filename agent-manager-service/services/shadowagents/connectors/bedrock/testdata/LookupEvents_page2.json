@@ -1,0 +1,59 @@
+{
+  "Events": [
+    {
+      "EventId": "a1b2c3d4-0007",
+      "EventName": "InvokeModel",
+      "ReadOnly": "false",
+      "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",
+      "EventTime": 1794038400,
+      "EventSource": "bedrock.amazonaws.com",
+      "Username": "session",
+      "Resources": [],
+      "CloudTrailEvent": "{\"eventVersion\": \"1.08\", \"userIdentity\": {\"type\": \"AssumedRole\", \"principalId\": \"AROAEXAMPLE:s7\", \"arn\": \"arn:aws:sts::123456789012:assumed-role/SharedRuntimeRole/s7\", \"accountId\": \"123456789012\", \"sessionContext\": {\"sessionIssuer\": {\"type\": \"Role\", \"arn\": \"arn:aws:iam::123456789012:role/SharedRuntimeRole\", \"userName\": \"SharedRuntimeRole\"}}}, \"eventTime\": \"2026-11-07T08:00:00Z\", \"eventSource\": \"bedrock.amazonaws.com\", \"eventName\": \"InvokeModel\", \"awsRegion\": \"us-east-1\", \"sourceIPAddress\": \"192.0.2.10\", \"userAgent\": \"Boto3 SECRET-PROMPT-MARKER\", \"requestParameters\": {\"modelId\": \"anthropic.claude-sonnet-4-20250514-v1:0\"}, \"responseElements\": null, \"requestID\": \"r-a1b2c3d4-0007\", \"eventID\": \"a1b2c3d4-0007\", \"readOnly\": false, \"eventType\": \"AwsApiCall\", \"managementEvent\": true, \"recipientAccountId\": \"123456789012\", \"eventCategory\": \"Management\", \"tlsDetails\": {\"clientProvidedHostHeader\": \"bedrock-runtime.us-east-1.amazonaws.com\"}}"
+    },
+    {
+      "EventId": "a1b2c3d4-0008",
+      "EventName": "InvokeModel",
+      "ReadOnly": "false",
+      "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",
+      "EventTime": 1794124800,
+      "EventSource": "bedrock.amazonaws.com",
+      "Username": "dev-alice",
+      "Resources": [],
+      "CloudTrailEvent": "{\"eventVersion\": \"1.08\", \"userIdentity\": {\"type\": \"IAMUser\", \"principalId\": \"AIDAEXAMPLEdev-alice\", \"arn\": \"arn:aws:iam::123456789012:user/dev-alice\", \"accountId\": \"123456789012\", \"accessKeyId\": \"AKIAIOSFODNN7EXAMPLE\", \"userName\": \"dev-alice\"}, \"eventTime\": \"2026-11-08T08:00:00Z\", \"eventSource\": \"bedrock.amazonaws.com\", \"eventName\": \"InvokeModel\", \"awsRegion\": \"us-east-1\", \"sourceIPAddress\": \"192.0.2.10\", \"userAgent\": \"Boto3 SECRET-PROMPT-MARKER\", \"requestParameters\": {\"modelId\": \"arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-20250514-v1:0\"}, \"responseElements\": null, \"requestID\": \"r-a1b2c3d4-0008\", \"eventID\": \"a1b2c3d4-0008\", \"readOnly\": false, \"eventType\": \"AwsApiCall\", \"managementEvent\": true, \"recipientAccountId\": \"123456789012\", \"eventCategory\": \"Management\", \"tlsDetails\": {\"clientProvidedHostHeader\": \"bedrock-runtime.us-east-1.amazonaws.com\"}}"
+    },
+    {
+      "EventId": "a1b2c3d4-0002",
+      "EventName": "Converse",
+      "ReadOnly": "false",
+      "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",
+      "EventTime": 1793955600,
+      "EventSource": "bedrock.amazonaws.com",
+      "Username": "dev-alice",
+      "Resources": [],
+      "CloudTrailEvent": "{\"eventVersion\": \"1.08\", \"userIdentity\": {\"type\": \"IAMUser\", \"principalId\": \"AIDAEXAMPLEdev-alice\", \"arn\": \"arn:aws:iam::123456789012:user/dev-alice\", \"accountId\": \"123456789012\", \"accessKeyId\": \"AKIAIOSFODNN7EXAMPLE\", \"userName\": \"dev-alice\"}, \"eventTime\": \"2026-11-06T09:00:00Z\", \"eventSource\": \"bedrock.amazonaws.com\", \"eventName\": \"Converse\", \"awsRegion\": \"us-east-1\", \"sourceIPAddress\": \"192.0.2.10\", \"userAgent\": \"Boto3 SECRET-PROMPT-MARKER\", \"requestParameters\": null, \"responseElements\": null, \"requestID\": \"r-a1b2c3d4-0002\", \"eventID\": \"a1b2c3d4-0002\", \"readOnly\": false, \"eventType\": \"AwsApiCall\", \"managementEvent\": true, \"recipientAccountId\": \"123456789012\", \"eventCategory\": \"Management\", \"tlsDetails\": {\"clientProvidedHostHeader\": \"bedrock-runtime.us-east-1.amazonaws.com\"}, \"resources\": [{\"type\": \"AWS::Bedrock::Model\", \"ARN\": \"arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0\"}]}"
+    },
+    {
+      "EventId": "a1b2c3d4-0009",
+      "EventName": "InvokeModel",
+      "ReadOnly": "false",
+      "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",
+      "EventTime": 1794128400,
+      "EventSource": "bedrock.amazonaws.com",
+      "Username": "session",
+      "Resources": [],
+      "CloudTrailEvent": "{\"eventVersion\": \"1.08\", \"userIdentity\": {\"type\": \"AssumedRole\", \"principalId\": \"AROAEXAMPLE:agent\", \"arn\": \"arn:aws:sts::123456789012:assumed-role/AmazonBedrockExecutionRoleForAgents_billing/agent\", \"accountId\": \"123456789012\", \"sessionContext\": {\"sessionIssuer\": {\"type\": \"Role\", \"arn\": \"arn:aws:iam::123456789012:role/AmazonBedrockExecutionRoleForAgents_billing\", \"userName\": \"AmazonBedrockExecutionRoleForAgents_billing\"}}}, \"eventTime\": \"2026-11-08T09:00:00Z\", \"eventSource\": \"bedrock.amazonaws.com\", \"eventName\": \"InvokeModel\", \"awsRegion\": \"us-east-1\", \"sourceIPAddress\": \"192.0.2.10\", \"userAgent\": \"Boto3 SECRET-PROMPT-MARKER\", \"requestParameters\": {\"modelId\": \"anthropic.claude-sonnet-4-20250514-v1:0\"}, \"responseElements\": null, \"requestID\": \"r-a1b2c3d4-0009\", \"eventID\": \"a1b2c3d4-0009\", \"readOnly\": false, \"eventType\": \"AwsApiCall\", \"managementEvent\": true, \"recipientAccountId\": \"123456789012\", \"eventCategory\": \"Management\", \"tlsDetails\": {\"clientProvidedHostHeader\": \"bedrock-runtime.us-east-1.amazonaws.com\"}}"
+    },
+    {
+      "EventId": "a1b2c3d4-0010",
+      "EventName": "InvokeModel",
+      "ReadOnly": "false",
+      "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",
+      "EventTime": 1788253200,
+      "EventSource": "bedrock.amazonaws.com",
+      "Username": "old-user",
+      "Resources": [],
+      "CloudTrailEvent": "{\"eventVersion\": \"1.08\", \"userIdentity\": {\"type\": \"IAMUser\", \"principalId\": \"AIDAEXAMPLEold-user\", \"arn\": \"arn:aws:iam::123456789012:user/old-user\", \"accountId\": \"123456789012\", \"accessKeyId\": \"AKIAIOSFODNN7EXAMPLE\", \"userName\": \"old-user\"}, \"eventTime\": \"2026-09-01T09:00:00Z\", \"eventSource\": \"bedrock.amazonaws.com\", \"eventName\": \"InvokeModel\", \"awsRegion\": \"us-east-1\", \"sourceIPAddress\": \"192.0.2.10\", \"userAgent\": \"Boto3 SECRET-PROMPT-MARKER\", \"requestParameters\": {\"modelId\": \"anthropic.claude-sonnet-4-20250514-v1:0\"}, \"responseElements\": null, \"requestID\": \"r-a1b2c3d4-0010\", \"eventID\": \"a1b2c3d4-0010\", \"readOnly\": false, \"eventType\": \"AwsApiCall\", \"managementEvent\": true, \"recipientAccountId\": \"123456789012\", \"eventCategory\": \"Management\", \"tlsDetails\": {\"clientProvidedHostHeader\": \"bedrock-runtime.us-east-1.amazonaws.com\"}}"
+    }
+  ]
+}

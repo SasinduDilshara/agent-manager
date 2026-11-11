@@ -1,0 +1,29 @@
+{
+  "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/orders-gw-a1b2c3d4e5",
+  "gatewayId": "orders-gw-a1b2c3d4e5",
+  "gatewayUrl": "https://orders-gw-a1b2c3d4e5.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp?api_key=sk-test-SECRETSECRETSECRET",
+  "createdAt": "2026-09-01T00:00:00Z",
+  "updatedAt": "2026-10-01T00:00:00Z",
+  "status": "READY",
+  "name": "orders-gw",
+  "description": "SECRET-PROMPT-MARKER",
+  "roleArn": "arn:aws:iam::123456789012:role/GatewayRole",
+  "protocolType": "MCP",
+  "protocolConfiguration": {
+    "mcp": {
+      "supportedVersions": [
+        "2025-06-18"
+      ],
+      "instructions": "SECRET-PROMPT-MARKER gateway instructions"
+    }
+  },
+  "authorizerType": "CUSTOM_JWT",
+  "authorizerConfiguration": {
+    "customJWTAuthorizer": {
+      "discoveryUrl": "https://idp.example.com/.well-known/openid-configuration",
+      "allowedClients": [
+        "client-1"
+      ]
+    }
+  }
+}

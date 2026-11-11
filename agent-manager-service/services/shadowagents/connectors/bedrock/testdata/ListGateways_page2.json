@@ -1,0 +1,20 @@
+{
+  "items": [
+    {
+      "gatewayId": "billing-gw-f6g7h8i9j0",
+      "name": "billing-gw",
+      "status": "READY",
+      "createdAt": "2026-09-02T00:00:00Z",
+      "updatedAt": "2026-10-02T00:00:00Z",
+      "authorizerType": "AWS_IAM"
+    },
+    {
+      "gatewayId": "search-gw-k1l2m3n4o5",
+      "name": "search-gw",
+      "status": "CREATING",
+      "createdAt": "2026-09-03T00:00:00Z",
+      "updatedAt": "2026-10-03T00:00:00Z",
+      "authorizerType": "NONE"
+    }
+  ]
+}

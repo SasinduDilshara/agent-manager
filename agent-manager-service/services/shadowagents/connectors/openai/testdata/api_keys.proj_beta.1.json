@@ -1,0 +1,28 @@
+{
+    "object": "list",
+    "data": [
+        {
+            "object": "organization.project.api_key",
+            "redacted_value": "sk-bet...a12",
+            "name": "Beta worker",
+            "created_at": 1735689600,
+            "expires_at": 1790812800,
+            "last_used_at": 1793491200,
+            "id": "key_beta1",
+            "owner_project_access": "inactive",
+            "owner": {
+                "type": "user",
+                "user": {
+                    "id": "user_bob",
+                    "name": "Bob Example",
+                    "email": "bob@example.com",
+                    "role": "member",
+                    "created_at": 1711471533
+                }
+            }
+        }
+    ],
+    "first_id": "key_beta1",
+    "last_id": "key_beta1",
+    "has_more": false
+}

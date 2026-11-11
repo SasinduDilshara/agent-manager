@@ -1,0 +1,45 @@
+{
+    "data": [
+        {
+            "id": "sess_1",
+            "object": "agent.session",
+            "metadata": {
+                "note": "SECRET-PROMPT-MARKER"
+            },
+            "created_at": 1793632800,
+            "last_active_at": 1793633400,
+            "status": "idle",
+            "required_actions": [],
+            "error": "tool failed: SECRET-PROMPT-MARKER",
+            "agent": {
+                "id": "agent_alpha",
+                "name": "snapshot",
+                "model": "gpt-x",
+                "instructions": "SECRET-PROMPT-MARKER",
+                "tools": []
+            },
+            "environment": {
+                "type": "none"
+            },
+            "usage": {
+                "input_tokens": 0,
+                "input_tokens_details": {
+                    "cached_tokens": 0
+                },
+                "output_tokens": 0,
+                "output_tokens_details": {
+                    "reasoning_tokens": 0
+                },
+                "total_tokens": 0
+            },
+            "vault_ids": [
+                "string"
+            ],
+            "review": "none"
+        }
+    ],
+    "first_id": null,
+    "has_more": true,
+    "last_id": "sess_1",
+    "object": "list"
+}

@@ -1,0 +1,48 @@
+{
+ "data": [
+  {
+   "starting_at": "2026-10-20T00:00:00Z",
+   "ending_at": "2026-10-21T00:00:00Z",
+   "group": {
+    "product": null,
+    "model": null,
+    "context_window": null,
+    "inference_geo": null,
+    "speed": null,
+    "slack_channel_id": null,
+    "claude_tag_category": null,
+    "claude_tag_user_id": null,
+    "rbac_group_id": null,
+    "workspace_id": null,
+    "service_tier": null,
+    "user_profile_id": null,
+    "agent_id": null,
+    "environment_id": null,
+    "deployment_id": null,
+    "session_id": null,
+    "actor": {
+     "type": "federated_actor",
+     "provider": {
+      "type": "aws",
+      "account_id": "123456789012",
+      "signed_principal": "arn:aws:sts::123456789012:assumed-role/app/session"
+     },
+     "subject": "arn:aws:iam::123456789012:role/app"
+    },
+    "actor_type": "federated_actor",
+    "api_key_id": null,
+    "cost_type": "code_execution",
+    "token_type": null
+   },
+   "cost": {
+    "amount": "75.000000",
+    "currency": "USD",
+    "list_amount": "75.000000",
+    "requests": null
+   }
+  }
+ ],
+ "has_more": false,
+ "next_page": null,
+ "data_refreshed_at": "2026-11-10T04:02:11Z"
+}

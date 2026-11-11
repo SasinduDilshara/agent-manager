@@ -1,0 +1,2 @@
+{"custom_id": "request-1", "method": "POST", "url": "/v1/responses", "body": {"model": "gpt-x", "input": [{"role": "user", "content": "SECRET-PROMPT-MARKER"}, {"type": "function_call_output", "call_id": "call_9", "output": "result SECRET-PROMPT-MARKER"}]}}
+{"custom_id": "request-2", "method": "POST", "url": "/v1/responses", "body": {"model": "gpt-x", "input": "plain SECRET-PROMPT-MARKER"}}

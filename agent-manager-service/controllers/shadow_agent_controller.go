@@ -1,0 +1,657 @@
+// Copyright (c) 2026, WSO2 LLC. (https://www.wso2.com).
+//
+// WSO2 LLC. licenses this file to you under the Apache License,
+// Version 2.0 (the "License"); you may not use this file except
+// in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+package controllers
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/wso2/agent-manager/agent-manager-service/audit"
+	"github.com/wso2/agent-manager/agent-manager-service/middleware"
+	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
+	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/repositories"
+	"github.com/wso2/agent-manager/agent-manager-service/services"
+	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
+	"github.com/wso2/agent-manager/agent-manager-service/spec"
+	"github.com/wso2/agent-manager/agent-manager-service/utils"
+)
+
+// Path parameters of the Shadow Agent Discovery routes.
+const (
+	PathParamShadowConnectionID = "connectionId"
+	PathParamShadowScanID       = "scanId"
+	PathParamShadowFindingID    = "findingId"
+)
+
+// ShadowAgentController serves Shadow Agent Discovery: provider connections,
+// scans, findings, onboarding and credential retirement.
+type ShadowAgentController interface {
+	ListProviders(w http.ResponseWriter, r *http.Request)
+	GetSummary(w http.ResponseWriter, r *http.Request)
+	ListConnections(w http.ResponseWriter, r *http.Request)
+	CreateConnection(w http.ResponseWriter, r *http.Request)
+	GetConnection(w http.ResponseWriter, r *http.Request)
+	UpdateConnection(w http.ResponseWriter, r *http.Request)
+	DeleteConnection(w http.ResponseWriter, r *http.Request)
+	TestConnection(w http.ResponseWriter, r *http.Request)
+	ListScans(w http.ResponseWriter, r *http.Request)
+	CreateScan(w http.ResponseWriter, r *http.Request)
+	GetScan(w http.ResponseWriter, r *http.Request)
+	ListFindings(w http.ResponseWriter, r *http.Request)
+	GetFinding(w http.ResponseWriter, r *http.Request)
+	UpdateFinding(w http.ResponseWriter, r *http.Request)
+	OnboardFinding(w http.ResponseWriter, r *http.Request)
+	ConfirmRetirement(w http.ResponseWriter, r *http.Request)
+}
+
+type shadowAgentController struct {
+	svc services.ShadowAgentService
+}
+
+// NewShadowAgentController creates a ShadowAgentController.
+func NewShadowAgentController(svc services.ShadowAgentService) ShadowAgentController {
+	return &shadowAgentController{svc: svc}
+}
+
+func (c *shadowAgentController) ListProviders(w http.ResponseWriter, _ *http.Request) {
+	providers := sa.Providers()
+	resp := spec.ShadowProviderListResponse{
+		Providers: make([]spec.ShadowProviderSpec, 0, len(providers)),
+		Signals:   []spec.ShadowSignalDefinition{},
+		Scoring: spec.ShadowScoringRules{
+			AgentThreshold:            sa.AgentThreshold,
+			PossibleAgentThreshold:    sa.PossibleAgentThreshold,
+			MaxScore:                  sa.MaxScore,
+			RetirementObservationDays: services.ShadowRetirementObservationDays,
+			MaxLookbackDays:           services.ShadowMaxLookbackDays,
+			DefaultLookbackDays:       services.ShadowDefaultLookbackDays,
+		},
+	}
+	for _, p := range providers {
+		ps := spec.ShadowProviderSpec{
+			Provider: p.Provider, DisplayName: p.DisplayName, Description: p.Description,
+			Endpoints: []spec.ShadowEndpointSpec{}, Fields: []spec.ShadowFieldSpec{},
+			Permissions: []spec.ShadowPermissionSpec{}, Docs: append([]string{}, p.Docs...),
+			Capabilities: []spec.ShadowCapabilitySpec{},
+		}
+		if p.SourceHost {
+			src := true
+			ps.SourceHost = &src
+		}
+		if choice, ok := sa.CredentialChoiceOf(p.Provider); ok {
+			ps.CredentialChoice = &spec.ShadowCredentialChoice{Fields: append([]string{}, choice.Fields...), Message: choice.Message}
+		}
+		for _, c := range sa.Capabilities(p.Provider) {
+			ps.Capabilities = append(ps.Capabilities, spec.ShadowCapabilitySpec{
+				Key: c.Key, Title: c.Title, Description: c.Description,
+				Signals: append([]string{}, c.Signals...), Needs: append([]string{}, c.Needs...),
+			})
+		}
+		for _, e := range p.Endpoints {
+			ps.Endpoints = append(ps.Endpoints, spec.ShadowEndpointSpec{
+				Key: e.Key, Label: e.Label, Default: e.Default,
+				Placeholders: append([]string{}, e.Placeholders...), Option: optionalString(e.Option),
+			})
+		}
+		for _, f := range p.Fields {
+			fs := spec.ShadowFieldSpec{
+				Key: f.Key, Label: f.Label, Kind: f.Kind, Required: f.Required,
+				Placeholder: optionalString(f.Placeholder), Help: optionalString(f.Help), Option: optionalString(f.Option),
+			}
+			if f.Recommended {
+				rec := true
+				fs.Recommended = &rec
+			}
+			fs.Section = optionalString(f.Section)
+			if f.Kind == sa.FieldCheckbox {
+				b := f.DefaultBool
+				fs.DefaultBool = &b
+			}
+			ps.Fields = append(ps.Fields, fs)
+		}
+		for _, perm := range p.Permissions {
+			ps.Permissions = append(ps.Permissions, spec.ShadowPermissionSpec{
+				Title: perm.Title, Items: append([]string{}, perm.Items...),
+				Policy: optionalString(perm.Policy), Note: optionalString(perm.Note),
+			})
+		}
+		resp.Providers = append(resp.Providers, ps)
+	}
+	for _, d := range sa.Defs() {
+		resp.Signals = append(resp.Signals, spec.ShadowSignalDefinition{
+			Code: d.Code, Provider: d.Provider, Name: d.Name, Group: d.Group, Tier: d.Tier,
+			Weight: int32(d.Weight), Condition: d.Condition, //nolint:gosec // weights are 0..60
+		})
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, resp)
+}
+
+func (c *shadowAgentController) GetSummary(w http.ResponseWriter, r *http.Request) {
+	sum, latest, err := c.svc.Summary(r.Context(), middleware.OUIDFromRequest(r))
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to summarize shadow agents")
+		return
+	}
+	resp := spec.ShadowAgentSummary{
+		TotalFindings: int32(sum.Total), //nolint:gosec // bounded by row counts
+		ByVerdict:     toInt32Map(sum.ByVerdict),
+		ByProvider:    toInt32Map(sum.ByProvider),
+		ByStatus:      toInt32Map(sum.ByStatus),
+		Connections:   int32(sum.Connections), //nolint:gosec // bounded by the per-org limit
+	}
+	if latest != nil {
+		s := toShadowScanResponse(latest)
+		resp.LatestScan = &s
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, resp)
+}
+
+// ---- connections ----
+
+func shadowConnectionID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue(PathParamShadowConnectionID))
+	if err != nil {
+		utils.WriteErrorResponse(w, http.StatusNotFound, "Connection not found")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func (c *shadowAgentController) ListConnections(w http.ResponseWriter, r *http.Request) {
+	list, err := c.svc.ListConnections(r.Context(), middleware.OUIDFromRequest(r))
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to list connections")
+		return
+	}
+	resp := spec.ShadowConnectionListResponse{Connections: make([]spec.ShadowConnectionResponse, 0, len(list))}
+	for i := range list {
+		resp.Connections = append(resp.Connections, toShadowConnectionResponse(&list[i]))
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, resp)
+}
+
+func decodeShadowConnectionRequest(w http.ResponseWriter, r *http.Request) (services.ShadowConnectionInput, bool) {
+	var req spec.ShadowConnectionRequest
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&req); err != nil {
+		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+		return services.ShadowConnectionInput{}, false
+	}
+	in := services.ShadowConnectionInput{
+		Name: req.Name, Provider: req.Provider, Settings: req.Settings, RemoveSecrets: req.RemoveSecrets,
+	}
+	if req.Endpoints != nil {
+		in.Endpoints = *req.Endpoints
+	}
+	if in.Settings == nil {
+		in.Settings = map[string]interface{}{}
+	}
+	return in, true
+}
+
+func (c *shadowAgentController) CreateConnection(w http.ResponseWriter, r *http.Request) {
+	in, ok := decodeShadowConnectionRequest(w, r)
+	if !ok {
+		return
+	}
+	v, err := c.svc.CreateConnection(r.Context(), middleware.OUIDFromRequest(r), in)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to add the connection")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusCreated, toShadowConnectionResponse(v))
+}
+
+func (c *shadowAgentController) GetConnection(w http.ResponseWriter, r *http.Request) {
+	id, ok := shadowConnectionID(w, r)
+	if !ok {
+		return
+	}
+	v, err := c.svc.GetConnection(r.Context(), middleware.OUIDFromRequest(r), id)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to get the connection")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, toShadowConnectionResponse(v))
+}
+
+func (c *shadowAgentController) UpdateConnection(w http.ResponseWriter, r *http.Request) {
+	id, ok := shadowConnectionID(w, r)
+	if !ok {
+		return
+	}
+	in, ok := decodeShadowConnectionRequest(w, r)
+	if !ok {
+		return
+	}
+	v, err := c.svc.UpdateConnection(r.Context(), middleware.OUIDFromRequest(r), id, in)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to update the connection")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, toShadowConnectionResponse(v))
+}
+
+func (c *shadowAgentController) DeleteConnection(w http.ResponseWriter, r *http.Request) {
+	id, ok := shadowConnectionID(w, r)
+	if !ok {
+		return
+	}
+	if err := c.svc.DeleteConnection(r.Context(), middleware.OUIDFromRequest(r), id); err != nil {
+		writeShadowError(w, r, err, "Failed to delete the connection")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (c *shadowAgentController) TestConnection(w http.ResponseWriter, r *http.Request) {
+	id, ok := shadowConnectionID(w, r)
+	if !ok {
+		return
+	}
+	res, err := c.svc.TestConnection(r.Context(), middleware.OUIDFromRequest(r), id)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to test the connection")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, toShadowConnectionTest(*res))
+}
+
+// ---- scans ----
+
+func (c *shadowAgentController) ListScans(w http.ResponseWriter, r *http.Request) {
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 100 {
+			utils.WriteErrorResponse(w, http.StatusBadRequest, "limit must be between 1 and 100")
+			return
+		}
+		limit = n
+	}
+	list, err := c.svc.ListScans(r.Context(), middleware.OUIDFromRequest(r), limit)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to list scans")
+		return
+	}
+	resp := spec.ShadowScanListResponse{Scans: make([]spec.ShadowScanResponse, 0, len(list))}
+	for i := range list {
+		resp.Scans = append(resp.Scans, toShadowScanResponse(&list[i]))
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, resp)
+}
+
+func (c *shadowAgentController) CreateScan(w http.ResponseWriter, r *http.Request) {
+	var req spec.ShadowScanRequest
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+	}
+	ids := make([]uuid.UUID, 0, len(req.ConnectionIds))
+	for _, s := range req.ConnectionIds {
+		id, err := uuid.Parse(s)
+		if err != nil {
+			utils.WriteErrorResponse(w, http.StatusBadRequest, "connectionIds must be connection IDs")
+			return
+		}
+		ids = append(ids, id)
+	}
+	lookback := 0
+	if req.LookbackDays != nil {
+		lookback = int(*req.LookbackDays)
+	}
+	scan, err := c.svc.CreateScan(r.Context(), middleware.OUIDFromRequest(r), ids, lookback)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to start the scan")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusAccepted, toShadowScanResponse(scan))
+}
+
+func (c *shadowAgentController) GetScan(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue(PathParamShadowScanID))
+	if err != nil {
+		utils.WriteErrorResponse(w, http.StatusNotFound, "Scan not found")
+		return
+	}
+	scan, err := c.svc.GetScan(r.Context(), middleware.OUIDFromRequest(r), id)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to get the scan")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, toShadowScanResponse(scan))
+}
+
+// ---- findings ----
+
+func shadowFindingID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue(PathParamShadowFindingID))
+	if err != nil {
+		utils.WriteErrorResponse(w, http.StatusNotFound, "Finding not found")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func (c *shadowAgentController) ListFindings(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := repositories.ShadowFindingFilter{
+		Provider: q.Get("provider"), Verdict: q.Get("verdict"), Status: q.Get("status"), Kind: q.Get("kind"),
+		Search: q.Get("search"), Limit: 50,
+	}
+	if v := q.Get("connectionId"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			utils.WriteErrorResponse(w, http.StatusBadRequest, "connectionId must be a connection ID")
+			return
+		}
+		f.ConnectionID = &id
+	}
+	if v := q.Get("scanId"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			utils.WriteErrorResponse(w, http.StatusBadRequest, "scanId must be a scan ID")
+			return
+		}
+		f.ScanID = &id
+	}
+	for name, dst := range map[string]*int{"limit": &f.Limit, "offset": &f.Offset} {
+		if v := q.Get(name); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 || (name == "limit" && (n < 1 || n > 200)) {
+				utils.WriteErrorResponse(w, http.StatusBadRequest, name+" is out of range")
+				return
+			}
+			*dst = n
+		}
+	}
+	rows, total, err := c.svc.ListFindings(r.Context(), middleware.OUIDFromRequest(r), f)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to list findings")
+		return
+	}
+	resp := spec.ShadowFindingListResponse{
+		Findings: make([]spec.ShadowFindingSummary, 0, len(rows)),
+		Total:    int32(total),    //nolint:gosec // bounded by row counts
+		Limit:    int32(f.Limit),  //nolint:gosec // validated above
+		Offset:   int32(f.Offset), //nolint:gosec // validated above
+	}
+	for i := range rows {
+		resp.Findings = append(resp.Findings, toShadowFindingSummary(&rows[i]))
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, resp)
+}
+
+func (c *shadowAgentController) GetFinding(w http.ResponseWriter, r *http.Request) {
+	id, ok := shadowFindingID(w, r)
+	if !ok {
+		return
+	}
+	v, err := c.svc.GetFinding(r.Context(), middleware.OUIDFromRequest(r), id)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to get the finding")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, toShadowFindingDetail(v))
+}
+
+func (c *shadowAgentController) UpdateFinding(w http.ResponseWriter, r *http.Request) {
+	id, ok := shadowFindingID(w, r)
+	if !ok {
+		return
+	}
+	var req spec.ShadowFindingUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	v, err := c.svc.UpdateFindingStatus(r.Context(), middleware.OUIDFromRequest(r), id, req.Status)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to update the finding")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, toShadowFindingDetail(v))
+}
+
+func (c *shadowAgentController) OnboardFinding(w http.ResponseWriter, r *http.Request) {
+	id, ok := shadowFindingID(w, r)
+	if !ok {
+		return
+	}
+	var req spec.ShadowOnboardingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	v, err := c.svc.Onboard(r.Context(), middleware.OUIDFromRequest(r), id, req.ProjectName, req.AgentName)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to onboard the finding")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, toShadowFindingDetail(v))
+}
+
+func (c *shadowAgentController) ConfirmRetirement(w http.ResponseWriter, r *http.Request) {
+	id, ok := shadowFindingID(w, r)
+	if !ok {
+		return
+	}
+	v, err := c.svc.ConfirmRetirement(r.Context(), middleware.OUIDFromRequest(r), id)
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to record the retirement")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, toShadowFindingDetail(v))
+}
+
+// ---- errors ----
+
+func writeShadowError(w http.ResponseWriter, r *http.Request, err error, fallback string) {
+	switch {
+	case errors.Is(err, utils.ErrShadowConnectionNotFound):
+		utils.WriteErrorResponse(w, http.StatusNotFound, "Connection not found")
+	case errors.Is(err, utils.ErrShadowScanNotFound):
+		utils.WriteErrorResponse(w, http.StatusNotFound, "Scan not found")
+	case errors.Is(err, utils.ErrShadowFindingNotFound):
+		utils.WriteErrorResponse(w, http.StatusNotFound, "Finding not found")
+	case errors.Is(err, utils.ErrProjectNotFound):
+		utils.WriteErrorResponse(w, http.StatusNotFound, "Project not found")
+	case errors.Is(err, utils.ErrAgentNotFound):
+		utils.WriteErrorResponse(w, http.StatusNotFound, "Agent not found")
+	case errors.Is(err, utils.ErrShadowConnectionNameTaken):
+		utils.WriteErrorResponse(w, http.StatusConflict, "A connection with this name already exists")
+	case errors.Is(err, utils.ErrShadowScanInProgress):
+		utils.WriteErrorResponse(w, http.StatusConflict, "A scan is already queued or running")
+	case errors.Is(err, utils.ErrShadowAlreadyOnboarded):
+		utils.WriteErrorResponse(w, http.StatusConflict, "The finding is already linked to an agent")
+	case errors.Is(err, utils.ErrShadowNotOnboarded), errors.Is(err, utils.ErrConflict):
+		utils.WriteErrorResponse(w, http.StatusConflict, err.Error())
+	case errors.Is(err, utils.ErrShadowNoConnections):
+		utils.WriteErrorResponse(w, http.StatusBadRequest, "Connect a provider before running a scan")
+	case errors.Is(err, utils.ErrInvalidInput):
+		utils.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, audit.ErrRecorderUnavailable):
+		logger.GetLogger(r.Context()).Error(fallback, "error", err)
+		utils.WriteErrorResponse(w, http.StatusServiceUnavailable, "Audit trail unavailable; the change was not applied")
+	default:
+		logger.GetLogger(r.Context()).Error(fallback, "error", err)
+		utils.WriteErrorResponse(w, http.StatusInternalServerError, fallback)
+	}
+}
+
+// ---- mapping ----
+
+func toInt32Map(m map[string]int) map[string]int32 {
+	out := make(map[string]int32, len(m))
+	for k, v := range m {
+		out[k] = int32(v) //nolint:gosec // bounded by row counts
+	}
+	return out
+}
+
+func toShadowConnectionResponse(v *services.ShadowConnectionView) spec.ShadowConnectionResponse {
+	c := v.Connection
+	resp := spec.ShadowConnectionResponse{
+		Id: c.ID.String(), Name: c.Name, Provider: c.Provider,
+		Endpoints: c.Config.Endpoints, Settings: v.Settings, SecretHints: c.SecretHints,
+		EndpointWarnings: v.EndpointWarnings, LastTestedAt: c.LastTestedAt,
+		CreatedBy: c.CreatedBy, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+	}
+	if resp.Endpoints == nil {
+		resp.Endpoints = map[string]string{}
+	}
+	if resp.EndpointWarnings == nil {
+		resp.EndpointWarnings = []string{}
+	}
+	if c.LastTestResult != nil {
+		t := toShadowConnectionTest(*c.LastTestResult)
+		resp.LastTest = &t
+	}
+	return resp
+}
+
+func toShadowConnectionTest(t models.ShadowConnectionTestInfo) spec.ShadowConnectionTest {
+	out := spec.ShadowConnectionTest{Ok: t.OK, Checks: make([]spec.ShadowConnectionCheck, 0, len(t.Checks))}
+	for _, ch := range t.Checks {
+		out.Checks = append(out.Checks, spec.ShadowConnectionCheck{
+			Name: ch.Name, Outcome: ch.Outcome, Message: optionalString(ch.Message), Unlocks: ch.Unlocks,
+		})
+	}
+	return out
+}
+
+func toShadowScanResponse(s *models.ShadowScan) spec.ShadowScanResponse {
+	resp := spec.ShadowScanResponse{
+		Id: s.ID.String(), Status: s.Status, LookbackDays: int32(s.LookbackDays), //nolint:gosec // 1..90
+		ConnectionIds: s.ConnectionIDs, Results: make([]spec.ShadowScanConnectionResult, 0, len(s.Results)),
+		FindingsCount: int32(s.FindingsCount), //nolint:gosec // bounded by row counts
+		RequestedBy:   s.RequestedBy, StartedAt: s.StartedAt, FinishedAt: s.FinishedAt, CreatedAt: s.CreatedAt,
+	}
+	if resp.ConnectionIds == nil {
+		resp.ConnectionIds = []string{}
+	}
+	for _, r := range s.Results {
+		cr := spec.ShadowScanConnectionResult{
+			ConnectionId: r.ConnectionID, ConnectionName: r.ConnectionName, Provider: r.Provider,
+			Outcome: r.Outcome, Message: optionalString(r.Message),
+			FindingsCount: int32(r.FindingsCount), //nolint:gosec // bounded by row counts
+			Calls:         make([]spec.ShadowScanCallResult, 0, len(r.Calls)),
+		}
+		for _, call := range r.Calls {
+			cr.Calls = append(cr.Calls, spec.ShadowScanCallResult{
+				Call: call.Call, Outcome: call.Outcome, Message: optionalString(call.Message),
+				Items: int32(call.Items), //nolint:gosec // bounded by provider page counts
+			})
+		}
+		resp.Results = append(resp.Results, cr)
+	}
+	return resp
+}
+
+func toShadowOwnerHint(h models.ShadowOwnerHint) spec.ShadowOwnerHint {
+	return spec.ShadowOwnerHint{
+		Name: optionalString(h.Name), Email: optionalString(h.Email), Username: optionalString(h.Username),
+		Type: optionalString(h.Type), Source: optionalString(h.Source), CreatedAt: h.CreatedAt,
+	}
+}
+
+func toShadowFindingSummary(row *repositories.ShadowFindingRow) spec.ShadowFindingSummary {
+	f := row.ShadowFinding
+	return spec.ShadowFindingSummary{
+		Id: f.ID.String(), ConnectionId: f.ConnectionID.String(), ConnectionName: row.ConnectionName,
+		Provider: f.Provider, Kind: f.Kind, ExternalId: f.ExternalID, DisplayName: f.DisplayName,
+		Scope: f.Scope, State: f.State, Score: int32(f.Score), Verdict: f.Verdict, Status: f.Status, //nolint:gosec // 0..100
+		OwnerHint: toShadowOwnerHint(f.OwnerHint), ProviderCreatedAt: f.ProviderCreatedAt,
+		FirstUsedAt: f.FirstUsedAt, LastUsedAt: f.LastUsedAt, FirstSeenAt: f.FirstSeenAt, LastSeenAt: f.LastSeenAt,
+		LinkedProject: f.LinkedProject, LinkedAgent: f.LinkedAgent, RetirementState: f.RetirementState,
+		RequestsInWindow: row.Requests,
+	}
+}
+
+func toShadowFindingDetail(v *services.ShadowFindingView) spec.ShadowFindingDetail {
+	sum := toShadowFindingSummary(&v.Row)
+	f := v.Row.ShadowFinding
+	out := spec.ShadowFindingDetail{
+		Id: sum.Id, ConnectionId: sum.ConnectionId, ConnectionName: sum.ConnectionName, Provider: sum.Provider,
+		Kind: sum.Kind, ExternalId: sum.ExternalId, DisplayName: sum.DisplayName, Scope: sum.Scope, State: sum.State,
+		Score: sum.Score, Verdict: sum.Verdict, Status: sum.Status, OwnerHint: sum.OwnerHint,
+		ProviderCreatedAt: sum.ProviderCreatedAt, FirstUsedAt: sum.FirstUsedAt, LastUsedAt: sum.LastUsedAt,
+		FirstSeenAt: sum.FirstSeenAt, LastSeenAt: sum.LastSeenAt, LinkedProject: sum.LinkedProject,
+		LinkedAgent: sum.LinkedAgent, RetirementState: v.Retirement.State, RequestsInWindow: sum.RequestsInWindow,
+		Attributes: f.Attributes, Related: make([]spec.ShadowFindingRelation, 0, len(v.Related)),
+		Signals: make([]spec.ShadowFindingSignal, 0, len(v.Signals)), Keys: make([]spec.ShadowAPIKey, 0, len(v.Keys)),
+		Usage: make([]spec.ShadowUsageDay, 0, len(v.Usage)), Retirement: toShadowRetirement(v.Retirement),
+		OnboardedAt: f.OnboardedAt, OnboardedBy: optionalString(f.OnboardedBy),
+	}
+	if out.Attributes == nil {
+		out.Attributes = map[string]interface{}{}
+	}
+	for _, rel := range v.Related {
+		out.Related = append(out.Related, spec.ShadowFindingRelation{
+			FindingId: rel.FindingID, Relation: rel.Relation, Reason: optionalString(rel.Reason),
+			DisplayName: optionalString(rel.DisplayName), Provider: optionalString(rel.Provider),
+		})
+	}
+	for _, sig := range v.Signals {
+		d, _ := sa.Def(sig.Code)
+		counted := v.Counted[sig.ID]
+		observed := sig.Observed
+		if observed == nil {
+			observed = map[string]any{}
+		}
+		out.Signals = append(out.Signals, spec.ShadowFindingSignal{
+			Code: sig.Code, Name: d.Name, Group: d.Group, Tier: sig.Tier, Weight: int32(sig.Weight), //nolint:gosec // 0..60
+			Counted: &counted, Source: sig.Source, Condition: sig.Condition, Observed: observed, DetectedAt: sig.DetectedAt,
+		})
+	}
+	for _, k := range v.Keys {
+		lastSeen := k.LastSeenAt
+		out.Keys = append(out.Keys, spec.ShadowAPIKey{
+			KeyId: k.KeyID, Name: k.Name, RedactedHint: k.RedactedHint, Status: k.Status, Scope: k.Scope,
+			OwnerHint: toShadowOwnerHint(k.OwnerHint), CreatedAt: k.ProviderCreatedAt, LastUsedAt: k.LastUsedAt,
+			LastSeenAt: &lastSeen, Present: k.Present,
+		})
+	}
+	for _, u := range v.Usage {
+		out.Usage = append(out.Usage, spec.ShadowUsageDay{
+			Day: u.Day.Format(time.DateOnly), KeyId: u.KeyID, Model: u.Model, Requests: u.Requests,
+			InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CostAmount: u.CostAmount, Currency: optionalString(u.Currency),
+		})
+	}
+	return out
+}
+
+func toShadowRetirement(r services.ShadowRetirementView) spec.ShadowRetirement {
+	steps := r.Guidance.Steps
+	if steps == nil {
+		steps = []string{}
+	}
+	return spec.ShadowRetirement{
+		State: r.State, ObservationDays: int32(r.ObservationDays), ZeroUsageDays: int32(r.ZeroUsageDays), //nolint:gosec // small
+		LastDirectUseAt: r.LastDirectUseAt, DataThrough: r.DataThrough, MarkedAt: r.MarkedAt,
+		MarkedBy: optionalString(r.MarkedBy), VerifiedAt: r.VerifiedAt, Verification: optionalString(r.Verification),
+		Guidance: spec.ShadowRetirementGuidance{Title: r.Guidance.Title, Steps: steps, DocsUrl: optionalString(r.Guidance.DocsURL)},
+	}
+}

@@ -1,0 +1,53 @@
+{
+ "data": [
+  {
+   "starting_at": "2026-10-20T00:00:00Z",
+   "ending_at": "2026-10-21T00:00:00Z",
+   "group": {
+    "product": "messages_api",
+    "model": "claude-opus-5-5",
+    "context_window": null,
+    "inference_geo": null,
+    "speed": null,
+    "slack_channel_id": null,
+    "claude_tag_category": null,
+    "claude_tag_user_id": null,
+    "rbac_group_id": null,
+    "workspace_id": null,
+    "service_tier": null,
+    "user_profile_id": null,
+    "agent_id": null,
+    "environment_id": null,
+    "deployment_id": null,
+    "session_id": null,
+    "actor": {
+     "type": "federated_actor",
+     "provider": {
+      "type": "gcp",
+      "project_number": "123456789"
+     },
+     "subject": "serviceAccount:agent@my-proj.iam.gserviceaccount.com"
+    },
+    "actor_type": "federated_actor",
+    "api_key_id": null
+   },
+   "usage": {
+    "uncached_input_tokens": 100,
+    "cache_creation": {
+     "ephemeral_1h_input_tokens": 0,
+     "ephemeral_5m_input_tokens": 0
+    },
+    "cache_read_input_tokens": 0,
+    "output_tokens": 50,
+    "total_tokens": 150,
+    "server_tool_use": {
+     "web_search_requests": 2
+    },
+    "requests": 12
+   }
+  }
+ ],
+ "has_more": false,
+ "next_page": null,
+ "data_refreshed_at": "2026-11-10T04:02:11Z"
+}

@@ -1,0 +1,51 @@
+{
+    "object": "list",
+    "data": [
+        {
+            "id": "audit_log-zzz__20240101",
+            "type": "api_key.created",
+            "effective_at": 1735689602,
+            "actor": {
+                "type": "api_key",
+                "api_key": {
+                    "id": "key_tracking_1",
+                    "type": "user",
+                    "user": {
+                        "id": "user-dave",
+                        "email": "dave@example.com"
+                    }
+                }
+            },
+            "api_key.created": {
+                "id": "key_alpha1",
+                "data": {
+                    "scopes": ["api.all.read"]
+                }
+            }
+        },
+        {
+            "id": "audit_log-www__20240101",
+            "type": "api_key.created",
+            "effective_at": 1735689603,
+            "actor": {
+                "type": "api_key",
+                "api_key": {
+                    "id": "key_tracking_2",
+                    "type": "service_account",
+                    "service_account": {
+                        "id": "svc_acct_9"
+                    }
+                }
+            },
+            "api_key.created": {
+                "id": "key_deleted_long_ago",
+                "data": {
+                    "scopes": []
+                }
+            }
+        }
+    ],
+    "first_id": "audit_log-zzz__20240101",
+    "last_id": "audit_log-www__20240101",
+    "has_more": false
+}

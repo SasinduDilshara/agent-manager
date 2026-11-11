@@ -1,0 +1,15 @@
+{
+  "Events": [
+    {
+      "EventId": "b1b2c3d4-0011",
+      "EventName": "InvokeModel",
+      "ReadOnly": "false",
+      "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",
+      "EventTime": 1793970000,
+      "EventSource": "bedrock.amazonaws.com",
+      "Username": "dev-alice",
+      "Resources": [],
+      "CloudTrailEvent": "{\"eventVersion\": \"1.08\", \"userIdentity\": {\"type\": \"IAMUser\", \"principalId\": \"AIDAEXAMPLEdev-alice\", \"arn\": \"arn:aws:iam::123456789012:user/dev-alice\", \"accountId\": \"123456789012\", \"accessKeyId\": \"AKIAIOSFODNN7EXAMPLE\", \"userName\": \"dev-alice\"}, \"eventTime\": \"2026-11-06T13:00:00Z\", \"eventSource\": \"bedrock.amazonaws.com\", \"eventName\": \"InvokeModel\", \"awsRegion\": \"us-east-1\", \"sourceIPAddress\": \"192.0.2.10\", \"userAgent\": \"Boto3 SECRET-PROMPT-MARKER\", \"requestParameters\": {\"modelId\": \"amazon.nova-pro-v1:0\"}, \"responseElements\": null, \"requestID\": \"r-b1b2c3d4-0011\", \"eventID\": \"b1b2c3d4-0011\", \"readOnly\": false, \"eventType\": \"AwsApiCall\", \"managementEvent\": true, \"recipientAccountId\": \"123456789012\", \"eventCategory\": \"Management\", \"tlsDetails\": {\"clientProvidedHostHeader\": \"bedrock-runtime.us-east-1.amazonaws.com\"}}"
+    }
+  ]
+}

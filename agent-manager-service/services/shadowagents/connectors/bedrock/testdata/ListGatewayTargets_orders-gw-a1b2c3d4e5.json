@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "targetId": "TGT0000001",
+      "name": "SECRET-PROMPT-MARKER target",
+      "status": "READY",
+      "description": "SECRET-PROMPT-MARKER",
+      "createdAt": "2026-09-01T00:00:00Z",
+      "updatedAt": "2026-09-01T00:00:00Z",
+      "targetType": "MCP_SERVER",
+      "listingMode": "DEFAULT"
+    }
+  ],
+  "nextToken": "tg-page-2"
+}

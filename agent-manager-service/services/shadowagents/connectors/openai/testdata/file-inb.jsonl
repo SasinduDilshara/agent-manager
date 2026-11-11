@@ -1,0 +1,1 @@
+{"custom_id": "request-4", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-y", "messages": [{"role": "user", "content": "SECRET-PROMPT-MARKER"}, {"role": "tool", "tool_call_id": "call_1", "content": "tool result SECRET-PROMPT-MARKER"}]}}

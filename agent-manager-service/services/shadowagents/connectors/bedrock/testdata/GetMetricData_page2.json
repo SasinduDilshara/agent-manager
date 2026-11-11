@@ -1,0 +1,16 @@
+{
+  "Messages": [],
+  "MetricDataResults": [
+    {
+      "Id": "m1",
+      "Label": "SessionCount",
+      "StatusCode": "Complete",
+      "Timestamps": [
+        1793836800
+      ],
+      "Values": [
+        0
+      ]
+    }
+  ]
+}

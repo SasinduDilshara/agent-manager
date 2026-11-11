@@ -48,6 +48,7 @@ import {
   LazyAddLLMProvidersOrg,
   LazyViewMCPServerComponent,
   LazyGatewaysOrg,
+  LazyShadowAgentDiscoveryOrg,
   LazyThunderInstancesOrg,
   LazySettingsOrg,
   LazyOrgEvents,
@@ -332,6 +333,14 @@ export function RootRouter() {
               element={
                 <Suspense fallback={<LoadingFallback />}>
                   <LazyOrgEvents />
+                </Suspense>
+              }
+            />
+            <Route
+              path={relativeRouteMap.children.org.children.shadowAgentDiscovery.path + "/*"}
+              element={
+                <Suspense fallback={<LoadingFallback />}>
+                  <LazyShadowAgentDiscoveryOrg />
                 </Suspense>
               }
             />

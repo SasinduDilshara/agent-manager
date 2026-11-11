@@ -1,0 +1,15 @@
+{
+  "mcpServers": [
+    {
+      "name": "projects/123456789012/locations/global/mcpServers/agentregistry-9f8e7d",
+      "mcpServerId": "urn:mcp:googleapis.com:projects:123456789012:locations:global:bigquery",
+      "displayName": "BigQuery MCP server",
+      "description": "Google remote MCP server for BigQuery.",
+      "interfaces": [{"url": "https://bigquery.googleapis.com/mcp?key=sk-test-SECRETSECRETSECRET", "protocolBinding": "JSONRPC"}],
+      "tools": [{"name": "execute_sql", "description": "SECRET-PROMPT-MARKER", "annotations": {"readOnlyHint": false, "destructiveHint": true}}],
+      "createTime": "2026-09-01T00:00:00Z",
+      "updateTime": "2026-09-01T00:00:00Z"
+    }
+  ],
+  "nextPageToken": "mcp-page-2"
+}

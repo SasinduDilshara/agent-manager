@@ -1,0 +1,10 @@
+{
+  "gatewayArn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/search-gw-k1l2m3n4o5",
+  "gatewayId": "search-gw-k1l2m3n4o5",
+  "gatewayUrl": "https://search-gw-k1l2m3n4o5.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp",
+  "createdAt": "2026-09-03T00:00:00Z",
+  "updatedAt": "2026-10-03T00:00:00Z",
+  "status": "CREATING",
+  "name": "search-gw",
+  "authorizerType": "NONE"
+}

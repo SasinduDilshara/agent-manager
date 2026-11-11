@@ -1,0 +1,36 @@
+{
+    "object": "page",
+    "data": [
+        {
+            "object": "bucket",
+            "start_time": 1793491200,
+            "end_time": 1793577600,
+            "results": [
+                {
+                    "object": "organization.usage.web_searches.result",
+                    "num_model_requests": 4,
+                    "num_requests": 4,
+                    "project_id": "proj_alpha",
+                    "user_id": null,
+                    "api_key_id": "key_alpha1",
+                    "model": null,
+                    "context_level": null,
+                    "api_source": "unlabeled"
+                },
+                {
+                    "object": "organization.usage.web_searches.result",
+                    "num_model_requests": 0,
+                    "num_requests": 0,
+                    "project_id": "proj_beta",
+                    "user_id": null,
+                    "api_key_id": "key_beta1",
+                    "model": null,
+                    "context_level": null,
+                    "api_source": "unlabeled"
+                }
+            ]
+        }
+    ],
+    "has_more": true,
+    "next_page": "page_WEB2"
+}

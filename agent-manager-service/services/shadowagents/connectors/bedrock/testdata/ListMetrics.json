@@ -1,0 +1,37 @@
+{
+  "Metrics": [
+    {
+      "Namespace": "AWS/Bedrock-AgentCore",
+      "MetricName": "SessionCount",
+      "Dimensions": [
+        {
+          "Name": "Service",
+          "Value": "AgentCore.Runtime"
+        },
+        {
+          "Name": "Resource",
+          "Value": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/support_agent-AbCdEf1234"
+        },
+        {
+          "Name": "Name",
+          "Value": "support_agent::DEFAULT"
+        }
+      ]
+    },
+    {
+      "Namespace": "AWS/Bedrock-AgentCore",
+      "MetricName": "SessionCount",
+      "Dimensions": [
+        {
+          "Name": "Service",
+          "Value": "AgentCore.Runtime"
+        },
+        {
+          "Name": "Resource",
+          "Value": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/support_agent-AbCdEf1234"
+        }
+      ]
+    }
+  ],
+  "NextToken": "lm-page-2"
+}

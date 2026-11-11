@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "targetId": "TGT0000002",
+      "name": "invoice-lambda",
+      "status": "READY",
+      "createdAt": "2026-09-01T00:00:00Z",
+      "updatedAt": "2026-09-01T00:00:00Z",
+      "targetType": "LAMBDA"
+    }
+  ]
+}

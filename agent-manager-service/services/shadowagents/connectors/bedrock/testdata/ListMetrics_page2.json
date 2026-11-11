@@ -1,0 +1,32 @@
+{
+  "Metrics": [
+    {
+      "Namespace": "AWS/Bedrock-AgentCore",
+      "MetricName": "SessionCount",
+      "Dimensions": [
+        {
+          "Name": "Service",
+          "Value": "AgentCore.Runtime"
+        },
+        {
+          "Name": "Resource",
+          "Value": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/orders_mcp-GhIjKl5678"
+        }
+      ]
+    },
+    {
+      "Namespace": "AWS/Bedrock-AgentCore",
+      "MetricName": "SessionCount",
+      "Dimensions": [
+        {
+          "Name": "Service",
+          "Value": "AgentCore.Runtime"
+        },
+        {
+          "Name": "Resource",
+          "Value": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/deleted_agent-QqQqQqQqQq"
+        }
+      ]
+    }
+  ]
+}

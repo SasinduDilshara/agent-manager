@@ -201,6 +201,38 @@ export const generatedRouteMap =  {
           "wildPath": "/org/:orgId/events/*",
           "children": {}
         },
+        "shadowAgentDiscovery": {
+          "path": "/org/:orgId/shadow-agent-discovery",
+          "wildPath": "/org/:orgId/shadow-agent-discovery/*",
+          "children": {
+            "finding": {
+              "path": "/org/:orgId/shadow-agent-discovery/findings/:findingId",
+              "wildPath": "/org/:orgId/shadow-agent-discovery/findings/:findingId/*",
+              "children": {
+                "onboard": {
+                  "path": "/org/:orgId/shadow-agent-discovery/findings/:findingId/onboard",
+                  "wildPath": "/org/:orgId/shadow-agent-discovery/findings/:findingId/onboard/*",
+                  "children": {}
+                }
+              }
+            },
+            "scan": {
+              "path": "/org/:orgId/shadow-agent-discovery/scans/:scanId",
+              "wildPath": "/org/:orgId/shadow-agent-discovery/scans/:scanId/*",
+              "children": {}
+            },
+            "newConnection": {
+              "path": "/org/:orgId/shadow-agent-discovery/connections/new",
+              "wildPath": "/org/:orgId/shadow-agent-discovery/connections/new/*",
+              "children": {}
+            },
+            "editConnection": {
+              "path": "/org/:orgId/shadow-agent-discovery/connections/:connectionId/edit",
+              "wildPath": "/org/:orgId/shadow-agent-discovery/connections/:connectionId/edit/*",
+              "children": {}
+            }
+          }
+        },
         "deploymentPipelines": {
           "path": "/org/:orgId/deployment-pipelines",
           "wildPath": "/org/:orgId/deployment-pipelines/*",

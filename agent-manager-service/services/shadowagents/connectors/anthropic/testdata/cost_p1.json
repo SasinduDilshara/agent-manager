@@ -1,0 +1,73 @@
+{
+ "data": [
+  {
+   "starting_at": "2026-10-20T00:00:00Z",
+   "ending_at": "2026-10-21T00:00:00Z",
+   "group": {
+    "product": "messages_api",
+    "model": "claude-opus-5-5",
+    "context_window": null,
+    "inference_geo": null,
+    "speed": null,
+    "slack_channel_id": null,
+    "claude_tag_category": null,
+    "claude_tag_user_id": null,
+    "rbac_group_id": null,
+    "workspace_id": null,
+    "service_tier": null,
+    "user_profile_id": null,
+    "agent_id": null,
+    "environment_id": null,
+    "deployment_id": null,
+    "session_id": null,
+    "actor": null,
+    "actor_type": null,
+    "api_key_id": "apikey_01Rj2N8SVvo6BePZj99NhmiT",
+    "cost_type": "tokens",
+    "token_type": null
+   },
+   "cost": {
+    "amount": "41280.000000",
+    "currency": "USD",
+    "list_amount": "51600.000000",
+    "requests": null
+   }
+  },
+  {
+   "starting_at": "2026-10-20T00:00:00Z",
+   "ending_at": "2026-10-21T00:00:00Z",
+   "group": {
+    "product": null,
+    "model": null,
+    "context_window": null,
+    "inference_geo": null,
+    "speed": null,
+    "slack_channel_id": null,
+    "claude_tag_category": null,
+    "claude_tag_user_id": null,
+    "rbac_group_id": null,
+    "workspace_id": null,
+    "service_tier": null,
+    "user_profile_id": null,
+    "agent_id": null,
+    "environment_id": null,
+    "deployment_id": null,
+    "session_id": null,
+    "actor": null,
+    "actor_type": null,
+    "api_key_id": "apikey_01Rj2N8SVvo6BePZj99NhmiT",
+    "cost_type": "code_execution",
+    "token_type": null
+   },
+   "cost": {
+    "amount": "150.000000",
+    "currency": "USD",
+    "list_amount": "150.000000",
+    "requests": null
+   }
+  }
+ ],
+ "has_more": true,
+ "next_page": "page_2",
+ "data_refreshed_at": "2026-11-10T04:02:11Z"
+}

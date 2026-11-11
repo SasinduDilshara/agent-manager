@@ -1,0 +1,38 @@
+{
+  "timeSeries": [
+    {
+      "metric": {
+        "labels": { "response_code": "200", "response_code_class": "2xx" },
+        "type": "aiplatform.googleapis.com/reasoning_engine/request_count"
+      },
+      "resource": {
+        "type": "aiplatform.googleapis.com/ReasoningEngine",
+        "labels": { "reasoning_engine_id": "1234567890123456789", "location": "us-central1", "project_id": "my-agents-project" }
+      },
+      "metricKind": "DELTA",
+      "valueType": "INT64",
+      "points": [
+        { "interval": { "startTime": "2026-11-09T12:00:00Z", "endTime": "2026-11-10T12:00:00Z" }, "value": { "int64Value": "25" } },
+        { "interval": { "startTime": "2026-11-08T12:00:00Z", "endTime": "2026-11-09T12:00:00Z" }, "value": { "int64Value": "36" } },
+        { "interval": { "startTime": "2026-11-07T12:00:00Z", "endTime": "2026-11-08T12:00:00Z" }, "value": { "int64Value": "0" } }
+      ]
+    },
+    {
+      "metric": {
+        "labels": { "response_code": "500", "response_code_class": "5xx" },
+        "type": "aiplatform.googleapis.com/reasoning_engine/request_count"
+      },
+      "resource": {
+        "type": "aiplatform.googleapis.com/ReasoningEngine",
+        "labels": { "reasoning_engine_id": "1234567890123456789", "location": "us-central1", "project_id": "my-agents-project" }
+      },
+      "metricKind": "DELTA",
+      "valueType": "INT64",
+      "points": [
+        { "interval": { "startTime": "2026-11-09T12:00:00Z", "endTime": "2026-11-10T12:00:00Z" }, "value": { "int64Value": "4" } }
+      ]
+    }
+  ],
+  "unit": "1",
+  "nextPageToken": "ts-page-2"
+}

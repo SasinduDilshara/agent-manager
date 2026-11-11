@@ -1,0 +1,51 @@
+{
+  "timeSeries": [
+    {
+      "metric": {
+        "labels": { "response_code": "200", "response_code_class": "2xx" },
+        "type": "aiplatform.googleapis.com/reasoning_engine/request_count"
+      },
+      "resource": {
+        "type": "aiplatform.googleapis.com/ReasoningEngine",
+        "labels": { "reasoning_engine_id": "9876543210987654321", "location": "us-central1", "resource_container": "123456789012" }
+      },
+      "metricKind": "DELTA",
+      "valueType": "INT64",
+      "points": [
+        { "interval": { "startTime": "2026-11-09T12:00:00Z", "endTime": "2026-11-10T12:00:00Z" }, "value": { "int64Value": "0" } },
+        { "interval": { "startTime": "2026-11-08T12:00:00Z", "endTime": "2026-11-09T12:00:00Z" }, "value": { "int64Value": "0" } }
+      ]
+    },
+    {
+      "metric": {
+        "labels": { "response_code": "200", "response_code_class": "2xx" },
+        "type": "aiplatform.googleapis.com/reasoning_engine/request_count"
+      },
+      "resource": {
+        "type": "aiplatform.googleapis.com/ReasoningEngine",
+        "labels": { "reasoning_engine_id": "5555555555555555555", "location": "us", "resource_container": "123456789012" }
+      },
+      "metricKind": "DELTA",
+      "valueType": "INT64",
+      "points": [
+        { "interval": { "startTime": "2026-10-24T12:00:00Z", "endTime": "2026-10-25T12:00:00Z" }, "value": { "int64Value": "7" } }
+      ]
+    },
+    {
+      "metric": {
+        "labels": { "response_code": "200", "response_code_class": "2xx" },
+        "type": "aiplatform.googleapis.com/reasoning_engine/request_count"
+      },
+      "resource": {
+        "type": "aiplatform.googleapis.com/ReasoningEngine",
+        "labels": { "reasoning_engine_id": "1111111111111111111", "location": "europe-west1", "resource_container": "123456789012" }
+      },
+      "metricKind": "DELTA",
+      "valueType": "INT64",
+      "points": [
+        { "interval": { "startTime": "2026-11-09T12:00:00Z", "endTime": "2026-11-10T12:00:00Z" }, "value": { "int64Value": "99" } }
+      ]
+    }
+  ],
+  "unit": "1"
+}
