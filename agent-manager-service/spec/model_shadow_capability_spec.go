@@ -22,9 +22,9 @@ type ShadowCapabilitySpec struct {
 	Key         string `json:"key"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
-	// Signal codes this capability can produce.
+	// Evidence codes this capability can produce.
 	Signals []string `json:"signals"`
-	// Field or option keys that must all be present (a credential set, a key map with at least one key, or a ticked checkbox) for the scan to analyze this.
+	// Field or option keys that must all be present (a credential set, a key map with at least one key, or a ticked checkbox) for the scan to list this.
 	Needs []string `json:"needs"`
 }
 

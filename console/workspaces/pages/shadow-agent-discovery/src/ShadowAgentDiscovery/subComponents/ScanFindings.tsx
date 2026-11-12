@@ -28,7 +28,7 @@ import { ScanStatusChip, SOURCE_HOSTS } from "../shadowUi";
 import { FindingsTab } from "./FindingsTab";
 import { ScanDetailsDrawer } from "./ScansTab";
 
-/** The findings one scan saw (scans/:scanId), with the scan's call details. */
+/** The agents one scan found (scans/:scanId), with the scan's call details. */
 export function ScanFindings({
   orgName,
   listPath,
@@ -44,18 +44,18 @@ export function ScanFindings({
 
   if (scan.isLoading) {
     return (
-      <PageLayout title="Scan findings" disableIcon {...back}>
+      <PageLayout title="Scan" disableIcon {...back}>
         <Skeleton variant="rounded" height={320} />
       </PageLayout>
     );
   }
   if (scan.error || !scan.data) {
     return (
-      <PageLayout title="Scan findings" disableIcon {...back}>
+      <PageLayout title="Scan" disableIcon {...back}>
         <StateNotice
           icon={SearchX}
           title="Scan not found"
-          description="The scan may have been deleted with its connection. Go back to the scans to pick another one."
+          description="The scan may have been cleared. Go back to the scans to pick another one."
         />
       </PageLayout>
     );
@@ -68,8 +68,8 @@ export function ScanFindings({
 
   return (
     <PageLayout
-      title={`Scan findings — ${started}`}
-      description="The findings this scan saw. A finding is merged across scans, so its score, status and last use are the latest."
+      title={`Scan — ${started}`}
+      description="The agents this scan found, each once. An agent's details and review status are the latest."
       disableIcon
       {...back}
       actions={
@@ -82,9 +82,8 @@ export function ScanFindings({
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <ScanStatusChip status={s.status} />
           <Typography variant="body2" color="text.secondary">
-            {s.findingsCount} findings · {s.connectionIds.length}{" "}
-            {s.connectionIds.length === 1 ? "connection" : "connections"} · {s.lookbackDays} days of
-            history
+            {s.connectionIds.length} {s.connectionIds.length === 1 ? "platform" : "platforms"}{" "}
+            scanned
           </Typography>
         </Stack>
         <FindingsTab
@@ -93,8 +92,9 @@ export function ScanFindings({
           emptyText={
             s.findingsCount > 0
               ? {
-                  title: "Findings were not recorded for this scan",
-                  description: `This scan found ${s.findingsCount} findings before Agent Manager recorded each scan's findings, so they cannot be listed here. Scan details has its calls; the next scan lists its findings.`,
+                  title: "Agents were not recorded for this scan",
+                  description:
+                    "This scan ran before Agent Manager recorded each scan's agents, so they cannot be listed here. Scan details has its calls; the next scan lists its agents.",
                 }
               : undefined
           }

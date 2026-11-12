@@ -150,7 +150,6 @@ var serviceProviderSet = wire.NewSet(
 	ProvideShadowConnectors,
 	services.NewShadowAgentService,
 	services.NewShadowAgentScanner,
-	wire.Bind(new(services.ShadowAgentLookup), new(services.AgentManagerService)),
 )
 
 var instrumentationProviderSet = wire.NewSet(
@@ -745,7 +744,7 @@ func ProvideAgentIdentityInjectionServiceWithEndpointResolver(
 }
 
 // ProvideShadowConnectors registers the Shadow Agent Discovery connector of
-// each supported provider. They share one HTTP client that follows a
+// each supported platform. They share one HTTP client that follows a
 // redirect only to the same origin, so a stored credential never leaves the
 // endpoint the org configured.
 func ProvideShadowConnectors(logger *slog.Logger) services.ShadowConnectors {

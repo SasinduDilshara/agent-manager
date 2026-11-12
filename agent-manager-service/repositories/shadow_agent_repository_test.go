@@ -20,7 +20,6 @@ package repositories
 
 import (
 	"context"
-	"sort"
 	"testing"
 	"time"
 
@@ -32,19 +31,6 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
-
-// countScore scores a finding as the number of distinct codes, so tests can
-// see that rescoring read the stored signals.
-func countScore(kind string, codes []string) (int, string) {
-	seen := map[string]bool{}
-	for _, c := range codes {
-		seen[c] = true
-	}
-	if kind == models.ShadowKindToolInfra {
-		return len(seen), models.ShadowVerdictToolInfra
-	}
-	return len(seen), models.ShadowVerdictLLMConsumer
-}
 
 func newShadowConnection(t *testing.T, repo ShadowAgentRepository, ouID, name string) *models.ShadowConnection {
 	t.Helper()
@@ -58,147 +44,297 @@ func newShadowConnection(t *testing.T, repo ShadowAgentRepository, ouID, name st
 	return c
 }
 
-func day(s string) time.Time {
-	d, err := time.Parse(time.DateOnly, s)
-	if err != nil {
-		panic(err)
-	}
-	return d
+// newShadowScan records a finished scan, so evidence and scan links can point at it.
+func newShadowScan(t *testing.T, repo ShadowAgentRepository, ouID string) uuid.UUID {
+	t.Helper()
+	s := &models.ShadowScan{ID: uuid.New(), OUID: ouID, Status: models.ShadowScanSucceeded, ConnectionIDs: []string{}}
+	require.NoError(t, repo.CreateScan(context.Background(), s))
+	t.Cleanup(func() { db.GetDB().Exec("DELETE FROM shadow_scans WHERE id = ?", s.ID) })
+	return s.ID
 }
 
-func TestShadowApplyConnectionResultIsIdempotentAndMerges(t *testing.T) {
+// agentInput is an OpenAI agent as a connector reports it, with its evidence.
+func agentInput(externalID, name string, at time.Time) ShadowFindingInput {
+	return ShadowFindingInput{
+		Finding: models.ShadowFinding{
+			Provider: models.ShadowProviderOpenAI, Kind: models.ShadowKindPlatformAgent, ExternalID: externalID,
+			DisplayName: name, Scope: "proj_1", State: "active", Attributes: map[string]any{"model": "gpt-4.1"},
+		},
+		Signals: []models.ShadowFindingSignal{{Code: "openai.agent_object", Source: "GET /v1/agents", DetectedAt: at}},
+	}
+}
+
+func TestShadowApplyConnectionResultIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	repo := NewShadowAgentRepository(db.GetDB())
 	ou := "ou-" + uuid.NewString()
 	c := newShadowConnection(t, repo, ou, "conn")
-	first, last := day("2026-11-01"), day("2026-11-03")
 	scan1 := time.Now().UTC().Truncate(time.Microsecond)
 	in := ShadowConnectionApply{
-		OUID: ou, ConnectionID: c.ID, ScanID: uuid.New(), ScanStartedAt: scan1, WindowStart: day("2026-10-01"),
-		Findings: []ShadowFindingInput{
-			{
-				Finding: models.ShadowFinding{
-					Provider: models.ShadowProviderOpenAI, Kind: models.ShadowKindAPIKey, ExternalID: "key_1",
-					DisplayName: "prod", OwnerHint: models.ShadowOwnerHint{Email: "alice@example.com"},
-					Attributes: map[string]any{"model": "gpt-4.1"}, FirstUsedAt: &first, LastUsedAt: &last,
-				},
-				Signals: []models.ShadowFindingSignal{{Code: "openai.plain_usage", Tier: "low", Weight: 5, Source: "usage", DetectedAt: scan1}},
-				Usage: []models.ShadowUsageDaily{
-					{Day: day("2026-11-01"), KeyID: "key_1", Model: "gpt-4.1", Requests: 3, InputTokens: 30},
-					{Day: day("2026-11-02"), KeyID: "key_1", Model: "gpt-4.1", Requests: 4},
-				},
-				Related: []ShadowRelationInput{{Kind: models.ShadowKindPlatformAgent, ExternalID: "agent_1", Relation: "used_by_agent"}},
-			},
-			{
-				Finding: models.ShadowFinding{Provider: models.ShadowProviderOpenAI, Kind: models.ShadowKindPlatformAgent, ExternalID: "agent_1", DisplayName: "Bot"},
-				Signals: []models.ShadowFindingSignal{{Code: "openai.agent_object", Tier: "definitive", Weight: 60, Source: "agents", DetectedAt: scan1}},
-			},
-		},
-		Keys:       []models.ShadowAPIKey{{KeyID: "key_1", Name: "prod", RedactedHint: "sk-abc...def", Status: "active", Scope: "proj_1"}},
-		KeysListed: true,
+		OUID: ou, ConnectionID: c.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: scan1, Complete: true,
+		Findings: []ShadowFindingInput{agentInput("agent_1", "Bot", scan1), agentInput("agent_2", "Helper", scan1)},
 	}
-	n, err := repo.ApplyConnectionResult(ctx, in, countScore)
+	in.Findings[0].Finding.OwnerHint = models.ShadowOwnerHint{Email: "alice@example.com"}
+	n, err := repo.ApplyConnectionResult(ctx, in)
 	require.NoError(t, err)
 	assert.Equal(t, 2, n)
 
 	// The same scan again: nothing is duplicated.
-	_, err = repo.ApplyConnectionResult(ctx, in, countScore)
+	_, err = repo.ApplyConnectionResult(ctx, in)
 	require.NoError(t, err)
 	rows, total, err := repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 50})
 	require.NoError(t, err)
 	require.Equal(t, 2, total)
-	var key *ShadowFindingRow
-	for i := range rows {
-		if rows[i].ExternalID == "key_1" {
-			key = &rows[i]
-		}
-	}
-	require.NotNil(t, key)
-	assert.Equal(t, int64(7), key.Requests, "usage is upserted per day, never added twice")
-	assert.Equal(t, 1, key.Score, "score from the stored signals")
-	assert.Equal(t, "conn", key.ConnectionName)
-	require.Len(t, key.Related, 1)
-	assert.Equal(t, "used_by_agent", key.Related[0].Relation)
-	usage, err := repo.ListUsage(ctx, ou, key.ID)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "Bot", rows[0].DisplayName, "ordered by name")
+	bot := rows[0]
+	assert.Equal(t, "conn", bot.ConnectionName)
+	assert.True(t, bot.Present)
+	assert.Equal(t, models.ShadowStatusNew, bot.Status)
+	assert.Equal(t, "alice@example.com", bot.OwnerHint.Email)
+	require.Len(t, bot.FoundBy, 1)
+	assert.Equal(t, c.ID.String(), bot.FoundBy[0].ConnectionID)
+	assert.Equal(t, bot.ID.String(), bot.FoundBy[0].FindingID)
+	signals, err := repo.ListSignals(ctx, ou, bot.ID)
 	require.NoError(t, err)
-	assert.Len(t, usage, 2)
+	require.Len(t, signals, 1)
+	assert.Equal(t, "GET /v1/agents", signals[0].Source)
 
-	// A later scan without an owner keeps the owner; used times only widen.
-	earlier, later := day("2026-10-20"), day("2026-11-02")
+	// A later scan whose listing has no owner clears it: the owner is only
+	// what the listing reports now.
 	in2 := in
-	in2.ScanID, in2.ScanStartedAt = uuid.New(), scan1.Add(time.Hour)
-	in2.Findings = []ShadowFindingInput{{Finding: models.ShadowFinding{
-		Provider: models.ShadowProviderOpenAI, Kind: models.ShadowKindAPIKey, ExternalID: "key_1", DisplayName: "prod",
-		FirstUsedAt: &earlier, LastUsedAt: &later,
-	}}}
-	in2.Keys = nil
-	in2.KeysListed = true
-	_, err = repo.ApplyConnectionResult(ctx, in2, countScore)
+	in2.ScanID, in2.ScanStartedAt = newShadowScan(t, repo, ou), scan1.Add(time.Hour)
+	in2.Findings = []ShadowFindingInput{agentInput("agent_1", "Bot", scan1.Add(time.Hour)), agentInput("agent_2", "Helper", scan1.Add(time.Hour))}
+	_, err = repo.ApplyConnectionResult(ctx, in2)
 	require.NoError(t, err)
-	got, err := repo.GetFinding(ctx, ou, key.ID)
+	got, err := repo.GetFinding(ctx, ou, bot.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "alice@example.com", got.OwnerHint.Email)
-	assert.True(t, got.FirstUsedAt.Equal(earlier))
-	assert.True(t, got.LastUsedAt.Equal(last))
-	signals, err := repo.ListSignals(ctx, ou, key.ID)
-	require.NoError(t, err)
-	assert.Len(t, signals, 1, "evidence inside the window stays")
-	keys, err := repo.ListFindingKeys(ctx, ou, key.ID)
-	require.NoError(t, err)
-	require.Len(t, keys, 1)
-	assert.False(t, keys[0].Present, "a complete listing without the key marks it gone")
-
-	// Evidence older than the window ages out.
-	in3 := in2
-	in3.ScanStartedAt, in3.WindowStart = scan1.Add(2*time.Hour), scan1.Add(time.Minute)
-	_, err = repo.ApplyConnectionResult(ctx, in3, countScore)
-	require.NoError(t, err)
-	signals, err = repo.ListSignals(ctx, ou, key.ID)
-	require.NoError(t, err)
-	assert.Empty(t, signals)
+	assert.Empty(t, got.OwnerHint.Email)
+	assert.True(t, got.LastSeenAt.Equal(scan1.Add(time.Hour)))
+	assert.True(t, got.FirstSeenAt.Equal(scan1))
 
 	// Other orgs see nothing.
 	_, total, err = repo.ListFindings(ctx, "ou-"+uuid.NewString(), ShadowFindingFilter{Limit: 50})
 	require.NoError(t, err)
 	assert.Zero(t, total)
-	_, err = repo.GetFinding(ctx, "ou-"+uuid.NewString(), key.ID)
+	_, err = repo.GetFinding(ctx, "ou-"+uuid.NewString(), bot.ID)
 	assert.True(t, IsShadowNotFound(err))
 }
 
-func TestShadowKeysMarkedGoneOnlyInListedScopes(t *testing.T) {
+// An agent a complete listing no longer returns is marked as no longer
+// present, and hidden; an incomplete listing marks nothing; finding the
+// agent again brings it back.
+func TestShadowPresenceFollowsCompleteListings(t *testing.T) {
 	ctx := context.Background()
 	repo := NewShadowAgentRepository(db.GetDB())
 	ou := "ou-" + uuid.NewString()
 	c := newShadowConnection(t, repo, ou, "conn")
-	start := time.Now().UTC()
-	base := ShadowConnectionApply{
-		OUID: ou, ConnectionID: c.ID, ScanID: uuid.New(), ScanStartedAt: start, WindowStart: start.AddDate(0, 0, -30),
-		Keys: []models.ShadowAPIKey{{KeyID: "a1", Scope: "proj_a"}, {KeyID: "b1", Scope: "proj_b"}}, KeysListed: true,
-	}
-	_, err := repo.ApplyConnectionResult(ctx, base, countScore)
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+	scan1 := newShadowScan(t, repo, ou)
+	_, err := repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: c.ID, ScanID: scan1, ScanStartedAt: t0, Complete: true,
+		Findings: []ShadowFindingInput{agentInput("agent_1", "Bot", t0), agentInput("agent_2", "Gone", t0)},
+	})
 	require.NoError(t, err)
 
-	next := ShadowConnectionApply{
-		OUID: ou, ConnectionID: c.ID, ScanID: uuid.New(), ScanStartedAt: start.Add(time.Hour),
-		WindowStart: start.AddDate(0, 0, -30), KeyScopesListed: []string{"proj_a"},
-	}
-	_, err = repo.ApplyConnectionResult(ctx, next, countScore)
+	// An incomplete scan that misses agent_2 does not hide it.
+	_, err = repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: c.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: t0.Add(time.Hour), Complete: false,
+		Findings: []ShadowFindingInput{agentInput("agent_1", "Bot", t0.Add(time.Hour))},
+	})
 	require.NoError(t, err)
-	var present []models.ShadowAPIKey
-	require.NoError(t, db.GetDB().Where("ou_id = ?", ou).Order("key_id").Find(&present).Error)
-	require.Len(t, present, 2)
-	assert.False(t, present[0].Present, "proj_a was listed in full and no longer has a1")
-	assert.True(t, present[1].Present, "proj_b was not listed, so b1 is not assumed gone")
+	_, total, err := repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+
+	// A complete scan that misses agent_2 hides it.
+	scan3 := newShadowScan(t, repo, ou)
+	_, err = repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: c.ID, ScanID: scan3, ScanStartedAt: t0.Add(2 * time.Hour), Complete: true,
+		Findings: []ShadowFindingInput{agentInput("agent_1", "Bot", t0.Add(2*time.Hour))},
+	})
+	require.NoError(t, err)
+	rows, total, err := repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	assert.Equal(t, "agent_1", rows[0].ExternalID)
+	sum, err := repo.Summary(ctx, ou)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sum.Total, "the summary counts only agents still listed")
+
+	// The first scan's own list still shows it, as no longer present.
+	rows, _, err = repo.ListFindings(ctx, ou, ShadowFindingFilter{ScanID: &scan1, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	for _, r := range rows {
+		assert.Equal(t, r.ExternalID == "agent_1", r.Present, r.ExternalID)
+	}
+	rows, _, err = repo.ListFindings(ctx, ou, ShadowFindingFilter{ScanID: &scan3, Limit: 10})
+	require.NoError(t, err)
+	assert.Len(t, rows, 1)
+
+	// Listed again: present again.
+	_, err = repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: c.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: t0.Add(3 * time.Hour), Complete: true,
+		Findings: []ShadowFindingInput{agentInput("agent_1", "Bot", t0.Add(3*time.Hour)), agentInput("agent_2", "Gone", t0.Add(3*time.Hour))},
+	})
+	require.NoError(t, err)
+	_, total, err = repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+}
+
+// Evidence a complete listing did not see again is removed; correlation
+// evidence is kept.
+func TestShadowStaleEvidenceRemovedOnCompleteListing(t *testing.T) {
+	ctx := context.Background()
+	repo := NewShadowAgentRepository(db.GetDB())
+	ou := "ou-" + uuid.NewString()
+	c := newShadowConnection(t, repo, ou, "conn")
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+	first := agentInput("rt", "Runtime", t0)
+	first.Finding.Kind = models.ShadowKindRuntime
+	first.Signals = append(first.Signals, models.ShadowFindingSignal{
+		Code: "bedrock.registry_agent_record", Source: "Agent Registry ListRegistryRecords", DetectedAt: t0,
+	})
+	_, err := repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: c.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: t0, Complete: true, Findings: []ShadowFindingInput{first},
+	})
+	require.NoError(t, err)
+	rows, _, err := repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	id := rows[0].ID
+	require.NoError(t, repo.ApplyCorrelation(ctx, ou, nil, map[uuid.UUID][]models.ShadowFindingSignal{
+		id: {{Code: "foundry.external_possible_duplicate", DetectedAt: t0}},
+	}))
+
+	// The registry record is gone: an incomplete scan keeps its evidence.
+	again := agentInput("rt", "Runtime", t0.Add(time.Hour))
+	again.Finding.Kind = models.ShadowKindRuntime
+	_, err = repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: c.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: t0.Add(time.Hour), Complete: false,
+		Findings: []ShadowFindingInput{again},
+	})
+	require.NoError(t, err)
+	signals, err := repo.ListSignals(ctx, ou, id)
+	require.NoError(t, err)
+	assert.Len(t, signals, 3)
+
+	// A complete scan removes it, and keeps the correlation evidence.
+	again.Signals[0].DetectedAt = t0.Add(2 * time.Hour)
+	_, err = repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: c.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: t0.Add(2 * time.Hour), Complete: true,
+		Findings: []ShadowFindingInput{again},
+	})
+	require.NoError(t, err)
+	signals, err = repo.ListSignals(ctx, ou, id)
+	require.NoError(t, err)
+	codes := []string{}
+	for _, s := range signals {
+		codes = append(codes, s.Code)
+	}
+	assert.ElementsMatch(t, []string{"openai.agent_object", "foundry.external_possible_duplicate"}, codes)
+}
+
+// The same agent (provider, kind, external ID) found through two connections
+// is one agent: listed once with both connections, counted once, one status.
+func TestShadowAgentsAreDeduplicatedAcrossConnections(t *testing.T) {
+	ctx := context.Background()
+	repo := NewShadowAgentRepository(db.GetDB())
+	ou := "ou-" + uuid.NewString()
+	a := newShadowConnection(t, repo, ou, "Alpha")
+	b := newShadowConnection(t, repo, ou, "Beta")
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+	_, err := repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: a.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: t0, Complete: true,
+		Findings: []ShadowFindingInput{agentInput("agent_shared", "Shared", t0), agentInput("agent_a", "Only A", t0)},
+	})
+	require.NoError(t, err)
+	_, err = repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: b.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: t0.Add(time.Minute), Complete: true,
+		Findings: []ShadowFindingInput{agentInput("agent_shared", "Shared", t0.Add(time.Minute))},
+	})
+	require.NoError(t, err)
+
+	rows, total, err := repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Equal(t, 2, total, "two agents, not three rows")
+	require.Len(t, rows, 2)
+	var shared ShadowFindingRow
+	for _, r := range rows {
+		if r.ExternalID == "agent_shared" {
+			shared = r
+		}
+	}
+	assert.Equal(t, b.ID, shared.ConnectionID, "the connection that saw it last")
+	require.Len(t, shared.FoundBy, 2)
+	assert.Equal(t, "Alpha", shared.FoundBy[0].ConnectionName)
+	assert.Equal(t, "Beta", shared.FoundBy[1].ConnectionName)
+	sum, err := repo.Summary(ctx, ou)
+	require.NoError(t, err)
+	assert.Equal(t, 2, sum.Total)
+	assert.Equal(t, 2, sum.ByProvider[models.ShadowProviderOpenAI])
+	assert.Equal(t, 2, sum.Connections)
+
+	// Filter by connection: only the connection's own rows, still one per agent.
+	rows, total, err = repo.ListFindings(ctx, ou, ShadowFindingFilter{ConnectionID: &a.ID, Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 2, total)
+	for _, r := range rows {
+		assert.Equal(t, a.ID, r.ConnectionID, "a connection filter lists that connection's own rows")
+	}
+	_, total, err = repo.ListFindings(ctx, ou, ShadowFindingFilter{Provider: models.ShadowProviderBedrock, Limit: 10})
+	require.NoError(t, err)
+	assert.Zero(t, total)
+
+	// One status for the agent, whichever row is reviewed.
+	require.NoError(t, repo.UpdateFindingStatus(ctx, ou, shared.FoundBy[0].findingUUID(t), models.ShadowStatusReviewed))
+	for _, src := range shared.FoundBy {
+		got, err := repo.GetFinding(ctx, ou, src.findingUUID(t))
+		require.NoError(t, err)
+		assert.Equal(t, models.ShadowStatusReviewed, got.Status, src.ConnectionName)
+		assert.Len(t, got.FoundBy, 2)
+	}
+	_, total, err = repo.ListFindings(ctx, ou, ShadowFindingFilter{Status: models.ShadowStatusReviewed, Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	sum, err = repo.Summary(ctx, ou)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sum.ByStatus[models.ShadowStatusReviewed])
+	assert.Equal(t, 1, sum.ByStatus[models.ShadowStatusNew])
+
+	// A third connection that finds the agent later inherits its status.
+	c := newShadowConnection(t, repo, ou, "Gamma")
+	_, err = repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: c.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: t0.Add(2 * time.Minute), Complete: true,
+		Findings: []ShadowFindingInput{agentInput("agent_shared", "Shared", t0.Add(2*time.Minute))},
+	})
+	require.NoError(t, err)
+	rows, _, err = repo.ListFindings(ctx, ou, ShadowFindingFilter{Search: "shared", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, models.ShadowStatusReviewed, rows[0].Status)
+	assert.Len(t, rows[0].FoundBy, 3)
+
+	assert.True(t, IsShadowNotFound(repo.UpdateFindingStatus(ctx, ou, uuid.New(), models.ShadowStatusReviewed)))
+}
+
+func (s ShadowFindingSource) findingUUID(t *testing.T) uuid.UUID {
+	t.Helper()
+	id, err := uuid.Parse(s.FindingID)
+	require.NoError(t, err)
+	return id
 }
 
 func TestShadowScansOneActivePerOrgAndLeases(t *testing.T) {
 	ctx := context.Background()
 	repo := NewShadowAgentRepository(db.GetDB())
 	ou := "ou-" + uuid.NewString()
-	s1 := &models.ShadowScan{ID: uuid.New(), OUID: ou, Status: models.ShadowScanQueued, LookbackDays: 30, ConnectionIDs: []string{}}
+	s1 := &models.ShadowScan{ID: uuid.New(), OUID: ou, Status: models.ShadowScanQueued, ConnectionIDs: []string{}}
 	require.NoError(t, repo.CreateScan(ctx, s1))
 	t.Cleanup(func() { db.GetDB().Exec("DELETE FROM shadow_scans WHERE ou_id = ?", ou) })
-	err := repo.CreateScan(ctx, &models.ShadowScan{ID: uuid.New(), OUID: ou, Status: models.ShadowScanQueued, LookbackDays: 30, ConnectionIDs: []string{}})
+	err := repo.CreateScan(ctx, &models.ShadowScan{ID: uuid.New(), OUID: ou, Status: models.ShadowScanQueued, ConnectionIDs: []string{}})
 	assert.ErrorIs(t, err, utils.ErrShadowScanInProgress)
 
 	now := time.Now().UTC()
@@ -239,108 +375,207 @@ func TestShadowScansOneActivePerOrgAndLeases(t *testing.T) {
 	s1.Status, s1.FinishedAt = models.ShadowScanSucceeded, &finished
 	s1.Results = []models.ShadowScanConnectionResult{{ConnectionID: "x", Outcome: "ok", Calls: []models.ShadowScanCallResult{}}}
 	require.NoError(t, repo.FinishScan(ctx, s1))
-	require.NoError(t, repo.CreateScan(ctx, &models.ShadowScan{ID: uuid.New(), OUID: ou, Status: models.ShadowScanQueued, LookbackDays: 7, ConnectionIDs: []string{}}),
-		"a new scan can be queued once the last one finished")
+	s2 := &models.ShadowScan{ID: uuid.New(), OUID: ou, Status: models.ShadowScanQueued, ConnectionIDs: []string{"c"}}
+	require.NoError(t, repo.CreateScan(ctx, s2), "a new scan can be queued once the last one finished")
 	latest, err := repo.LatestScan(ctx, ou)
 	require.NoError(t, err)
-	assert.Equal(t, 7, latest.LookbackDays)
+	assert.Equal(t, s2.ID, latest.ID)
 }
 
-func TestShadowOnboardIsAtomicAndConnectionCascades(t *testing.T) {
+// Clearing deletes only finished scans with their per-scan agent lists;
+// the agents and their evidence stay, and nothing points at a deleted scan.
+func TestShadowDeleteFinishedScans(t *testing.T) {
 	ctx := context.Background()
 	repo := NewShadowAgentRepository(db.GetDB())
 	ou := "ou-" + uuid.NewString()
 	c := newShadowConnection(t, repo, ou, "conn")
-	start := time.Now().UTC()
+	t.Cleanup(func() { db.GetDB().Exec("DELETE FROM shadow_scans WHERE ou_id = ?", ou) })
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+	done := &models.ShadowScan{ID: uuid.New(), OUID: ou, Status: models.ShadowScanQueued, ConnectionIDs: []string{c.ID.String()}}
+	require.NoError(t, repo.CreateScan(ctx, done))
 	_, err := repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
-		OUID: ou, ConnectionID: c.ID, ScanID: uuid.New(), ScanStartedAt: start,
-		WindowStart: start.AddDate(0, 0, -30), Findings: []ShadowFindingInput{{Finding: models.ShadowFinding{
-			Provider: models.ShadowProviderOpenAI, Kind: models.ShadowKindAPIKey, ExternalID: "k", DisplayName: "50%_off key",
-		}}},
-	}, countScore)
+		OUID: ou, ConnectionID: c.ID, ScanID: done.ID, ScanStartedAt: t0, Complete: true,
+		Findings: []ShadowFindingInput{agentInput("agent_1", "Bot", t0)},
+	})
 	require.NoError(t, err)
-	rows, _, err := repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
-	id := rows[0].ID
+	done.Status = models.ShadowScanSucceeded
+	require.NoError(t, repo.FinishScan(ctx, done))
+	running := &models.ShadowScan{ID: uuid.New(), OUID: ou, Status: models.ShadowScanRunning, ConnectionIDs: []string{}}
+	require.NoError(t, repo.CreateScan(ctx, running))
 
-	require.NoError(t, repo.OnboardFinding(ctx, ou, id, "p", "a", "u", time.Now()))
-	assert.ErrorIs(t, repo.OnboardFinding(ctx, ou, id, "p", "b", "u", time.Now()), utils.ErrShadowAlreadyOnboarded)
-	onboarded, err := repo.ListOnboardedFindings(ctx, ou)
+	n, err := repo.DeleteFinishedScans(ctx, ou)
 	require.NoError(t, err)
-	require.Len(t, onboarded, 1)
-	assert.Equal(t, models.ShadowRetirementMonitoring, onboarded[0].RetirementState)
-	now := time.Now().UTC()
-	require.NoError(t, repo.SetRetirement(ctx, ou, id, models.ShadowRetirementRetired, "", nil, &now))
-	got, err := repo.GetFinding(ctx, ou, id)
+	assert.EqualValues(t, 1, n)
+	scans, err := repo.ListScans(ctx, ou, 10)
 	require.NoError(t, err)
-	assert.Equal(t, models.ShadowStatusRetired, got.Status)
+	require.Len(t, scans, 1)
+	assert.Equal(t, running.ID, scans[0].ID, "a running scan is kept")
 
-	// Search treats % and _ literally: "5_%" and "k%y" would match
-	// "50%_off key" only as LIKE wildcards.
-	for q, want := range map[string]int{"50%_off": 1, "%_": 1, "OFF KEY": 1, "5_%": 0, "k%y": 0} {
+	rows, total, err := repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Equal(t, 1, total, "the agent stays")
+	assert.Nil(t, rows[0].LastScanID, "nothing points at a deleted scan")
+	signals, err := repo.ListSignals(ctx, ou, rows[0].ID)
+	require.NoError(t, err)
+	require.Len(t, signals, 1)
+	assert.Nil(t, signals[0].ScanID)
+	_, total, err = repo.ListFindings(ctx, ou, ShadowFindingFilter{ScanID: &done.ID, Limit: 10})
+	require.NoError(t, err)
+	assert.Zero(t, total, "the per-scan list went with the scan")
+
+	other, err := repo.DeleteFinishedScans(ctx, "ou-"+uuid.NewString())
+	require.NoError(t, err)
+	assert.Zero(t, other)
+}
+
+func TestShadowSearchAndConnectionCascade(t *testing.T) {
+	ctx := context.Background()
+	repo := NewShadowAgentRepository(db.GetDB())
+	ou := "ou-" + uuid.NewString()
+	c := newShadowConnection(t, repo, ou, "conn")
+	t0 := time.Now().UTC()
+	_, err := repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
+		OUID: ou, ConnectionID: c.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: t0, Complete: true,
+		Findings: []ShadowFindingInput{agentInput("agent_k", "50%_off agent", t0)},
+	})
+	require.NoError(t, err)
+
+	// Search treats % and _ literally, and also matches the platform ID and scope.
+	for q, want := range map[string]int{"50%_off": 1, "%_": 1, "OFF AGENT": 1, "agent_k": 1, "proj_1": 1, "5_%": 0, "k%t": 0} {
 		got, _, err := repo.ListFindings(ctx, ou, ShadowFindingFilter{Search: q, Limit: 10})
 		require.NoError(t, err)
 		assert.Len(t, got, want, q)
 	}
-
-	sum, err := repo.Summary(ctx, ou)
-	require.NoError(t, err)
-	assert.Equal(t, 1, sum.Total)
-	assert.Equal(t, 1, sum.Connections)
 
 	deleted, err := repo.DeleteConnection(ctx, ou, c.ID)
 	require.NoError(t, err)
 	assert.True(t, deleted)
 	_, total, err := repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 10})
 	require.NoError(t, err)
-	assert.Zero(t, total, "findings are deleted with their connection")
+	assert.Zero(t, total, "agents are deleted with their connection")
 }
 
-func TestShadowCorrelationReplacesOnlyItsOwnRelations(t *testing.T) {
+func TestShadowCorrelationReplacesItsRelations(t *testing.T) {
 	ctx := context.Background()
 	repo := NewShadowAgentRepository(db.GetDB())
 	ou := "ou-" + uuid.NewString()
 	c := newShadowConnection(t, repo, ou, "conn")
-	start := time.Now().UTC()
+	t0 := time.Now().UTC()
 	_, err := repo.ApplyConnectionResult(ctx, ShadowConnectionApply{
-		OUID: ou, ConnectionID: c.ID, ScanID: uuid.New(), ScanStartedAt: start,
-		WindowStart: start.AddDate(0, 0, -30), Findings: []ShadowFindingInput{
-			{
-				Finding: models.ShadowFinding{Provider: models.ShadowProviderOpenAI, Kind: models.ShadowKindAPIKey, ExternalID: "k"},
-				Related: []ShadowRelationInput{{Kind: models.ShadowKindPlatformAgent, ExternalID: "a", Relation: "used_by_key"}},
-			},
-			{Finding: models.ShadowFinding{Provider: models.ShadowProviderOpenAI, Kind: models.ShadowKindPlatformAgent, ExternalID: "a"}},
-		},
-	}, countScore)
+		OUID: ou, ConnectionID: c.ID, ScanID: newShadowScan(t, repo, ou), ScanStartedAt: t0, Complete: true,
+		Findings: []ShadowFindingInput{agentInput("x", "External", t0), agentInput("y", "Other", t0)},
+	})
 	require.NoError(t, err)
 	all, err := repo.ListOrgFindings(ctx, ou)
 	require.NoError(t, err)
-	sort.Slice(all, func(i, j int) bool { return all[i].Kind < all[j].Kind })
-	keyID, agentID := all[0].ID, all[1].ID
+	require.Len(t, all, 2)
+	xID, yID := all[0].ID, all[1].ID
+	if all[0].ExternalID != "x" {
+		xID, yID = yID, xID
+	}
 
 	apply := func() {
 		require.NoError(t, repo.ApplyCorrelation(ctx, ou,
-			map[uuid.UUID][]models.ShadowFindingRelation{keyID: {{FindingID: agentID.String(), Relation: "possible_duplicate"}}},
-			map[uuid.UUID][]models.ShadowFindingSignal{keyID: {{Code: "foundry.external_possible_duplicate", Tier: "info", DetectedAt: start}}},
-			countScore))
+			map[uuid.UUID][]models.ShadowFindingRelation{xID: {{FindingID: yID.String(), Relation: "possible_duplicate"}}},
+			map[uuid.UUID][]models.ShadowFindingSignal{xID: {{Code: "foundry.external_possible_duplicate", DetectedAt: t0}}}))
 	}
 	apply()
 	apply()
-	got, err := repo.GetFinding(ctx, ou, keyID)
+	got, err := repo.GetFinding(ctx, ou, xID)
 	require.NoError(t, err)
-	relations := map[string]int{}
-	for _, r := range got.Related {
-		relations[r.Relation]++
-	}
-	assert.Equal(t, map[string]int{"used_by_key": 1, "possible_duplicate": 1}, relations)
-	signals, err := repo.ListSignals(ctx, ou, keyID)
+	require.Len(t, got.Related, 1, "applied twice, kept once")
+	assert.Equal(t, "possible_duplicate", got.Related[0].Relation)
+	assert.Equal(t, ShadowCorrelationSource, got.Related[0].Source)
+	signals, err := repo.ListSignals(ctx, ou, xID)
 	require.NoError(t, err)
-	assert.Len(t, signals, 1)
+	assert.Len(t, signals, 2)
 
-	require.NoError(t, repo.ApplyCorrelation(ctx, ou, nil, nil, countScore))
-	got, err = repo.GetFinding(ctx, ou, keyID)
+	require.NoError(t, repo.ApplyCorrelation(ctx, ou, nil, nil))
+	got, err = repo.GetFinding(ctx, ou, xID)
 	require.NoError(t, err)
-	require.Len(t, got.Related, 1, "the connector's relation stays when correlation clears its own")
-	assert.Equal(t, "used_by_key", got.Related[0].Relation)
+	assert.Empty(t, got.Related)
+	signals, err = repo.ListSignals(ctx, ou, xID)
+	require.NoError(t, err)
+	assert.Len(t, signals, 1, "only the listing's own evidence stays")
+}
+
+// Deleting an agent removes it on every connection that found it, with its
+// evidence and per-scan links; deleting all keeps connections and scans.
+func TestShadowDeleteAgents(t *testing.T) {
+	ctx := context.Background()
+	repo := NewShadowAgentRepository(db.GetDB())
+	ou := "ou-" + uuid.NewString()
+	other := "ou-" + uuid.NewString()
+	a := newShadowConnection(t, repo, ou, "Alpha")
+	b := newShadowConnection(t, repo, ou, "Beta")
+	o := newShadowConnection(t, repo, other, "Other org")
+	t0 := time.Now().UTC().Truncate(time.Microsecond)
+	scanA := newShadowScan(t, repo, ou)
+	apply := func(ouID string, c *models.ShadowConnection, scanID uuid.UUID, ids ...string) {
+		t.Helper()
+		in := ShadowConnectionApply{OUID: ouID, ConnectionID: c.ID, ScanID: scanID, ScanStartedAt: t0, Complete: true}
+		for _, id := range ids {
+			in.Findings = append(in.Findings, agentInput(id, "Agent "+id, t0))
+		}
+		_, err := repo.ApplyConnectionResult(ctx, in)
+		require.NoError(t, err)
+	}
+	apply(ou, a, scanA, "shared", "only_a")
+	apply(ou, b, newShadowScan(t, repo, ou), "shared")
+	apply(other, o, newShadowScan(t, repo, other), "shared")
+
+	rows, total, err := repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Equal(t, 2, total)
+	var shared ShadowFindingRow
+	for _, r := range rows {
+		if r.ExternalID == "shared" {
+			shared = r
+		}
+	}
+	require.Len(t, shared.FoundBy, 2)
+
+	// Another org cannot delete it, and an unknown ID deletes nothing.
+	found, err := repo.DeleteFinding(ctx, other, shared.ID)
+	require.NoError(t, err)
+	assert.False(t, found)
+	found, err = repo.DeleteFinding(ctx, ou, uuid.New())
+	require.NoError(t, err)
+	assert.False(t, found)
+
+	// One delete removes both connections' rows of the agent.
+	found, err = repo.DeleteFinding(ctx, ou, shared.ID)
+	require.NoError(t, err)
+	assert.True(t, found)
+	var left int64
+	require.NoError(t, db.GetDB().Raw(`SELECT COUNT(*) FROM shadow_findings WHERE ou_id = ? AND external_id = 'shared'`, ou).Scan(&left).Error)
+	assert.Zero(t, left, "every row of the agent is deleted")
+	require.NoError(t, db.GetDB().Raw(`SELECT COUNT(*) FROM shadow_finding_signals s JOIN shadow_findings f ON f.id = s.finding_id
+		WHERE f.ou_id = ? AND f.external_id = 'shared'`, ou).Scan(&left).Error)
+	assert.Zero(t, left)
+	_, total, err = repo.ListFindings(ctx, ou, ShadowFindingFilter{Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	_, total, err = repo.ListFindings(ctx, other, ShadowFindingFilter{Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total, "the other org's agent is kept")
+
+	// Delete all: the org's agents go, its connections and scans stay.
+	n, err := repo.DeleteFindings(ctx, ou)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, n)
+	_, total, err = repo.ListFindings(ctx, ou, ShadowFindingFilter{ScanID: &scanA, Limit: 10})
+	require.NoError(t, err)
+	assert.Zero(t, total)
+	conns, err := repo.ListConnections(ctx, ou)
+	require.NoError(t, err)
+	assert.Len(t, conns, 2)
+	_, err = repo.GetScan(ctx, ou, scanA)
+	require.NoError(t, err, "scans are kept")
+	n, err = repo.DeleteFindings(ctx, ou)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	_, total, err = repo.ListFindings(ctx, other, ShadowFindingFilter{Limit: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total, "the other org's agent is still kept")
 }

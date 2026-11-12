@@ -19,7 +19,6 @@ package azure
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,21 +64,6 @@ func assertNoMarkers(t *testing.T, res any, logs string) {
 		assert.NotContains(t, string(b), m, "result must not contain %q", m)
 		assert.NotContains(t, logs, m, "logs must not contain %q", m)
 	}
-}
-
-func TestMetricsEitherOr(t *testing.T) {
-	d := &dayMetrics{aoaiRequests: 3, modelRequests: 5, promptTokens: 10, inputTokens: 7, genTokens: 1, outputTokens: 4}
-	assert.Equal(t, int64(5), d.requests())
-	assert.Equal(t, int64(10), d.input())
-	assert.Equal(t, int64(4), d.output())
-	u := deploymentUsage{
-		time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC): {aoaiRequests: 2},
-		time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC): {inputTokens: 9},
-	}
-	total, active := u.totals()
-	assert.Equal(t, int64(2), total)
-	assert.Equal(t, 1, active)
-	assert.Len(t, u.days(), 2)
 }
 
 func TestBuildURL(t *testing.T) {

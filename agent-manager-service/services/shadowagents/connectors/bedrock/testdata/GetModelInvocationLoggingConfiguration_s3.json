@@ -1,9 +1,0 @@
-{
-  "loggingConfig": {
-    "s3Config": {
-      "bucketName": "bedrock-logs",
-      "keyPrefix": "invocations/"
-    },
-    "textDataDeliveryEnabled": true
-  }
-}

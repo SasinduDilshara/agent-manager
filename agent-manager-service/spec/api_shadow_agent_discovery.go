@@ -22,56 +22,53 @@ import (
 // ShadowAgentDiscoveryAPIService ShadowAgentDiscoveryAPI service
 type ShadowAgentDiscoveryAPIService service
 
-type ApiConfirmShadowRetirementRequest struct {
+type ApiClearShadowScansRequest struct {
 	ctx        context.Context
 	ApiService *ShadowAgentDiscoveryAPIService
 	orgName    string
-	findingId  string
 }
 
-func (r ApiConfirmShadowRetirementRequest) Execute() (*ShadowFindingDetail, *http.Response, error) {
-	return r.ApiService.ConfirmShadowRetirementExecute(r)
+func (r ApiClearShadowScansRequest) Execute() (*ShadowScanClearResponse, *http.Response, error) {
+	return r.ApiService.ClearShadowScansExecute(r)
 }
 
 /*
-ConfirmShadowRetirement Confirm the direct credential is revoked
+ClearShadowScans Clear the scans
 
-The user says they revoked the provider credential. The next scan verifies
-it where the provider exposes key status.
+Deletes the organization's finished scans and their per-scan agent
+lists. A queued or running scan is kept. The agents and their evidence
+are not changed.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name
-	@param findingId Finding ID
-	@return ApiConfirmShadowRetirementRequest
+	@return ApiClearShadowScansRequest
 */
-func (a *ShadowAgentDiscoveryAPIService) ConfirmShadowRetirement(ctx context.Context, orgName string, findingId string) ApiConfirmShadowRetirementRequest {
-	return ApiConfirmShadowRetirementRequest{
+func (a *ShadowAgentDiscoveryAPIService) ClearShadowScans(ctx context.Context, orgName string) ApiClearShadowScansRequest {
+	return ApiClearShadowScansRequest{
 		ApiService: a,
 		ctx:        ctx,
 		orgName:    orgName,
-		findingId:  findingId,
 	}
 }
 
 // Execute executes the request
 //
-//	@return ShadowFindingDetail
-func (a *ShadowAgentDiscoveryAPIService) ConfirmShadowRetirementExecute(r ApiConfirmShadowRetirementRequest) (*ShadowFindingDetail, *http.Response, error) {
+//	@return ShadowScanClearResponse
+func (a *ShadowAgentDiscoveryAPIService) ClearShadowScansExecute(r ApiClearShadowScansRequest) (*ShadowScanClearResponse, *http.Response, error) {
 	var (
-		localVarHTTPMethod  = http.MethodPost
+		localVarHTTPMethod  = http.MethodDelete
 		localVarPostBody    interface{}
 		formFiles           []formFile
-		localVarReturnValue *ShadowFindingDetail
+		localVarReturnValue *ShadowScanClearResponse
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "ShadowAgentDiscoveryAPIService.ConfirmShadowRetirement")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "ShadowAgentDiscoveryAPIService.ClearShadowScans")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/orgs/{orgName}/shadow-agents/findings/{findingId}/retirement/confirm"
+	localVarPath := localBasePath + "/orgs/{orgName}/shadow-agents/scans"
 	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"findingId"+"}", url.PathEscape(parameterValueToString(r.findingId, "findingId")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -116,28 +113,6 @@ func (a *ShadowAgentDiscoveryAPIService) ConfirmShadowRetirementExecute(r ApiCon
 			body:  localVarBody,
 			error: localVarHTTPResponse.Status,
 		}
-		if localVarHTTPResponse.StatusCode == 404 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-			return localVarReturnValue, localVarHTTPResponse, newErr
-		}
-		if localVarHTTPResponse.StatusCode == 409 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-			return localVarReturnValue, localVarHTTPResponse, newErr
-		}
 		if localVarHTTPResponse.StatusCode == 500 {
 			var v ErrorResponse
 			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
@@ -180,7 +155,7 @@ func (r ApiCreateShadowConnectionRequest) Execute() (*ShadowConnectionResponse, 
 }
 
 /*
-CreateShadowConnection Connect a provider account
+CreateShadowConnection Connect a platform account
 
 Stores the credential encrypted. Secrets are write-only.
 
@@ -329,8 +304,9 @@ func (r ApiCreateShadowScanRequest) Execute() (*ShadowScanResponse, *http.Respon
 /*
 CreateShadowScan Run a scan
 
-Queues a scan of the given connections (all when empty) over the lookback
-window. It runs in the background; poll the scan for its status.
+Queues a scan of the given connections (all of them when empty): each
+connection's platform agent listings are read. It runs in the
+background; poll the scan for its status.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name
@@ -470,7 +446,7 @@ func (r ApiDeleteShadowConnectionRequest) Execute() (*http.Response, error) {
 }
 
 /*
-DeleteShadowConnection Delete a provider connection
+DeleteShadowConnection Delete a platform connection
 
 Deletes the connection and everything its scans found.
 
@@ -575,6 +551,240 @@ func (a *ShadowAgentDiscoveryAPIService) DeleteShadowConnectionExecute(r ApiDele
 	return localVarHTTPResponse, nil
 }
 
+type ApiDeleteShadowFindingRequest struct {
+	ctx        context.Context
+	ApiService *ShadowAgentDiscoveryAPIService
+	orgName    string
+	findingId  string
+}
+
+func (r ApiDeleteShadowFindingRequest) Execute() (*http.Response, error) {
+	return r.ApiService.DeleteShadowFindingExecute(r)
+}
+
+/*
+DeleteShadowFinding Delete an unregistered agent
+
+Deletes the agent, with its evidence, on every connection that found
+it. A later scan lists it again if a platform still has it.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param orgName Organization name
+	@param findingId Finding ID
+	@return ApiDeleteShadowFindingRequest
+*/
+func (a *ShadowAgentDiscoveryAPIService) DeleteShadowFinding(ctx context.Context, orgName string, findingId string) ApiDeleteShadowFindingRequest {
+	return ApiDeleteShadowFindingRequest{
+		ApiService: a,
+		ctx:        ctx,
+		orgName:    orgName,
+		findingId:  findingId,
+	}
+}
+
+// Execute executes the request
+func (a *ShadowAgentDiscoveryAPIService) DeleteShadowFindingExecute(r ApiDeleteShadowFindingRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod = http.MethodDelete
+		localVarPostBody   interface{}
+		formFiles          []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "ShadowAgentDiscoveryAPIService.DeleteShadowFinding")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/orgs/{orgName}/shadow-agents/findings/{findingId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"findingId"+"}", url.PathEscape(parameterValueToString(r.findingId, "findingId")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		if localVarHTTPResponse.StatusCode == 404 {
+			var v ErrorResponse
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+			return localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 500 {
+			var v ErrorResponse
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type ApiDeleteShadowFindingsRequest struct {
+	ctx        context.Context
+	ApiService *ShadowAgentDiscoveryAPIService
+	orgName    string
+}
+
+func (r ApiDeleteShadowFindingsRequest) Execute() (*ShadowFindingClearResponse, *http.Response, error) {
+	return r.ApiService.DeleteShadowFindingsExecute(r)
+}
+
+/*
+DeleteShadowFindings Delete every unregistered agent
+
+Deletes every agent of the organization, with its evidence, on every
+connection that found it. Platforms and scans are kept. A later scan
+lists the agents the platforms still have again.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param orgName Organization name
+	@return ApiDeleteShadowFindingsRequest
+*/
+func (a *ShadowAgentDiscoveryAPIService) DeleteShadowFindings(ctx context.Context, orgName string) ApiDeleteShadowFindingsRequest {
+	return ApiDeleteShadowFindingsRequest{
+		ApiService: a,
+		ctx:        ctx,
+		orgName:    orgName,
+	}
+}
+
+// Execute executes the request
+//
+//	@return ShadowFindingClearResponse
+func (a *ShadowAgentDiscoveryAPIService) DeleteShadowFindingsExecute(r ApiDeleteShadowFindingsRequest) (*ShadowFindingClearResponse, *http.Response, error) {
+	var (
+		localVarHTTPMethod  = http.MethodDelete
+		localVarPostBody    interface{}
+		formFiles           []formFile
+		localVarReturnValue *ShadowFindingClearResponse
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "ShadowAgentDiscoveryAPIService.DeleteShadowFindings")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/orgs/{orgName}/shadow-agents/findings"
+	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		if localVarHTTPResponse.StatusCode == 500 {
+			var v ErrorResponse
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
 type ApiGetShadowAgentSummaryRequest struct {
 	ctx        context.Context
 	ApiService *ShadowAgentDiscoveryAPIService
@@ -586,9 +796,10 @@ func (r ApiGetShadowAgentSummaryRequest) Execute() (*ShadowAgentSummary, *http.R
 }
 
 /*
-GetShadowAgentSummary Summarize the shadow agents found in the organization
+GetShadowAgentSummary Summarize the unregistered agents found in the organization
 
-Counts of findings by verdict, provider and status, and the latest scan.
+Counts of the agents found (each agent once, however many connections
+found it) by platform and review status, and the latest scan.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name
@@ -701,7 +912,7 @@ func (r ApiGetShadowConnectionRequest) Execute() (*ShadowConnectionResponse, *ht
 }
 
 /*
-GetShadowConnection Get a provider connection
+GetShadowConnection Get a platform connection
 
 The connection without its secrets.
 
@@ -830,9 +1041,10 @@ func (r ApiGetShadowFindingRequest) Execute() (*ShadowFindingDetail, *http.Respo
 }
 
 /*
-GetShadowFinding Get a finding
+GetShadowFinding Get an unregistered agent
 
-The finding with its evidence, owner hint, keys, daily usage and retirement state.
+The agent as its platform lists it, its evidence, every connection that
+found it, and possible duplicates on other platforms.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name
@@ -961,7 +1173,7 @@ func (r ApiGetShadowScanRequest) Execute() (*ShadowScanResponse, *http.Response,
 /*
 GetShadowScan Get a scan
 
-The scan with the outcome of every provider call.
+The scan with the outcome of every platform call.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name
@@ -1087,10 +1299,11 @@ func (r ApiListShadowAgentProvidersRequest) Execute() (*ShadowProviderListRespon
 }
 
 /*
-ListShadowAgentProviders List the providers Shadow Agent Discovery can scan
+ListShadowAgentProviders List the platforms Shadow Agent Discovery can scan
 
-Each provider with its connection form, official endpoints, the least
-privilege it needs, and the signals a scan looks for.
+Each platform with its connection form, official endpoints, the least
+privilege it needs, what its scan lists, and the evidence each agent
+listing provides.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name
@@ -1202,7 +1415,7 @@ func (r ApiListShadowConnectionsRequest) Execute() (*ShadowConnectionListRespons
 }
 
 /*
-ListShadowConnections List provider connections
+ListShadowConnections List platform connections
 
 Connections never include their secrets; secretHints says which are stored.
 
@@ -1310,9 +1523,7 @@ type ApiListShadowFindingsRequest struct {
 	ApiService   *ShadowAgentDiscoveryAPIService
 	orgName      string
 	provider     *string
-	verdict      *string
 	status       *string
-	kind         *string
 	connectionId *string
 	scanId       *string
 	search       *string
@@ -1320,15 +1531,9 @@ type ApiListShadowFindingsRequest struct {
 	offset       *int32
 }
 
-// Filter by provider
+// Filter by platform
 func (r ApiListShadowFindingsRequest) Provider(provider string) ApiListShadowFindingsRequest {
 	r.provider = &provider
-	return r
-}
-
-// Filter by verdict
-func (r ApiListShadowFindingsRequest) Verdict(verdict string) ApiListShadowFindingsRequest {
-	r.verdict = &verdict
 	return r
 }
 
@@ -1338,25 +1543,19 @@ func (r ApiListShadowFindingsRequest) Status(status string) ApiListShadowFinding
 	return r
 }
 
-// Filter by finding kind
-func (r ApiListShadowFindingsRequest) Kind(kind string) ApiListShadowFindingsRequest {
-	r.kind = &kind
-	return r
-}
-
 // Filter by connection
 func (r ApiListShadowFindingsRequest) ConnectionId(connectionId string) ApiListShadowFindingsRequest {
 	r.connectionId = &connectionId
 	return r
 }
 
-// Keep the findings this scan saw
+// Keep the agents this scan found
 func (r ApiListShadowFindingsRequest) ScanId(scanId string) ApiListShadowFindingsRequest {
 	r.scanId = &scanId
 	return r
 }
 
-// Match the name, ID or owner
+// Match the name, platform ID or scope
 func (r ApiListShadowFindingsRequest) Search(search string) ApiListShadowFindingsRequest {
 	r.search = &search
 	return r
@@ -1377,9 +1576,13 @@ func (r ApiListShadowFindingsRequest) Execute() (*ShadowFindingListResponse, *ht
 }
 
 /*
-ListShadowFindings List findings
+ListShadowFindings List unregistered agents
 
-Potential agents with their score and verdict, highest score first.
+The agents the platforms list, one row per agent however many
+connections found it (the same platform, kind and platform ID), by
+name. Without scanId, only the agents their connection's latest
+complete listing still returned; with scanId, the agents that scan
+found.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name
@@ -1419,14 +1622,8 @@ func (a *ShadowAgentDiscoveryAPIService) ListShadowFindingsExecute(r ApiListShad
 	if r.provider != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "provider", r.provider, "")
 	}
-	if r.verdict != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "verdict", r.verdict, "")
-	}
 	if r.status != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "status", r.status, "")
-	}
-	if r.kind != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "kind", r.kind, "")
 	}
 	if r.connectionId != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "connectionId", r.connectionId, "")
@@ -1641,169 +1838,6 @@ func (a *ShadowAgentDiscoveryAPIService) ListShadowScansExecute(r ApiListShadowS
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type ApiOnboardShadowFindingRequest struct {
-	ctx                     context.Context
-	ApiService              *ShadowAgentDiscoveryAPIService
-	orgName                 string
-	findingId               string
-	shadowOnboardingRequest *ShadowOnboardingRequest
-}
-
-func (r ApiOnboardShadowFindingRequest) ShadowOnboardingRequest(shadowOnboardingRequest ShadowOnboardingRequest) ApiOnboardShadowFindingRequest {
-	r.shadowOnboardingRequest = &shadowOnboardingRequest
-	return r
-}
-
-func (r ApiOnboardShadowFindingRequest) Execute() (*ShadowFindingDetail, *http.Response, error) {
-	return r.ApiService.OnboardShadowFindingExecute(r)
-}
-
-/*
-OnboardShadowFinding Link a finding to its governed agent
-
-Records that the workload is now the given agent, created with the agent
-API, and starts watching its direct provider usage drop to zero.
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param orgName Organization name
-	@param findingId Finding ID
-	@return ApiOnboardShadowFindingRequest
-*/
-func (a *ShadowAgentDiscoveryAPIService) OnboardShadowFinding(ctx context.Context, orgName string, findingId string) ApiOnboardShadowFindingRequest {
-	return ApiOnboardShadowFindingRequest{
-		ApiService: a,
-		ctx:        ctx,
-		orgName:    orgName,
-		findingId:  findingId,
-	}
-}
-
-// Execute executes the request
-//
-//	@return ShadowFindingDetail
-func (a *ShadowAgentDiscoveryAPIService) OnboardShadowFindingExecute(r ApiOnboardShadowFindingRequest) (*ShadowFindingDetail, *http.Response, error) {
-	var (
-		localVarHTTPMethod  = http.MethodPost
-		localVarPostBody    interface{}
-		formFiles           []formFile
-		localVarReturnValue *ShadowFindingDetail
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "ShadowAgentDiscoveryAPIService.OnboardShadowFinding")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/orgs/{orgName}/shadow-agents/findings/{findingId}/onboarding"
-	localVarPath = strings.Replace(localVarPath, "{"+"orgName"+"}", url.PathEscape(parameterValueToString(r.orgName, "orgName")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"findingId"+"}", url.PathEscape(parameterValueToString(r.findingId, "findingId")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-	if r.shadowOnboardingRequest == nil {
-		return localVarReturnValue, nil, reportError("shadowOnboardingRequest is required and must be specified")
-	}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{"application/json"}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	// body params
-	localVarPostBody = r.shadowOnboardingRequest
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		if localVarHTTPResponse.StatusCode == 400 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-			return localVarReturnValue, localVarHTTPResponse, newErr
-		}
-		if localVarHTTPResponse.StatusCode == 404 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-			return localVarReturnValue, localVarHTTPResponse, newErr
-		}
-		if localVarHTTPResponse.StatusCode == 409 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-			return localVarReturnValue, localVarHTTPResponse, newErr
-		}
-		if localVarHTTPResponse.StatusCode == 500 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
 type ApiTestShadowConnectionRequest struct {
 	ctx          context.Context
 	ApiService   *ShadowAgentDiscoveryAPIService
@@ -1816,9 +1850,9 @@ func (r ApiTestShadowConnectionRequest) Execute() (*ShadowConnectionTest, *http.
 }
 
 /*
-TestShadowConnection Test a provider connection
+TestShadowConnection Test a platform connection
 
-Makes one read per capability and says which signals each one unlocks.
+Makes one read per agent listing and says which evidence each one provides.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name
@@ -1951,9 +1985,9 @@ func (r ApiUpdateShadowConnectionRequest) Execute() (*ShadowConnectionResponse, 
 }
 
 /*
-UpdateShadowConnection Update a provider connection
+UpdateShadowConnection Update a platform connection
 
-A secret left empty keeps the stored one. The provider cannot change.
+A secret left empty keeps the stored one. The platform cannot change.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name
@@ -2113,9 +2147,10 @@ func (r ApiUpdateShadowFindingRequest) Execute() (*ShadowFindingDetail, *http.Re
 }
 
 /*
-UpdateShadowFinding Review a finding
+UpdateShadowFinding Review an unregistered agent
 
-Marks the finding reviewed or dismissed, or reopens it.
+Marks the agent reviewed or dismissed, or reopens it, on every
+connection that found it.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name

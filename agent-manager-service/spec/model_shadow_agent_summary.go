@@ -19,8 +19,8 @@ var _ MappedNullable = &ShadowAgentSummary{}
 
 // ShadowAgentSummary struct for ShadowAgentSummary
 type ShadowAgentSummary struct {
+	// The agents found that their platforms still list, each agent once.
 	TotalFindings int32               `json:"totalFindings"`
-	ByVerdict     map[string]int32    `json:"byVerdict"`
 	ByProvider    map[string]int32    `json:"byProvider"`
 	ByStatus      map[string]int32    `json:"byStatus"`
 	Connections   int32               `json:"connections"`
@@ -31,10 +31,9 @@ type ShadowAgentSummary struct {
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewShadowAgentSummary(totalFindings int32, byVerdict map[string]int32, byProvider map[string]int32, byStatus map[string]int32, connections int32) *ShadowAgentSummary {
+func NewShadowAgentSummary(totalFindings int32, byProvider map[string]int32, byStatus map[string]int32, connections int32) *ShadowAgentSummary {
 	this := ShadowAgentSummary{}
 	this.TotalFindings = totalFindings
-	this.ByVerdict = byVerdict
 	this.ByProvider = byProvider
 	this.ByStatus = byStatus
 	this.Connections = connections
@@ -71,30 +70,6 @@ func (o *ShadowAgentSummary) GetTotalFindingsOk() (*int32, bool) {
 // SetTotalFindings sets field value
 func (o *ShadowAgentSummary) SetTotalFindings(v int32) {
 	o.TotalFindings = v
-}
-
-// GetByVerdict returns the ByVerdict field value
-func (o *ShadowAgentSummary) GetByVerdict() map[string]int32 {
-	if o == nil {
-		var ret map[string]int32
-		return ret
-	}
-
-	return o.ByVerdict
-}
-
-// GetByVerdictOk returns a tuple with the ByVerdict field value
-// and a boolean to check if the value has been set.
-func (o *ShadowAgentSummary) GetByVerdictOk() (*map[string]int32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.ByVerdict, true
-}
-
-// SetByVerdict sets field value
-func (o *ShadowAgentSummary) SetByVerdict(v map[string]int32) {
-	o.ByVerdict = v
 }
 
 // GetByProvider returns the ByProvider field value
@@ -212,7 +187,6 @@ func (o ShadowAgentSummary) MarshalJSON() ([]byte, error) {
 func (o ShadowAgentSummary) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["totalFindings"] = o.TotalFindings
-	toSerialize["byVerdict"] = o.ByVerdict
 	toSerialize["byProvider"] = o.ByProvider
 	toSerialize["byStatus"] = o.ByStatus
 	toSerialize["connections"] = o.Connections

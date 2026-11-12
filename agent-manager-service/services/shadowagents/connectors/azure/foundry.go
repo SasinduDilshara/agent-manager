@@ -37,12 +37,7 @@ const (
 	// project endpoint (Learn quickstart CLI query; evidence/foundry.md §2).
 	projectEndpointKey = "AI Foundry API"
 	agentsPageSize     = 100
-	responsesPageSize  = 50
-	// maxResponsesPerAgent bounds the stored responses read per agent
-	// (deep inspection), and maxDeepAgents the agents inspected per scan.
-	maxResponsesPerAgent = 200
-	maxDeepAgents        = 50
-	classicKind          = "classic"
+	classicKind        = "classic"
 )
 
 // Foundry scans Microsoft Foundry Agent Service projects.
@@ -172,38 +167,6 @@ type classicAgent struct {
 	Tools       []json.RawMessage `json:"tools"`
 }
 
-// storedResponse is an OpenAI.Response with only the fields used: the
-// output item types. Content (instructions, arguments, outputs) is never
-// decoded.
-type storedResponse struct {
-	ID             string   `json:"id"`
-	CreatedAt      unixTime `json:"created_at"`
-	AgentReference *struct {
-		Name string `json:"name"`
-	} `json:"agent_reference"`
-	Output []struct {
-		Type string `json:"type"`
-	} `json:"output"`
-}
-
-// toolCallTypes are the tool-call output item types (V1SPEC
-// OpenAI.OutputItem); any other "*_call" type counts too.
-var toolCallTypes = map[string]bool{
-	"function_call": true, "mcp_call": true, "custom_tool_call": true, "openapi_call": true,
-	"azure_function_call": true, "a2a_preview_call": true, "code_interpreter_call": true,
-	"file_search_call": true, "web_search_call": true, "bing_grounding_call": true,
-	"azure_ai_search_call": true, "computer_call": true, "shell_call": true, "local_shell_call": true,
-	"browser_automation_preview_call": true, "sharepoint_grounding_preview_call": true,
-	"fabric_dataagent_preview_call": true, "bing_custom_search_preview_call": true,
-	"memory_search_call": true, "image_generation_call": true, "apply_patch_call": true,
-	"tool_search_call": true,
-}
-
-func isToolCall(t string) bool {
-	t = strings.ToLower(strings.TrimSpace(t))
-	return toolCallTypes[t] || strings.HasSuffix(t, "_call")
-}
-
 // dataPlane calls Foundry project endpoints with an ai.azure.com token.
 type dataPlane struct {
 	client     jsonGetter
@@ -267,23 +230,20 @@ func cursorList[T any](ctx context.Context, d *dataPlane, endpoint, path string,
 
 // foundryScan is one scan's state.
 type foundryScan struct {
-	c           *Foundry
-	conn        sa.Connection
-	w           sa.Window
-	arm         *armClient
-	dp          *dataPlane
-	calls       *sa.Calls
-	findings    *sa.Findings
-	deepAgents  int
-	deepLimited bool
-	classic     struct {
+	c        *Foundry
+	conn     sa.Connection
+	arm      *armClient
+	dp       *dataPlane
+	calls    *sa.Calls
+	findings *sa.Findings
+	classic  struct {
 		recorded    bool
 		unavailable int
 	}
 }
 
 // Scan implements sa.Connector.
-func (c *Foundry) Scan(ctx context.Context, conn sa.Connection, w sa.Window) *sa.Result {
+func (c *Foundry) Scan(ctx context.Context, conn sa.Connection) *sa.Result {
 	calls := sa.NewCalls()
 	res := &sa.Result{}
 	s, err := c.newSession(conn)
@@ -293,7 +253,7 @@ func (c *Foundry) Scan(ctx context.Context, conn sa.Connection, w sa.Window) *sa
 		return res
 	}
 	fs := &foundryScan{
-		c: c, conn: conn, w: w, arm: s.arm, calls: calls, findings: sa.NewFindings(),
+		c: c, conn: conn, arm: s.arm, calls: calls, findings: sa.NewFindings(),
 		dp: &dataPlane{client: sa.NewAzureClient(c.httpClient, s.cred, sa.AzureFoundryScope)},
 	}
 	subs, stop := s.arm.subscriptions(ctx, conn, calls, c.logger)
@@ -324,7 +284,7 @@ func (c *Foundry) Scan(ctx context.Context, conn sa.Connection, w sa.Window) *sa
 	res.Findings = fs.findings.All()
 	res.Calls = calls.Results()
 	c.logger.Info("Shadow agent discovery Foundry scan finished",
-		"subscriptions", len(subs), "projects", projects, "findings", len(res.Findings))
+		"subscriptions", len(subs), "projects", projects, "agents", len(res.Findings))
 	return res
 }
 
@@ -335,19 +295,13 @@ func (fs *foundryScan) finish() {
 	} else if !fs.classic.recorded && fs.classic.unavailable > 0 {
 		fs.calls.Skip(callAssistants, "classic agents not available")
 	}
-	if !fs.conn.Config.DeepInspection {
-		fs.calls.Skip(callResponses, "deep inspection is off")
-	} else if fs.deepLimited {
-		fs.calls.Skip(callResponses+" (more agents)", "stopped after "+strconv.Itoa(maxDeepAgents)+" agents; the remaining agents were not inspected")
-	}
 	if fs.dp.authFailed {
 		fs.calls.Skip(callAgents+" (remaining projects)", "not called: authentication to the Foundry data plane failed")
 	}
 }
 
-// scanAccount lists the account's projects and scans each; then adds
-// plain-usage signals from the account's metrics. It returns the number of
-// projects scanned.
+// scanAccount lists the account's projects and scans each. It returns the
+// number of projects scanned.
 func (fs *foundryScan) scanAccount(ctx context.Context, acc *account) int {
 	if p := acc.Properties.AllowProjectManagement; p != nil && !*p {
 		return 0
@@ -360,8 +314,6 @@ func (fs *foundryScan) scanAccount(ctx context.Context, acc *account) int {
 		}
 	})
 	record(fs.calls, fs.c.logger, callProjects, n, stop, err)
-	// Agents per deployment name on this account, for plain usage.
-	byDeployment := map[string][]*sa.Finding{}
 	scanned := 0
 	for _, p := range projs {
 		if ctx.Err() != nil || fs.dp.authFailed {
@@ -373,26 +325,7 @@ func (fs *foundryScan) scanAccount(ctx context.Context, acc *account) int {
 			continue
 		}
 		scanned++
-		fs.scanProject(ctx, acc, p, ep, byDeployment)
-	}
-	if len(byDeployment) == 0 {
-		return scanned
-	}
-	usage, err := fs.arm.metrics(ctx, acc.ID, fs.w, fs.calls)
-	if err != nil {
-		return scanned
-	}
-	for dep, agents := range byDeployment {
-		total, active := usage[dep].totals()
-		if total <= 0 {
-			continue
-		}
-		for _, f := range agents {
-			f.AddSignal(sa.Signal{
-				Code: sa.SigFoundryPlainUsage, Source: callMetrics,
-				Observed: map[string]any{"requests": total, "activeDays": active},
-			})
-		}
+		fs.scanProject(ctx, acc, p, ep)
 	}
 	return scanned
 }
@@ -434,53 +367,30 @@ func projectEndpoint(p project, arm *url.URL) (string, error) {
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
-// scanProject lists the project's agents (and classic agents) and, with
-// deep inspection, their stored responses.
-func (fs *foundryScan) scanProject(ctx context.Context, acc *account, p project, ep string, byDeployment map[string][]*sa.Finding) {
-	type agentRef struct {
-		name string
-		f    *sa.Finding
-	}
-	var agents []agentRef
+// scanProject lists the project's agents and, when the connection includes
+// them, its classic agents.
+func (fs *foundryScan) scanProject(ctx context.Context, acc *account, p project, ep string) {
 	params := []qp{{"api-version", apiFoundry}, {"limit", strconv.Itoa(agentsPageSize)}, {"order", "asc"}}
 	n, stop, err := cursorList(ctx, fs.dp, ep, "/agents", params, maxAgentPages,
 		func(a agentObject) string { return a.ID },
 		func(a agentObject) bool {
-			if f := fs.agentFinding(acc, p, ep, a, byDeployment); f != nil {
-				agents = append(agents, agentRef{name: a.Name, f: f})
-			}
+			fs.agentFinding(acc, p, ep, a)
 			return true
 		})
 	record(fs.calls, fs.c.logger, callAgents, n, stop, err)
 	if fs.dp.authFailed {
 		return
 	}
-
 	if fs.conn.Config.IncludeClassicAgents {
-		fs.scanClassic(ctx, acc, p, ep, byDeployment)
-	}
-
-	if !fs.conn.Config.DeepInspection {
-		return
-	}
-	for _, a := range agents {
-		if ctx.Err() != nil || fs.dp.authFailed {
-			return
-		}
-		if fs.deepAgents == maxDeepAgents {
-			fs.deepLimited = true
-			return
-		}
-		fs.deepAgents++
-		fs.inspectResponses(ctx, ep, a.name, a.f)
+		fs.scanClassic(ctx, acc, p, ep)
 	}
 }
 
 // agentFinding turns an AgentObject into a platform_agent finding.
-func (fs *foundryScan) agentFinding(acc *account, p project, ep string, a agentObject, byDeployment map[string][]*sa.Finding) *sa.Finding {
+func (fs *foundryScan) agentFinding(acc *account, p project, ep string, a agentObject) {
 	key := firstNonEmpty(a.ID, a.Name)
 	if key == "" {
-		return nil
+		return
 	}
 	f := fs.findings.Get(models.ShadowKindPlatformAgent, ep+"/agents/"+key)
 	f.DisplayName = sa.SanitizeName(firstNonEmpty(a.Name, a.ID))
@@ -512,18 +422,17 @@ func (fs *foundryScan) agentFinding(acc *account, p project, ep string, a agentO
 		}
 		f.Attributes["skills"] = skills
 	}
-	fs.modelAttributes(f, def.Model, byDeployment)
+	modelAttributes(f, def.Model)
 	f.AddSignal(sa.Signal{
 		Code: sa.SigFoundryAgentObject, Source: callAgents,
 		Observed: map[string]any{"enabled": strings.EqualFold(a.State, "enabled")},
 	})
-	fs.toolAttributes(f, def.Tools, callAgents)
-	return f
+	toolAttributes(f, def.Tools)
 }
 
 // scanClassic lists the project's classic (assistants-style) agents.
 // 404 or 410 means the classic API is not available for the project.
-func (fs *foundryScan) scanClassic(ctx context.Context, acc *account, p project, ep string, byDeployment map[string][]*sa.Finding) {
+func (fs *foundryScan) scanClassic(ctx context.Context, acc *account, p project, ep string) {
 	params := []qp{{"api-version", apiFoundry}, {"limit", strconv.Itoa(agentsPageSize)}, {"order", "asc"}}
 	n, stop, err := cursorList(ctx, fs.dp, ep, "/assistants", params, maxAgentPages,
 		func(a classicAgent) string { return a.ID },
@@ -544,9 +453,9 @@ func (fs *foundryScan) scanClassic(ctx context.Context, acc *account, p project,
 			if a.Description != nil {
 				f.Attributes["description"] = *a.Description
 			}
-			fs.modelAttributes(f, a.Model, byDeployment)
+			modelAttributes(f, a.Model)
 			f.AddSignal(sa.Signal{Code: sa.SigFoundryClassicAgent, Source: callAssistants, Observed: map[string]any{}})
-			fs.toolAttributes(f, a.Tools, callAssistants)
+			toolAttributes(f, a.Tools)
 			return true
 		})
 	if s := statusOf(err); err != nil && (s == http.StatusNotFound || s == http.StatusGone) {
@@ -566,33 +475,24 @@ func (fs *foundryScan) commonAttributes(f *sa.Finding, acc *account, p project, 
 	f.Attributes["endpoint"] = sa.Origin(ep)
 }
 
-// modelAttributes records the model and, when it names a deployment on this
-// account, the deployment (for plain usage and for the service's link to
-// the Azure OpenAI deployment finding). "<connection>/<model>" is a
-// connected model on another resource (Learn, connected models): it is kept
-// as the model only.
-func (fs *foundryScan) modelAttributes(f *sa.Finding, model string, byDeployment map[string][]*sa.Finding) {
+// modelAttributes records the model and, when it names a deployment on the
+// agent's account, the deployment. "<connection>/<model>" is a connected
+// model on another resource (Learn, connected models): it is kept as the
+// model only.
+func modelAttributes(f *sa.Finding, model string) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return
 	}
 	f.Attributes["model"] = model
-	if strings.Contains(model, "/") {
-		return
+	if !strings.Contains(model, "/") {
+		f.Attributes["deployment"] = model
 	}
-	f.Attributes["deployment"] = model
-	key := strings.ToLower(model)
-	for _, x := range byDeployment[key] {
-		if x == f {
-			return
-		}
-	}
-	byDeployment[key] = append(byDeployment[key], f)
 }
 
-// toolAttributes records tool types and names, MCP server labels and
-// origins, and the "uses tools" signal.
-func (fs *foundryScan) toolAttributes(f *sa.Finding, raw []json.RawMessage, source string) {
+// toolAttributes records tool types and names, and MCP server labels and
+// origins.
+func toolAttributes(f *sa.Finding, raw []json.RawMessage) {
 	tools, mcps := parseTools(raw)
 	if len(tools) == 0 {
 		return
@@ -602,10 +502,6 @@ func (fs *foundryScan) toolAttributes(f *sa.Finding, raw []json.RawMessage, sour
 	if len(mcps) > 0 {
 		f.Attributes["mcpServers"] = mcps
 	}
-	f.AddSignal(sa.Signal{
-		Code: sa.SigFoundryUsesTools, Source: source,
-		Observed: map[string]any{"tools": len(tools), "mcpServers": len(mcps)},
-	})
 }
 
 // parseTools reduces tool definitions to their type and name, and MCP tools
@@ -640,63 +536,18 @@ func parseTools(raw []json.RawMessage) ([]sa.ToolRef, []sa.MCPServerRef) {
 	return tools, mcps
 }
 
-// inspectResponses reads (in memory, bounded) the agent's stored responses
-// in the window and keeps only counts of those with a tool-call output item.
-func (fs *foundryScan) inspectResponses(ctx context.Context, ep, agentName string, f *sa.Finding) {
-	if agentName == "" {
-		return
-	}
-	params := []qp{{"agent_name", agentName}, {"limit", strconv.Itoa(responsesPageSize)}, {"order", "desc"}}
-	start := fs.w.Start.Unix()
-	checked, withTools, toolCalls := 0, 0, 0
-	n, stop, err := cursorList(ctx, fs.dp, ep, "/openai/v1/responses", params, maxResponsesPerAgent/responsesPageSize,
-		func(r storedResponse) string { return r.ID },
-		func(r storedResponse) bool {
-			if r.CreatedAt > 0 && int64(r.CreatedAt) < start {
-				return false // order=desc: everything after is older than the window
-			}
-			if r.AgentReference != nil && r.AgentReference.Name != "" && r.AgentReference.Name != agentName {
-				return true
-			}
-			checked++
-			if t := r.CreatedAt.time(); t != nil {
-				f.ObserveUse(*t)
-			}
-			calls := 0
-			for _, o := range r.Output {
-				if isToolCall(o.Type) {
-					calls++
-				}
-			}
-			if calls > 0 {
-				withTools++
-				toolCalls += calls
-			}
-			return checked < maxResponsesPerAgent
-		})
-	record(fs.calls, fs.c.logger, callResponses, n, stop, err)
-	if withTools > 0 {
-		f.AddSignal(sa.Signal{
-			Code: sa.SigFoundryToolCallResp, Source: callResponses,
-			Observed: map[string]any{"responsesWithToolCalls": withTools, "toolCalls": toolCalls, "responsesChecked": checked},
-		})
-	}
-}
-
 // Foundry connection test check names.
 const (
-	checkProjects       = "Foundry projects (Projects_List)"
-	checkAgents         = "Foundry agents (GET {projectEndpoint}/agents)"
-	checkClassic        = "Foundry classic agents (GET {projectEndpoint}/assistants)"
-	checkResponses      = "Stored responses (GET {projectEndpoint}/openai/v1/responses)"
-	checkFoundryMetrics = "Azure Monitor metrics (Metrics_List)"
+	checkProjects = "Foundry projects (Projects_List)"
+	checkAgents   = "Foundry agents (GET {projectEndpoint}/agents)"
+	checkClassic  = "Foundry classic agents (GET {projectEndpoint}/assistants)"
 )
 
 // Test implements sa.Connector. The connection is OK when the accounts and
 // the agents of the first project can be listed.
 func (c *Foundry) Test(ctx context.Context, conn sa.Connection) models.ShadowConnectionTestInfo {
-	agentSignals := []string{sa.SigFoundryAgentObject, sa.SigFoundryUsesTools}
-	all := []string{sa.SigFoundryAgentObject, sa.SigFoundryUsesTools, sa.SigFoundryPlainUsage, sa.SigFoundryClassicAgent, sa.SigFoundryToolCallResp}
+	agentSignals := []string{sa.SigFoundryAgentObject}
+	all := []string{sa.SigFoundryAgentObject, sa.SigFoundryClassicAgent}
 	s, err := c.newSession(conn)
 	if err != nil {
 		return models.ShadowConnectionTestInfo{Checks: []models.ShadowConnectionCheck{{
@@ -728,9 +579,6 @@ func (c *Foundry) Test(ctx context.Context, conn sa.Connection) models.ShadowCon
 		err := dp.get(ctx, buildURL(ep, "/agents", one...), &p)
 		return len(p.Data), err
 	})
-	t.run(checkFoundryMetrics, []string{sa.SigFoundryPlainUsage}, acc == nil, "no AI Services account found", func() (int, error) {
-		return testMetrics(ctx, s.arm, acc.ID, time.Now().UTC())
-	})
 	if conn.Config.IncludeClassicAgents {
 		t.run(checkClassic, []string{sa.SigFoundryClassicAgent}, ep == "", "no project with an \"AI Foundry API\" endpoint found", func() (int, error) {
 			var p cursorPage[json.RawMessage]
@@ -742,12 +590,6 @@ func (c *Foundry) Test(ctx context.Context, conn sa.Connection) models.ShadowCon
 		})
 		t.markSkipped(checkClassic, errClassicUnavailable)
 	}
-	t.run(checkResponses, []string{sa.SigFoundryToolCallResp}, !conn.Config.DeepInspection || ep == "",
-		skipReason(conn.Config.DeepInspection), func() (int, error) {
-			var p cursorPage[json.RawMessage]
-			err := dp.get(ctx, buildURL(ep, "/openai/v1/responses", qp{"limit", "1"}), &p)
-			return len(p.Data), err
-		})
 	info := t.info(checkAccounts)
 	// The agents check is required unless there is simply no project yet.
 	for _, ch := range t.checks {
@@ -769,11 +611,4 @@ func (t *tester) markSkipped(name string, marker error) {
 			t.checks[i].Message = marker.Error()
 		}
 	}
-}
-
-func skipReason(deep bool) string {
-	if !deep {
-		return "deep inspection is off"
-	}
-	return "no project with an \"AI Foundry API\" endpoint found"
 }

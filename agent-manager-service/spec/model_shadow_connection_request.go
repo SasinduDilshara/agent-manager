@@ -23,9 +23,9 @@ type ShadowConnectionRequest struct {
 	Provider string `json:"provider"`
 	// Base URL per endpoint key; missing keys use the official default.
 	Endpoints *map[string]string `json:"endpoints,omitempty"`
-	// Field values by the provider's field keys (see ShadowFieldSpec). Secret fields are write-only; on update an empty or missing secret keeps the stored one.
+	// Field values by the platform's field keys (see ShadowFieldSpec). Secret fields are write-only; on update an empty or missing secret keeps the stored one.
 	Settings map[string]interface{} `json:"settings"`
-	// On update, optional secret fields whose stored value is removed (for example the Admin API key, to switch a connection to project keys only). Required secrets cannot be removed.
+	// On update, optional secret fields whose stored value is removed (for example the AWS session token). Required secrets cannot be removed.
 	RemoveSecrets []string `json:"removeSecrets,omitempty"`
 }
 

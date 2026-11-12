@@ -35,28 +35,10 @@ import (
 // connections (not from one provider call).
 const ShadowCorrelationSource = "correlation"
 
-// ShadowScoreFunc returns the score and verdict of a finding of kind with
-// the given signal codes.
-type ShadowScoreFunc func(kind string, codes []string) (int, string)
-
-// ShadowFindingInput is one finding of a connection's scan, as persisted.
+// ShadowFindingInput is one agent of a connection's scan, as persisted.
 type ShadowFindingInput struct {
 	Finding models.ShadowFinding
 	Signals []models.ShadowFindingSignal
-	Usage   []models.ShadowUsageDaily
-	// KeyIDs are provider keys the workload uses.
-	KeyIDs []string
-	// Related links other findings of the same connection.
-	Related []ShadowRelationInput
-}
-
-// ShadowRelationInput links to another finding of the same connection by
-// its provider identity.
-type ShadowRelationInput struct {
-	Kind       string
-	ExternalID string
-	Relation   string
-	Reason     string
 }
 
 // ShadowConnectionApply is what one connection's scan found.
@@ -65,43 +47,50 @@ type ShadowConnectionApply struct {
 	ConnectionID  uuid.UUID
 	ScanID        uuid.UUID
 	ScanStartedAt time.Time
-	// WindowStart: evidence detected before it has aged out of the lookback
-	// window and is pruned.
-	WindowStart time.Time
-	Findings    []ShadowFindingInput
-	Keys        []models.ShadowAPIKey
-	// KeysListed marks stored keys the listing no longer returned as gone;
-	// otherwise KeyScopesListed limits that to the scopes listed completely.
-	KeysListed      bool
-	KeyScopesListed []string
+	Findings      []ShadowFindingInput
+	// Complete is true when every listing the connection's settings enable
+	// succeeded completely. Only then is an agent of the connection that the
+	// scan did not return marked as no longer present, and its stale
+	// evidence removed.
+	Complete bool
 }
 
-// ShadowFindingFilter selects findings.
+// ShadowFindingFilter selects agents.
 type ShadowFindingFilter struct {
 	Provider     string
-	Verdict      string
 	Status       string
-	Kind         string
 	ConnectionID *uuid.UUID
-	// ScanID keeps the findings that scan saw.
+	// ScanID keeps the agents that scan found, present or not. Without it,
+	// only the agents present now are listed.
 	ScanID *uuid.UUID
 	Search string
 	Limit  int
 	Offset int
 }
 
-// ShadowFindingRow is a finding with its connection's name and the requests
-// in its stored usage.
-type ShadowFindingRow struct {
-	models.ShadowFinding
-	ConnectionName string `gorm:"column:connection_name"`
-	Requests       int64  `gorm:"column:requests"`
+// ShadowFindingSource is one connection that found an agent: the agent's
+// finding in that connection.
+type ShadowFindingSource struct {
+	FindingID      string `json:"findingId"`
+	ConnectionID   string `json:"connectionId"`
+	ConnectionName string `json:"connectionName"`
+	Present        bool   `json:"present"`
 }
 
-// ShadowSummary counts an org's findings.
+// ShadowFindingRow is one agent: a finding, its connection's name, and
+// every connection that found the same agent (same platform, kind and
+// external ID).
+type ShadowFindingRow struct {
+	models.ShadowFinding
+	ConnectionName string                `gorm:"column:connection_name"`
+	FoundByJSON    string                `gorm:"column:found_by"`
+	FoundBy        []ShadowFindingSource `gorm:"-"`
+}
+
+// ShadowSummary counts an org's agents (each agent once, however many
+// connections found it) and connections.
 type ShadowSummary struct {
 	Total       int
-	ByVerdict   map[string]int
 	ByProvider  map[string]int
 	ByStatus    map[string]int
 	Connections int
@@ -127,6 +116,10 @@ type ShadowAgentRepository interface {
 	CreateScan(ctx context.Context, s *models.ShadowScan) error
 	ListScans(ctx context.Context, ouID string, limit int) ([]models.ShadowScan, error)
 	GetScan(ctx context.Context, ouID string, id uuid.UUID) (*models.ShadowScan, error)
+	// DeleteFinishedScans deletes the org's scans that are not queued or
+	// running, and returns how many it deleted. Agents and their evidence are
+	// kept; only the scan records and their per-scan lists go.
+	DeleteFinishedScans(ctx context.Context, ouID string) (int64, error)
 	// LatestScan returns gorm.ErrRecordNotFound when the org has none.
 	LatestScan(ctx context.Context, ouID string) (*models.ShadowScan, error)
 	// ClaimDueScans leases queued scans, and running scans whose lease ran
@@ -136,28 +129,30 @@ type ShadowAgentRepository interface {
 	FinishScan(ctx context.Context, s *models.ShadowScan) error
 
 	// ApplyConnectionResult writes one connection's scan in one transaction
-	// and returns how many findings it wrote.
-	ApplyConnectionResult(ctx context.Context, in ShadowConnectionApply, score ShadowScoreFunc) (int, error)
-	// ListOrgFindings returns every finding of the org (for correlation).
+	// and returns how many agents it wrote.
+	ApplyConnectionResult(ctx context.Context, in ShadowConnectionApply) (int, error)
+	// ListOrgFindings returns the org's present agents (for correlation).
 	ListOrgFindings(ctx context.Context, ouID string) ([]models.ShadowFinding, error)
 	// ApplyCorrelation replaces the org's cross-connection relations and
-	// signals and rescores the findings they touch.
+	// evidence.
 	ApplyCorrelation(ctx context.Context, ouID string, relations map[uuid.UUID][]models.ShadowFindingRelation,
-		signals map[uuid.UUID][]models.ShadowFindingSignal, score ShadowScoreFunc) error
+		signals map[uuid.UUID][]models.ShadowFindingSignal) error
 
+	// ListFindings lists agents, one row per agent however many connections
+	// found it.
 	ListFindings(ctx context.Context, ouID string, f ShadowFindingFilter) ([]ShadowFindingRow, int, error)
 	GetFinding(ctx context.Context, ouID string, id uuid.UUID) (*ShadowFindingRow, error)
 	ListSignals(ctx context.Context, ouID string, findingID uuid.UUID) ([]models.ShadowFindingSignal, error)
-	ListFindingKeys(ctx context.Context, ouID string, findingID uuid.UUID) ([]models.ShadowAPIKey, error)
-	ListUsage(ctx context.Context, ouID string, findingID uuid.UUID) ([]models.ShadowUsageDaily, error)
+	// UpdateFindingStatus sets the review status of the agent, on its
+	// finding in every connection that found it.
 	UpdateFindingStatus(ctx context.Context, ouID string, id uuid.UUID, status string) error
-	// OnboardFinding links the finding to an agent; utils.ErrShadowAlreadyOnboarded
-	// when it already is.
-	OnboardFinding(ctx context.Context, ouID string, id uuid.UUID, project, agent, by string, at time.Time) error
-	// SetRetirement updates the retirement state (and the review status
-	// "retired" once verified).
-	SetRetirement(ctx context.Context, ouID string, id uuid.UUID, state string, markedBy string, markedAt, verifiedAt *time.Time) error
-	ListOnboardedFindings(ctx context.Context, ouID string) ([]models.ShadowFinding, error)
+	// DeleteFinding deletes an agent: every row of it (one per connection
+	// that found it) with its evidence and its per-scan links. It returns
+	// false when the org has no finding with that ID.
+	DeleteFinding(ctx context.Context, ouID string, id uuid.UUID) (bool, error)
+	// DeleteFindings deletes every agent of the org with its evidence, and
+	// returns how many agents it deleted. Connections and scans are kept.
+	DeleteFindings(ctx context.Context, ouID string) (int64, error)
 	Summary(ctx context.Context, ouID string) (ShadowSummary, error)
 }
 
@@ -273,6 +268,32 @@ func (r *shadowAgentRepository) GetScan(ctx context.Context, ouID string, id uui
 	return &s, nil
 }
 
+func (r *shadowAgentRepository) DeleteFinishedScans(ctx context.Context, ouID string) (int64, error) {
+	var deleted int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		finished := `SELECT id FROM shadow_scans WHERE ou_id = ? AND status NOT IN (?, ?)`
+		active := []any{ouID, models.ShadowScanQueued, models.ShadowScanRunning}
+		// last_scan_id and a signal's scan_id have no foreign key: clear them
+		// so nothing points at a deleted scan.
+		if err := tx.Exec(`UPDATE shadow_findings SET last_scan_id = NULL
+			WHERE ou_id = ? AND last_scan_id IN (`+finished+`)`, append([]any{ouID}, active...)...).Error; err != nil {
+			return fmt.Errorf("clearing last scan of findings: %w", err)
+		}
+		if err := tx.Exec(`UPDATE shadow_finding_signals SET scan_id = NULL
+			WHERE ou_id = ? AND scan_id IN (`+finished+`)`, append([]any{ouID}, active...)...).Error; err != nil {
+			return fmt.Errorf("clearing scan of signals: %w", err)
+		}
+		// shadow_scan_findings rows go with their scan (ON DELETE CASCADE).
+		res := tx.Exec(`DELETE FROM shadow_scans WHERE ou_id = ? AND status NOT IN (?, ?)`, active...)
+		if res.Error != nil {
+			return fmt.Errorf("deleting scans: %w", res.Error)
+		}
+		deleted = res.RowsAffected
+		return nil
+	})
+	return deleted, err
+}
+
 func (r *shadowAgentRepository) LatestScan(ctx context.Context, ouID string) (*models.ShadowScan, error) {
 	var s models.ShadowScan
 	if err := r.db.WithContext(ctx).Where("ou_id = ?", ouID).Order("created_at DESC").First(&s).Error; err != nil {
@@ -327,13 +348,9 @@ func (r *shadowAgentRepository) FinishScan(ctx context.Context, s *models.Shadow
 
 // ---- scan results ----
 
-func (r *shadowAgentRepository) ApplyConnectionResult(
-	ctx context.Context, in ShadowConnectionApply, score ShadowScoreFunc,
-) (int, error) {
+func (r *shadowAgentRepository) ApplyConnectionResult(ctx context.Context, in ShadowConnectionApply) (int, error) {
 	written := 0
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		ids := make(map[string]uuid.UUID, len(in.Findings))
-		keyFinding := map[string]uuid.UUID{}
 		for i := range in.Findings {
 			fi := &in.Findings[i]
 			id, err := upsertShadowFinding(tx, in, &fi.Finding)
@@ -344,77 +361,31 @@ func (r *shadowAgentRepository) ApplyConnectionResult(
 				ON CONFLICT DO NOTHING`, in.OUID, in.ScanID, id).Error; err != nil {
 				return fmt.Errorf("recording the scan's finding: %w", err)
 			}
-			ids[fi.Finding.Kind+"\x00"+fi.Finding.ExternalID] = id
-			if fi.Finding.Kind == models.ShadowKindAPIKey {
-				keyFinding[fi.Finding.ExternalID] = id
-			}
-			for _, k := range fi.KeyIDs {
-				if _, taken := keyFinding[k]; !taken {
-					keyFinding[k] = id
-				}
-			}
 			for j := range fi.Signals {
 				if err := upsertShadowSignal(tx, in.OUID, id, in.ScanID, &fi.Signals[j]); err != nil {
 					return err
 				}
 			}
-			for j := range fi.Usage {
-				if err := upsertShadowUsage(tx, in.OUID, id, &fi.Usage[j]); err != nil {
-					return err
-				}
-			}
 			written++
 		}
-		// A key-kind finding owns its key even if another finding listed it first.
-		for i := range in.Findings {
-			if in.Findings[i].Finding.Kind == models.ShadowKindAPIKey {
-				keyFinding[in.Findings[i].Finding.ExternalID] = ids[models.ShadowKindAPIKey+"\x00"+in.Findings[i].Finding.ExternalID]
-			}
+		if !in.Complete {
+			return nil
 		}
-		for i := range in.Keys {
-			var fid *uuid.UUID
-			if id, ok := keyFinding[in.Keys[i].KeyID]; ok {
-				fid = &id
-			}
-			if err := upsertShadowKey(tx, in, fid, &in.Keys[i]); err != nil {
-				return err
-			}
+		// Every listing succeeded: an agent this scan did not return is no
+		// longer listed by the platform (or no longer in the connection's
+		// scope), and evidence this scan did not see again is gone.
+		if err := tx.Exec(`UPDATE shadow_findings SET present = FALSE, updated_at = NOW()
+			WHERE ou_id = ? AND connection_id = ? AND present AND last_seen_at < ?`,
+			in.OUID, in.ConnectionID, in.ScanStartedAt).Error; err != nil {
+			return fmt.Errorf("marking agents no longer listed: %w", err)
 		}
-		switch {
-		case in.KeysListed:
-			if err := tx.Exec(`UPDATE shadow_api_keys SET present = FALSE, updated_at = NOW()
-				WHERE ou_id = ? AND connection_id = ? AND present AND last_seen_at < ?`,
-				in.OUID, in.ConnectionID, in.ScanStartedAt).Error; err != nil {
-				return fmt.Errorf("marking removed keys: %w", err)
-			}
-		case len(in.KeyScopesListed) > 0:
-			if err := tx.Exec(`UPDATE shadow_api_keys SET present = FALSE, updated_at = NOW()
-				WHERE ou_id = ? AND connection_id = ? AND present AND last_seen_at < ? AND scope IN ?`,
-				in.OUID, in.ConnectionID, in.ScanStartedAt, in.KeyScopesListed).Error; err != nil {
-				return fmt.Errorf("marking removed keys: %w", err)
-			}
-		}
-		// Evidence older than the lookback window has aged out.
 		if err := tx.Exec(`DELETE FROM shadow_finding_signals s USING shadow_findings f
-			WHERE s.finding_id = f.id AND f.ou_id = ? AND f.connection_id = ? AND s.source <> ? AND s.detected_at < ?`,
-			in.OUID, in.ConnectionID, ShadowCorrelationSource, in.WindowStart).Error; err != nil {
-			return fmt.Errorf("pruning aged signals: %w", err)
+			WHERE s.finding_id = f.id AND f.ou_id = ? AND f.connection_id = ? AND f.present
+				AND s.source <> ? AND s.detected_at < ?`,
+			in.OUID, in.ConnectionID, ShadowCorrelationSource, in.ScanStartedAt).Error; err != nil {
+			return fmt.Errorf("removing evidence no longer seen: %w", err)
 		}
-		// Relations between findings of this connection.
-		for i := range in.Findings {
-			fi := &in.Findings[i]
-			id := ids[fi.Finding.Kind+"\x00"+fi.Finding.ExternalID]
-			own := make([]models.ShadowFindingRelation, 0, len(fi.Related))
-			for _, rel := range fi.Related {
-				if target, ok := ids[rel.Kind+"\x00"+rel.ExternalID]; ok && target != id {
-					own = append(own, models.ShadowFindingRelation{FindingID: target.String(), Relation: rel.Relation, Reason: rel.Reason})
-				}
-			}
-			if err := mergeShadowRelations(tx, id, own, false); err != nil {
-				return err
-			}
-		}
-		return rescoreShadowFindings(tx, in.OUID, &in.ConnectionID, nil, score)
+		return nil
 	})
 	return written, err
 }
@@ -434,30 +405,41 @@ func upsertShadowFinding(tx *gorm.DB, in ShadowConnectionApply, f *models.Shadow
 	}
 	err = tx.Raw(`
 		INSERT INTO shadow_findings (ou_id, connection_id, provider, kind, external_id, display_name, scope, state,
-			owner_hint, attributes, provider_created_at, first_used_at, last_used_at, first_seen_at, last_seen_at,
-			last_scan_id, status, verdict, related)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?, 'new', 'llm_consumer', '[]'::jsonb)
+			owner_hint, attributes, provider_created_at, first_seen_at, last_seen_at, last_scan_id, present, status, related)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?, TRUE, ?, '[]'::jsonb)
 		ON CONFLICT (ou_id, connection_id, kind, external_id) DO UPDATE SET
 			display_name = EXCLUDED.display_name,
 			scope = EXCLUDED.scope,
 			state = EXCLUDED.state,
-			owner_hint = CASE WHEN EXCLUDED.owner_hint = '{}'::jsonb THEN shadow_findings.owner_hint ELSE EXCLUDED.owner_hint END,
+			owner_hint = EXCLUDED.owner_hint,
 			attributes = EXCLUDED.attributes,
 			provider_created_at = COALESCE(EXCLUDED.provider_created_at, shadow_findings.provider_created_at),
-			first_used_at = LEAST(shadow_findings.first_used_at, EXCLUDED.first_used_at),
-			last_used_at = GREATEST(shadow_findings.last_used_at, EXCLUDED.last_used_at),
 			last_seen_at = EXCLUDED.last_seen_at,
 			last_scan_id = EXCLUDED.last_scan_id,
+			present = TRUE,
 			updated_at = NOW()
 		RETURNING id`,
 		in.OUID, in.ConnectionID, f.Provider, f.Kind, f.ExternalID, f.DisplayName, f.Scope, f.State,
-		owner, attrs, f.ProviderCreatedAt, f.FirstUsedAt, f.LastUsedAt,
-		now, now, in.ScanID,
+		owner, attrs, f.ProviderCreatedAt, now, now, in.ScanID, shadowNewFindingStatus(tx, in.OUID, f),
 	).Scan(&row).Error
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("writing finding: %w", err)
 	}
 	return row.ID, nil
+}
+
+// shadowNewFindingStatus is the review status a new finding starts with:
+// the status the same agent already has through another connection, so the
+// agent has one status however many connections found it.
+func shadowNewFindingStatus(tx *gorm.DB, ouID string, f *models.ShadowFinding) string {
+	var status string
+	err := tx.Raw(`SELECT status FROM shadow_findings
+		WHERE ou_id = ? AND provider = ? AND kind = ? AND external_id = ?
+		ORDER BY updated_at DESC LIMIT 1`, ouID, f.Provider, f.Kind, f.ExternalID).Scan(&status).Error
+	if err != nil || status == "" {
+		return models.ShadowStatusNew
+	}
+	return status
 }
 
 func upsertShadowSignal(tx *gorm.DB, ouID string, findingID, scanID uuid.UUID, s *models.ShadowFindingSignal) error {
@@ -470,148 +452,32 @@ func upsertShadowSignal(tx *gorm.DB, ouID string, findingID, scanID uuid.UUID, s
 		scan = &scanID
 	}
 	err = tx.Exec(`
-		INSERT INTO shadow_finding_signals (ou_id, finding_id, code, tier, weight, source, condition, observed, scan_id, detected_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?)
+		INSERT INTO shadow_finding_signals (ou_id, finding_id, code, source, observed, scan_id, detected_at)
+		VALUES (?, ?, ?, ?, ?::jsonb, ?, ?)
 		ON CONFLICT (finding_id, code, source) DO UPDATE SET
-			tier = EXCLUDED.tier, weight = EXCLUDED.weight, condition = EXCLUDED.condition,
 			observed = EXCLUDED.observed, scan_id = EXCLUDED.scan_id, detected_at = EXCLUDED.detected_at`,
-		ouID, findingID, s.Code, s.Tier, s.Weight, s.Source, s.Condition, observed, scan, s.DetectedAt,
+		ouID, findingID, s.Code, s.Source, observed, scan, s.DetectedAt,
 	).Error
 	if err != nil {
-		return fmt.Errorf("writing signal: %w", err)
-	}
-	return nil
-}
-
-func upsertShadowUsage(tx *gorm.DB, ouID string, findingID uuid.UUID, u *models.ShadowUsageDaily) error {
-	err := tx.Exec(`
-		INSERT INTO shadow_usage_daily (ou_id, finding_id, key_id, model, day, requests, input_tokens, output_tokens, cost_amount, currency, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-		ON CONFLICT (finding_id, key_id, model, day) DO UPDATE SET
-			requests = EXCLUDED.requests, input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens,
-			cost_amount = EXCLUDED.cost_amount, currency = EXCLUDED.currency, updated_at = NOW()`,
-		ouID, findingID, u.KeyID, u.Model, u.Day.Format(time.DateOnly), u.Requests, u.InputTokens, u.OutputTokens, u.CostAmount, u.Currency,
-	).Error
-	if err != nil {
-		return fmt.Errorf("writing usage: %w", err)
-	}
-	return nil
-}
-
-func upsertShadowKey(tx *gorm.DB, in ShadowConnectionApply, findingID *uuid.UUID, k *models.ShadowAPIKey) error {
-	owner, err := ownerHintJSON(k.OwnerHint)
-	if err != nil {
-		return err
-	}
-	err = tx.Exec(`
-		INSERT INTO shadow_api_keys (ou_id, connection_id, finding_id, key_id, name, redacted_hint, status, scope,
-			owner_hint, provider_created_at, last_used_at, last_seen_at, present)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, TRUE)
-		ON CONFLICT (ou_id, connection_id, key_id) DO UPDATE SET
-			finding_id = COALESCE(EXCLUDED.finding_id, shadow_api_keys.finding_id),
-			name = EXCLUDED.name, redacted_hint = EXCLUDED.redacted_hint, status = EXCLUDED.status, scope = EXCLUDED.scope,
-			owner_hint = CASE WHEN EXCLUDED.owner_hint = '{}'::jsonb THEN shadow_api_keys.owner_hint ELSE EXCLUDED.owner_hint END,
-			provider_created_at = COALESCE(EXCLUDED.provider_created_at, shadow_api_keys.provider_created_at),
-			last_used_at = GREATEST(shadow_api_keys.last_used_at, EXCLUDED.last_used_at),
-			last_seen_at = EXCLUDED.last_seen_at, present = TRUE, updated_at = NOW()`,
-		in.OUID, in.ConnectionID, findingID, k.KeyID, k.Name, k.RedactedHint, k.Status, k.Scope,
-		owner, k.ProviderCreatedAt, k.LastUsedAt, in.ScanStartedAt,
-	).Error
-	if err != nil {
-		return fmt.Errorf("writing key: %w", err)
-	}
-	return nil
-}
-
-// mergeShadowRelations replaces either the connector's own relations
-// (correlation=false) or the correlation's (true) on a finding, keeping the
-// other kind.
-func mergeShadowRelations(tx *gorm.DB, id uuid.UUID, replacement []models.ShadowFindingRelation, correlation bool) error {
-	var current models.ShadowFinding
-	if err := tx.Select("id", "related").Where("id = ?", id).First(&current).Error; err != nil {
-		return fmt.Errorf("reading relations: %w", err)
-	}
-	merged := make([]models.ShadowFindingRelation, 0, len(current.Related)+len(replacement))
-	for _, rel := range current.Related {
-		if (rel.Source == ShadowCorrelationSource) != correlation {
-			merged = append(merged, rel)
-		}
-	}
-	for _, rel := range replacement {
-		if correlation {
-			rel.Source = ShadowCorrelationSource
-		} else {
-			rel.Source = ""
-		}
-		merged = append(merged, rel)
-	}
-	encoded, err := toJSON(merged)
-	if err != nil {
-		return err
-	}
-	if err := tx.Exec(`UPDATE shadow_findings SET related = ?::jsonb WHERE id = ?`, encoded, id).Error; err != nil {
-		return fmt.Errorf("writing relations: %w", err)
-	}
-	return nil
-}
-
-// rescoreShadowFindings recomputes score and verdict from the stored
-// signals, for a connection's findings or for the given findings.
-func rescoreShadowFindings(tx *gorm.DB, ouID string, connectionID *uuid.UUID, findingIDs []uuid.UUID, score ShadowScoreFunc) error {
-	var rows []struct {
-		ID    uuid.UUID `gorm:"column:id"`
-		Kind  string    `gorm:"column:kind"`
-		Codes string    `gorm:"column:codes"`
-	}
-	q := tx.Table("shadow_findings f").
-		Select("f.id, f.kind, COALESCE(string_agg(s.code, ','), '') AS codes").
-		Joins("LEFT JOIN shadow_finding_signals s ON s.finding_id = f.id").
-		Where("f.ou_id = ?", ouID).
-		Group("f.id, f.kind")
-	switch {
-	case connectionID != nil:
-		q = q.Where("f.connection_id = ?", *connectionID)
-	case len(findingIDs) > 0:
-		q = q.Where("f.id IN ?", findingIDs)
-	default:
-		return nil
-	}
-	if err := q.Scan(&rows).Error; err != nil {
-		return fmt.Errorf("reading signals to score: %w", err)
-	}
-	for _, row := range rows {
-		var codes []string
-		if row.Codes != "" {
-			codes = strings.Split(row.Codes, ",")
-		}
-		sc, verdict := score(row.Kind, codes)
-		if err := tx.Exec(`UPDATE shadow_findings SET score = ?, verdict = ?, updated_at = NOW() WHERE id = ?`,
-			sc, verdict, row.ID).Error; err != nil {
-			return fmt.Errorf("writing score: %w", err)
-		}
+		return fmt.Errorf("writing evidence: %w", err)
 	}
 	return nil
 }
 
 func (r *shadowAgentRepository) ListOrgFindings(ctx context.Context, ouID string) ([]models.ShadowFinding, error) {
 	var out []models.ShadowFinding
-	err := r.db.WithContext(ctx).Where("ou_id = ?", ouID).Find(&out).Error
+	err := r.db.WithContext(ctx).Where("ou_id = ? AND present", ouID).Find(&out).Error
 	return out, err
 }
 
 func (r *shadowAgentRepository) ApplyCorrelation(
 	ctx context.Context, ouID string, relations map[uuid.UUID][]models.ShadowFindingRelation,
-	signals map[uuid.UUID][]models.ShadowFindingSignal, score ShadowScoreFunc,
+	signals map[uuid.UUID][]models.ShadowFindingSignal,
 ) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var touched []uuid.UUID
-		if err := tx.Raw(`SELECT DISTINCT finding_id FROM shadow_finding_signals WHERE ou_id = ? AND source = ?`,
-			ouID, ShadowCorrelationSource).Scan(&touched).Error; err != nil {
-			return fmt.Errorf("reading correlation signals: %w", err)
-		}
 		if err := tx.Exec(`DELETE FROM shadow_finding_signals WHERE ou_id = ? AND source = ?`,
 			ouID, ShadowCorrelationSource).Error; err != nil {
-			return fmt.Errorf("clearing correlation signals: %w", err)
+			return fmt.Errorf("clearing correlation evidence: %w", err)
 		}
 		for id, list := range signals {
 			for i := range list {
@@ -620,121 +486,165 @@ func (r *shadowAgentRepository) ApplyCorrelation(
 					return err
 				}
 			}
-			touched = append(touched, id)
 		}
-		// Clear stale correlation relations on every finding of the org that has
-		// any, then write the new ones.
-		var withRelations []uuid.UUID
-		if err := tx.Raw(`SELECT id FROM shadow_findings WHERE ou_id = ? AND related <> '[]'::jsonb`, ouID).
-			Scan(&withRelations).Error; err != nil {
-			return fmt.Errorf("reading relations: %w", err)
-		}
-		seen := map[uuid.UUID]bool{}
-		for _, id := range withRelations {
-			seen[id] = true
-			if err := mergeShadowRelations(tx, id, relations[id], true); err != nil {
-				return err
-			}
+		if err := tx.Exec(`UPDATE shadow_findings SET related = '[]'::jsonb WHERE ou_id = ? AND related <> '[]'::jsonb`,
+			ouID).Error; err != nil {
+			return fmt.Errorf("clearing relations: %w", err)
 		}
 		for id, rels := range relations {
-			if !seen[id] {
-				if err := mergeShadowRelations(tx, id, rels, true); err != nil {
-					return err
-				}
+			for i := range rels {
+				rels[i].Source = ShadowCorrelationSource
+			}
+			encoded, err := toJSON(rels)
+			if err != nil {
+				return err
+			}
+			if err := tx.Exec(`UPDATE shadow_findings SET related = ?::jsonb WHERE ou_id = ? AND id = ?`,
+				encoded, ouID, id).Error; err != nil {
+				return fmt.Errorf("writing relations: %w", err)
 			}
 		}
-		return rescoreShadowFindings(tx, ouID, nil, touched, score)
+		return nil
 	})
 }
 
-// ---- findings ----
+// ---- agents ----
 
-const shadowFindingSelect = `f.*, c.name AS connection_name,
-	COALESCE((SELECT SUM(u.requests) FROM shadow_usage_daily u WHERE u.finding_id = f.id), 0) AS requests`
+// shadowFoundBy aggregates every connection whose finding is the same agent
+// (same provider, kind and external ID), present or not.
+const shadowFoundBy = `jsonb_agg(jsonb_build_object('findingId', id, 'connectionId', connection_id,
+	'connectionName', connection_name, 'present', present) ORDER BY lower(connection_name), id)`
+
+// shadowFoundByAll is, per agent of the org (first argument), every
+// connection that found it, whatever the list's filters.
+const shadowFoundByAll = `SELECT provider, kind, external_id, ` + shadowFoundBy + ` AS found_by
+	FROM (SELECT a.id, a.provider, a.kind, a.external_id, a.connection_id, a.present, ac.name AS connection_name
+		FROM shadow_findings a JOIN shadow_connections ac ON ac.id = a.connection_id WHERE a.ou_id = ?) same
+	GROUP BY provider, kind, external_id`
 
 func (r *shadowAgentRepository) ListFindings(
 	ctx context.Context, ouID string, flt ShadowFindingFilter,
 ) ([]ShadowFindingRow, int, error) {
-	q := r.db.WithContext(ctx).Table("shadow_findings f").
-		Joins("JOIN shadow_connections c ON c.id = f.connection_id").
-		Where("f.ou_id = ?", ouID)
-	if flt.Provider != "" {
-		q = q.Where("f.provider = ?", flt.Provider)
+	where := []string{"f.ou_id = ?"}
+	args := []any{ouID}
+	if flt.ScanID != nil {
+		where = append(where, "EXISTS (SELECT 1 FROM shadow_scan_findings sf WHERE sf.finding_id = f.id AND sf.scan_id = ?)")
+		args = append(args, *flt.ScanID)
+	} else {
+		where = append(where, "f.present")
 	}
-	if flt.Verdict != "" {
-		q = q.Where("f.verdict = ?", flt.Verdict)
+	if flt.Provider != "" {
+		where = append(where, "f.provider = ?")
+		args = append(args, flt.Provider)
 	}
 	if flt.Status != "" {
-		q = q.Where("f.status = ?", flt.Status)
-	}
-	if flt.Kind != "" {
-		q = q.Where("f.kind = ?", flt.Kind)
+		where = append(where, "f.status = ?")
+		args = append(args, flt.Status)
 	}
 	if flt.ConnectionID != nil {
-		q = q.Where("f.connection_id = ?", *flt.ConnectionID)
-	}
-	if flt.ScanID != nil {
-		q = q.Where("EXISTS (SELECT 1 FROM shadow_scan_findings sf WHERE sf.finding_id = f.id AND sf.scan_id = ?)", *flt.ScanID)
+		where = append(where, "f.connection_id = ?")
+		args = append(args, *flt.ConnectionID)
 	}
 	if s := strings.TrimSpace(flt.Search); s != "" {
 		like := "%" + escapeLike(strings.ToLower(s)) + "%"
-		q = q.Where(`(lower(f.display_name) LIKE ? ESCAPE '\' OR lower(f.external_id) LIKE ? ESCAPE '\'
-			OR lower(f.owner_hint->>'email') LIKE ? ESCAPE '\' OR lower(f.owner_hint->>'name') LIKE ? ESCAPE '\'
-			OR lower(f.owner_hint->>'username') LIKE ? ESCAPE '\')`, like, like, like, like, like)
+		where = append(where, `(lower(f.display_name) LIKE ? ESCAPE '\' OR lower(f.external_id) LIKE ? ESCAPE '\'
+			OR lower(f.scope) LIKE ? ESCAPE '\')`)
+		args = append(args, like, like, like)
 	}
+	base := `SELECT f.*, c.name AS connection_name FROM shadow_findings f
+		JOIN shadow_connections c ON c.id = f.connection_id WHERE ` + strings.Join(where, " AND ")
+
 	var total int64
-	if err := q.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM (SELECT DISTINCT provider, kind, external_id FROM (`+
+		base+`) b) g`, args...).Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []ShadowFindingRow
-	err := q.Select(shadowFindingSelect).
-		Order("f.score DESC, f.last_used_at DESC NULLS LAST, f.display_name ASC").
-		Limit(flt.Limit).Offset(flt.Offset).
-		Scan(&rows).Error
-	return rows, int(total), err
+	// One row per agent: its finding in the connection that saw it last.
+	// found_by lists every connection that found the agent, whatever the
+	// filters, so a row always says where else the agent was found.
+	q := `WITH b AS (` + base + `),
+		g AS (
+			SELECT b.*,
+				ROW_NUMBER() OVER (PARTITION BY provider, kind, external_id
+					ORDER BY present DESC, last_seen_at DESC, lower(connection_name), id) AS rn
+			FROM b),
+		fb AS (` + shadowFoundByAll + `)
+		SELECT g.*, fb.found_by FROM g JOIN fb USING (provider, kind, external_id)
+		WHERE g.rn = 1
+		ORDER BY lower(g.display_name), g.provider, g.external_id
+		LIMIT ? OFFSET ?`
+	qargs := append(append([]any{}, args...), ouID, flt.Limit, flt.Offset)
+	if err := r.db.WithContext(ctx).Raw(q, qargs...).Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	for i := range rows {
+		if err := decodeFoundBy(&rows[i]); err != nil {
+			return nil, 0, err
+		}
+	}
+	return rows, int(total), nil
 }
 
 func (r *shadowAgentRepository) GetFinding(ctx context.Context, ouID string, id uuid.UUID) (*ShadowFindingRow, error) {
 	var rows []ShadowFindingRow
-	err := r.db.WithContext(ctx).Table("shadow_findings f").
-		Joins("JOIN shadow_connections c ON c.id = f.connection_id").
-		Select(shadowFindingSelect).
-		Where("f.ou_id = ? AND f.id = ?", ouID, id).
-		Limit(1).Scan(&rows).Error
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT f.*, c.name AS connection_name,
+			(SELECT `+shadowFoundBy+` FROM (
+				SELECT g.id, g.connection_id, gc.name AS connection_name, g.present
+				FROM shadow_findings g JOIN shadow_connections gc ON gc.id = g.connection_id
+				WHERE g.ou_id = f.ou_id AND g.provider = f.provider AND g.kind = f.kind AND g.external_id = f.external_id
+			) same) AS found_by
+		FROM shadow_findings f JOIN shadow_connections c ON c.id = f.connection_id
+		WHERE f.ou_id = ? AND f.id = ?
+		LIMIT 1`, ouID, id).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 	if len(rows) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
+	if err := decodeFoundBy(&rows[0]); err != nil {
+		return nil, err
+	}
 	return &rows[0], nil
 }
 
+func decodeFoundBy(row *ShadowFindingRow) error {
+	row.FoundBy = []ShadowFindingSource{}
+	if strings.TrimSpace(row.FoundByJSON) == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(row.FoundByJSON), &row.FoundBy); err != nil {
+		return fmt.Errorf("decoding the connections that found an agent: %w", err)
+	}
+	return nil
+}
+
+// ListSignals returns the evidence of the agent a finding stands for, from
+// every connection that found it: each code and source once, as last seen.
 func (r *shadowAgentRepository) ListSignals(ctx context.Context, ouID string, findingID uuid.UUID) ([]models.ShadowFindingSignal, error) {
 	var out []models.ShadowFindingSignal
-	err := r.db.WithContext(ctx).Where("ou_id = ? AND finding_id = ?", ouID, findingID).
-		Order("weight DESC, code ASC, source ASC").Find(&out).Error
-	return out, err
-}
-
-func (r *shadowAgentRepository) ListFindingKeys(ctx context.Context, ouID string, findingID uuid.UUID) ([]models.ShadowAPIKey, error) {
-	var out []models.ShadowAPIKey
-	err := r.db.WithContext(ctx).Where("ou_id = ? AND finding_id = ?", ouID, findingID).
-		Order("name ASC").Find(&out).Error
-	return out, err
-}
-
-func (r *shadowAgentRepository) ListUsage(ctx context.Context, ouID string, findingID uuid.UUID) ([]models.ShadowUsageDaily, error) {
-	var out []models.ShadowUsageDaily
-	err := r.db.WithContext(ctx).Where("ou_id = ? AND finding_id = ?", ouID, findingID).
-		Order("day ASC, key_id ASC, model ASC").Find(&out).Error
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT * FROM (
+			SELECT DISTINCT ON (s.code, s.source) s.*
+			FROM shadow_finding_signals s
+			JOIN shadow_findings g ON g.id = s.finding_id
+			JOIN shadow_findings f ON f.ou_id = g.ou_id AND f.provider = g.provider AND f.kind = g.kind
+				AND f.external_id = g.external_id
+			WHERE f.ou_id = ? AND f.id = ? AND s.ou_id = ?
+			ORDER BY s.code, s.source, s.detected_at DESC
+		) evidence ORDER BY code ASC, source ASC`, ouID, findingID, ouID).Scan(&out).Error
 	return out, err
 }
 
 func (r *shadowAgentRepository) UpdateFindingStatus(ctx context.Context, ouID string, id uuid.UUID, status string) error {
-	res := r.db.WithContext(ctx).Model(&models.ShadowFinding{}).
-		Where("ou_id = ? AND id = ?", ouID, id).
-		Updates(map[string]any{"status": status, "updated_at": time.Now().UTC()})
+	res := r.db.WithContext(ctx).Exec(`
+		UPDATE shadow_findings f SET status = ?, updated_at = NOW()
+		FROM shadow_findings o
+		WHERE o.ou_id = ? AND o.id = ?
+			AND f.ou_id = o.ou_id AND f.provider = o.provider AND f.kind = o.kind AND f.external_id = o.external_id`,
+		status, ouID, id)
 	if res.Error != nil {
 		return res.Error
 	}
@@ -744,75 +654,52 @@ func (r *shadowAgentRepository) UpdateFindingStatus(ctx context.Context, ouID st
 	return nil
 }
 
-func (r *shadowAgentRepository) OnboardFinding(
-	ctx context.Context, ouID string, id uuid.UUID, project, agent, by string, at time.Time,
-) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var f models.ShadowFinding
-		if err := tx.Select("id", "linked_agent").Where("ou_id = ? AND id = ?", ouID, id).First(&f).Error; err != nil {
-			return err
+func (r *shadowAgentRepository) DeleteFinding(ctx context.Context, ouID string, id uuid.UUID) (bool, error) {
+	// Evidence and per-scan links go with their rows (ON DELETE CASCADE).
+	res := r.db.WithContext(ctx).Exec(`
+		DELETE FROM shadow_findings f
+		USING shadow_findings o
+		WHERE o.ou_id = ? AND o.id = ?
+			AND f.ou_id = o.ou_id AND f.provider = o.provider AND f.kind = o.kind AND f.external_id = o.external_id`,
+		ouID, id)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+func (r *shadowAgentRepository) DeleteFindings(ctx context.Context, ouID string) (int64, error) {
+	var agents int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Raw(`SELECT COUNT(DISTINCT (provider, kind, external_id)) FROM shadow_findings WHERE ou_id = ?`,
+			ouID).Scan(&agents).Error; err != nil {
+			return fmt.Errorf("counting agents: %w", err)
 		}
-		// Atomic: only a finding that is not linked yet is linked. A project
-		// finding has no credential of its own, so it is not watched for
-		// retirement.
-		res := tx.Exec(`UPDATE shadow_findings SET linked_project = ?, linked_agent = ?, onboarded_at = ?, onboarded_by = ?,
-				status = ?, retirement_state = CASE WHEN kind = ? THEN '' ELSE ? END, updated_at = NOW()
-			WHERE ou_id = ? AND id = ? AND linked_agent = ''`,
-			project, agent, at, by, models.ShadowStatusOnboarded, models.ShadowKindProject, models.ShadowRetirementMonitoring, ouID, id)
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return utils.ErrShadowAlreadyOnboarded
+		if err := tx.Exec(`DELETE FROM shadow_findings WHERE ou_id = ?`, ouID).Error; err != nil {
+			return fmt.Errorf("deleting agents: %w", err)
 		}
 		return nil
 	})
-}
-
-func (r *shadowAgentRepository) SetRetirement(
-	ctx context.Context, ouID string, id uuid.UUID, state string, markedBy string, markedAt, verifiedAt *time.Time,
-) error {
-	updates := map[string]any{"retirement_state": state, "updated_at": time.Now().UTC()}
-	if markedAt != nil {
-		updates["retirement_marked_at"] = *markedAt
-		updates["retirement_marked_by"] = markedBy
-	}
-	if verifiedAt != nil {
-		updates["retirement_verified_at"] = *verifiedAt
-		updates["status"] = models.ShadowStatusRetired
-	}
-	res := r.db.WithContext(ctx).Model(&models.ShadowFinding{}).Where("ou_id = ? AND id = ?", ouID, id).Updates(updates)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
-}
-
-func (r *shadowAgentRepository) ListOnboardedFindings(ctx context.Context, ouID string) ([]models.ShadowFinding, error) {
-	var out []models.ShadowFinding
-	err := r.db.WithContext(ctx).Where("ou_id = ? AND linked_agent <> ''", ouID).Find(&out).Error
-	return out, err
+	return agents, err
 }
 
 func (r *shadowAgentRepository) Summary(ctx context.Context, ouID string) (ShadowSummary, error) {
-	sum := ShadowSummary{ByVerdict: map[string]int{}, ByProvider: map[string]int{}, ByStatus: map[string]int{}}
+	sum := ShadowSummary{ByProvider: map[string]int{}, ByStatus: map[string]int{}}
 	var rows []struct {
-		Verdict  string `gorm:"column:verdict"`
 		Provider string `gorm:"column:provider"`
 		Status   string `gorm:"column:status"`
 		N        int    `gorm:"column:n"`
 	}
-	if err := r.db.WithContext(ctx).Table("shadow_findings").
-		Select("verdict, provider, status, COUNT(*) AS n").
-		Where("ou_id = ?", ouID).Group("verdict, provider, status").Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(`
+		SELECT provider, status, COUNT(*) AS n FROM (
+			SELECT DISTINCT ON (provider, kind, external_id) provider, status
+			FROM shadow_findings WHERE ou_id = ? AND present
+			ORDER BY provider, kind, external_id, last_seen_at DESC
+		) agents GROUP BY provider, status`, ouID).Scan(&rows).Error; err != nil {
 		return sum, err
 	}
 	for _, row := range rows {
 		sum.Total += row.N
-		sum.ByVerdict[row.Verdict] += row.N
 		sum.ByProvider[row.Provider] += row.N
 		sum.ByStatus[row.Status] += row.N
 	}

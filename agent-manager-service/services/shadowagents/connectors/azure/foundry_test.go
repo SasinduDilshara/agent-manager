@@ -27,7 +27,6 @@ package azure
 //                                 prompt agent with MCP (foundry.md Call 1 mock note) plus secret headers/instructions
 //   agents_proj1_page2.json       hosted (HostedAgentDefinition), external (ExternalAgentDefinition) and a
 //                                 connected-model prompt agent ("<connection>/<model>", Learn connected models)
-//   responses_*.json              the schema-constructed listResponses example of foundry.md Call 3
 //   assistants_proj1_page1.json   the schema-constructed classic list of foundry_classic.md C1 (L-MIG object + MCP)
 //   assistants_proj1_page2.json   ListAgents_MinimumSet_Gen.json item, with tools emptied and has_more false
 
@@ -49,22 +48,35 @@ import (
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
 )
 
-func foundryConn(f *fakeAzure, deep, classic bool) sa.Connection {
+func foundryConn(f *fakeAzure, classic bool) sa.Connection {
 	conn := f.conn(models.ShadowProviderFoundry)
-	conn.Config.DeepInspection = deep
 	conn.Config.IncludeClassicAgents = classic
 	return conn
+}
+
+func codes(f *sa.Finding) []string {
+	out := make([]string, 0, len(f.Signals))
+	for _, s := range f.Signals {
+		out = append(out, s.Code)
+	}
+	return out
 }
 
 func TestFoundryScan(t *testing.T) {
 	f := newFakeAzure(t)
 	var logs bytes.Buffer
-	res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, true, true), testWindow)
+	res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, true))
 
-	for _, call := range []string{callSubscriptions, callAccounts, callProjects, callAgents, callAssistants, callMetrics, callResponses} {
+	for _, call := range []string{callSubscriptions, callAccounts, callProjects, callAgents, callAssistants} {
 		r := callResult(res, call)
 		require.NotNil(t, r, call)
 		assert.Equal(t, models.ShadowCallOK, r.Outcome, "%s: %s", call, r.Message)
+	}
+	// Only the agent listings and the ARM calls that reach them are made.
+	for _, r := range res.Calls {
+		assert.NotContains(t, r.Call, "metrics", r.Call)
+		assert.NotContains(t, r.Call, "responses", r.Call)
+		assert.NotContains(t, r.Call, "deployments", r.Call)
 	}
 	// Projects: only proj1 has an https "AI Foundry API" endpoint.
 	ep := callResult(res, callProjectEP)
@@ -76,16 +88,23 @@ func TestFoundryScan(t *testing.T) {
 	assert.Equal(t, 2, f.count("assistants:proj1"))
 	// Only the AIServices account is scanned for projects.
 	assert.Equal(t, 0, f.count("projects:aoai1"))
-	// Metrics once, for the account whose deployment the agents name.
-	assert.Equal(t, 1, f.count("metrics:aif1"))
-	assert.Equal(t, 0, f.count("metrics:aoai1"))
 
-	// 5 new agents + 2 classic agents.
+	// 5 agents + 2 classic agents.
 	assert.Len(t, res.Findings, 7)
+	for _, fd := range res.Findings {
+		assert.Equal(t, models.ShadowKindPlatformAgent, fd.Kind, fd.DisplayName)
+		assert.Empty(t, fd.OwnerHint, "the listings do not say who created an agent")
+		require.Len(t, fd.Signals, 1, fd.DisplayName)
+		d, ok := sa.Def(fd.Signals[0].Code)
+		if assert.True(t, ok, fd.Signals[0].Code) {
+			assert.Equal(t, models.ShadowProviderFoundry, d.Provider)
+		}
+		// Every key is on the allow-list (empty values are dropped later, on storage).
+		assert.Equal(t, fd.Attributes, sa.AllowedAttributes(fd.Attributes), "%s has a disallowed attribute", fd.DisplayName)
+	}
 	proj1 := f.srv.URL + "/api/projects/proj1"
 
 	travel := findingByName(t, res, "travel-agent")
-	assert.Equal(t, models.ShadowKindPlatformAgent, travel.Kind)
 	assert.Equal(t, proj1+"/agents/agent_travel", travel.ExternalID)
 	assert.Equal(t, aif1ID+"/projects/proj1", travel.Scope)
 	assert.Equal(t, "enabled", travel.State)
@@ -101,39 +120,22 @@ func TestFoundryScan(t *testing.T) {
 	assert.Equal(t, []sa.ToolRef{{Type: "mcp", Name: "github"}, {Type: "mcp", Name: "jira"}, {Type: "function", Name: "get_weather"}, {Type: "code_interpreter"}}, attrs["tools"])
 	assert.Equal(t, []sa.MCPServerRef{{Label: "github", Origin: "https://api.githubcopilot.com"}, {Label: "jira"}}, attrs["mcpServers"])
 	assert.Equal(t, 4, attrs["toolCount"])
-	assert.NotNil(t, signal(travel, sa.SigFoundryAgentObject))
-	assert.Equal(t, true, signal(travel, sa.SigFoundryAgentObject).Observed["enabled"])
-	ut := signal(travel, sa.SigFoundryUsesTools)
-	require.NotNil(t, ut)
-	assert.Equal(t, 2, ut.Observed["mcpServers"])
-	pu := signal(travel, sa.SigFoundryPlainUsage)
-	require.NotNil(t, pu)
-	assert.Equal(t, int64(7), pu.Observed["requests"])
-	// Plain usage is a signal, not usage rows: the deployment's usage
-	// belongs to the Azure OpenAI deployment finding (no double counting).
-	assert.Empty(t, travel.Usage)
-	tc := signal(travel, sa.SigFoundryToolCallResp)
-	require.NotNil(t, tc)
-	assert.Equal(t, 1, tc.Observed["responsesWithToolCalls"])
-	assert.Equal(t, 2, tc.Observed["toolCalls"])
-	assert.Equal(t, 2, tc.Observed["responsesChecked"])
-	require.NotNil(t, travel.LastUsedAt)
-	assert.Equal(t, time.Unix(1794218400, 0).UTC(), *travel.LastUsedAt)
+	assert.Equal(t, []string{sa.SigFoundryAgentObject}, codes(travel))
+	obj := signal(travel, sa.SigFoundryAgentObject)
+	assert.Equal(t, callAgents, obj.Source)
+	assert.Equal(t, true, obj.Observed["enabled"])
 
-	// Voice agent (official example): no tools; a function_call_output is a
-	// result, not a call; plain usage via the same deployment.
+	// Voice agent (official example): no tools.
 	voice := findingByName(t, res, "server-vad-agent")
 	assert.Equal(t, "voice", voice.Attributes["agentKind"])
-	assert.Nil(t, signal(voice, sa.SigFoundryUsesTools))
-	assert.Nil(t, signal(voice, sa.SigFoundryToolCallResp))
-	assert.NotNil(t, signal(voice, sa.SigFoundryPlainUsage))
+	assert.NotContains(t, voice.Attributes, "tools")
+	assert.Equal(t, []string{sa.SigFoundryAgentObject}, codes(voice))
 
 	hosted := findingByName(t, res, "hosted-agent")
 	assert.Equal(t, "disabled", hosted.State)
 	assert.Equal(t, false, signal(hosted, sa.SigFoundryAgentObject).Observed["enabled"])
 	assert.Equal(t, "myregistry.azurecr.io/hosted-agent:2", hosted.Attributes["image"])
 	assert.Nil(t, hosted.Attributes["model"])
-	assert.Nil(t, signal(hosted, sa.SigFoundryPlainUsage))
 
 	ext := findingByName(t, res, "support-bot")
 	assert.Equal(t, "external", ext.Attributes["agentKind"])
@@ -142,17 +144,14 @@ func TestFoundryScan(t *testing.T) {
 
 	conn := findingByName(t, res, "connected-agent")
 	assert.Equal(t, "otherconn/gpt-4o", conn.Attributes["model"])
-	assert.Nil(t, conn.Attributes["deployment"])
-	assert.Nil(t, signal(conn, sa.SigFoundryPlainUsage))
-	assert.Nil(t, signal(conn, sa.SigFoundryUsesTools), "tools is empty")
+	assert.Nil(t, conn.Attributes["deployment"], "a connected model is not a deployment of this account")
+	assert.NotContains(t, conn.Attributes, "tools", "tools is empty")
 
 	classic := findingByName(t, res, "my-agent")
 	assert.Equal(t, proj1+"/assistants/asst_AVKrdr2KJthDnZiJ51nca1jy", classic.ExternalID)
 	assert.Equal(t, "classic", classic.Attributes["agentKind"])
-	assert.NotNil(t, signal(classic, sa.SigFoundryClassicAgent))
-	assert.Nil(t, signal(classic, sa.SigFoundryAgentObject))
-	assert.NotNil(t, signal(classic, sa.SigFoundryUsesTools))
-	assert.NotNil(t, signal(classic, sa.SigFoundryPlainUsage))
+	assert.Equal(t, []string{sa.SigFoundryClassicAgent}, codes(classic))
+	assert.Equal(t, callAssistants, classic.Signals[0].Source)
 	assert.Equal(t, []sa.ToolRef{{Type: "code_interpreter"}, {Type: "mcp", Name: "github"}, {Type: "connected_agent", Name: "stock_price_bot"}, {Type: "function", Name: "lookup"}},
 		classic.Attributes["tools"])
 	require.NotNil(t, classic.ProviderCreatedAt)
@@ -161,8 +160,7 @@ func TestFoundryScan(t *testing.T) {
 	reqs := f.requests("assistants:proj1")
 	assert.Equal(t, "asst_AVKrdr2KJthDnZiJ51nca1jy", reqs[1].URL.Query().Get("after"))
 	minimal := findingByName(t, res, "mldxpytbtdtrukktpciqtkcttk")
-	assert.Nil(t, signal(minimal, sa.SigFoundryUsesTools))
-	assert.Nil(t, signal(minimal, sa.SigFoundryPlainUsage))
+	assert.NotContains(t, minimal.Attributes, "tools")
 
 	// Token scopes: ARM and the Foundry data plane.
 	foundryScope := false
@@ -176,7 +174,7 @@ func TestFoundryScan(t *testing.T) {
 func TestFoundryRequestBuilding(t *testing.T) {
 	f := newFakeAzure(t)
 	var logs bytes.Buffer
-	newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, true, true), testWindow)
+	newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, true))
 
 	p := f.requests("projects:aif1")[0]
 	assert.Equal(t, aif1ID+"/projects", p.URL.Path)
@@ -197,35 +195,21 @@ func TestFoundryRequestBuilding(t *testing.T) {
 	cl := f.requests("assistants:proj1")[0].URL.Query()
 	assert.Equal(t, "v1", cl.Get("api-version"))
 	assert.Equal(t, "asc", cl.Get("order"))
-
-	var travel []*http.Request
-	for _, r := range f.requests("responses:proj1") {
-		assert.Empty(t, r.URL.Query().Get("api-version"), "the OpenAI-compatible route takes no api-version")
-		assert.Empty(t, r.Header.Get("x-ms-user-identity"))
-		if r.URL.Query().Get("agent_name") == "travel-agent" {
-			travel = append(travel, r)
-		}
-	}
-	require.Len(t, travel, 2)
-	assert.Equal(t, "desc", travel[0].URL.Query().Get("order"))
-	assert.Equal(t, "50", travel[0].URL.Query().Get("limit"))
-	assert.Equal(t, "resp_2", travel[1].URL.Query().Get("after"))
-	assert.Len(t, f.requests("responses:proj1"), 6, "one or two pages per agent, 5 agents")
 }
 
-func TestFoundryDeepInspectionOffAndClassicOff(t *testing.T) {
+func TestFoundryClassicOff(t *testing.T) {
 	f := newFakeAzure(t)
-	f.forbidden["responses:proj1"] = true
 	f.forbidden["assistants:proj1"] = true
 	var logs bytes.Buffer
-	res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, false, false), testWindow)
+	res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, false))
 	assert.Len(t, res.Findings, 5)
-	r := callResult(res, callResponses)
+	r := callResult(res, callAssistants)
+	require.NotNil(t, r)
 	assert.Equal(t, models.ShadowCallSkipped, r.Outcome)
-	assert.Equal(t, "deep inspection is off", r.Message)
-	assert.Equal(t, models.ShadowCallSkipped, callResult(res, callAssistants).Outcome)
-	assert.Nil(t, signal(findingByName(t, res, "travel-agent"), sa.SigFoundryToolCallResp))
-	assert.Nil(t, findingByName(t, res, "travel-agent").LastUsedAt)
+	assert.Equal(t, "classic agents are not included in this connection", r.Message)
+	for _, fd := range res.Findings {
+		assert.Nil(t, signal(fd, sa.SigFoundryClassicAgent), fd.DisplayName)
+	}
 }
 
 func TestFoundryClassicUnavailable(t *testing.T) {
@@ -236,8 +220,9 @@ func TestFoundryClassicUnavailable(t *testing.T) {
 			return true
 		}
 		var logs bytes.Buffer
-		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, false, true), testWindow)
+		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, true))
 		r := callResult(res, callAssistants)
+		require.NotNil(t, r)
 		assert.Equal(t, models.ShadowCallSkipped, r.Outcome)
 		assert.Equal(t, "classic agents not available", r.Message)
 		assert.Len(t, res.Findings, 5)
@@ -275,9 +260,8 @@ func TestFoundryErrors(t *testing.T) {
 			return true
 		}
 		f.forbidden["assistants:proj1"] = true
-		f.forbidden["responses:proj1"] = true
 		var logs bytes.Buffer
-		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, true, true), testWindow)
+		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, true))
 		assert.Equal(t, models.ShadowCallAuthFailed, callResult(res, callAgents).Outcome)
 		assert.Empty(t, res.Findings)
 		assert.NotNil(t, callResult(res, callAgents+" (remaining projects)"))
@@ -289,7 +273,7 @@ func TestFoundryErrors(t *testing.T) {
 			return true
 		}
 		var logs bytes.Buffer
-		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, false, true), testWindow)
+		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, true))
 		assert.Equal(t, models.ShadowCallPermissionDenied, callResult(res, callAgents).Outcome)
 		assert.Len(t, res.Findings, 2)
 		findingByName(t, res, "my-agent")
@@ -301,7 +285,7 @@ func TestFoundryErrors(t *testing.T) {
 			return true
 		}
 		var logs bytes.Buffer
-		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, false, false), testWindow)
+		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, false))
 		assert.Equal(t, models.ShadowCallUnsupported, callResult(res, callAgents).Outcome)
 	})
 	t.Run("429 then 200 on agents", func(t *testing.T) {
@@ -317,7 +301,7 @@ func TestFoundryErrors(t *testing.T) {
 			return false
 		}
 		var logs bytes.Buffer
-		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, false, false), testWindow)
+		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, false))
 		assert.Equal(t, models.ShadowCallOK, callResult(res, callAgents).Outcome)
 		assert.Len(t, res.Findings, 5)
 	})
@@ -329,23 +313,55 @@ func TestFoundryErrors(t *testing.T) {
 		}
 		f.forbidden["accounts"] = true
 		var logs bytes.Buffer
-		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, false, false), testWindow)
+		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, false))
 		assert.Equal(t, models.ShadowCallAuthFailed, callResult(res, callSubscriptions).Outcome)
+		assert.Empty(t, res.Findings)
+	})
+	t.Run("sign-in fails", func(t *testing.T) {
+		f := newFakeAzure(t)
+		f.tokenFail = true
+		var logs bytes.Buffer
+		res := newTestFoundry(f, &logs).Scan(t.Context(), foundryConn(f, true))
+		assert.Empty(t, res.Findings)
+		for _, r := range res.Calls {
+			assert.NotEqual(t, models.ShadowCallOK, r.Outcome, r.Call)
+		}
+		assertNoMarkers(t, res, logs.String())
 	})
 }
 
 func TestFoundryTest(t *testing.T) {
+	checkNames := func(info models.ShadowConnectionTestInfo) []string {
+		var out []string
+		for _, ch := range info.Checks {
+			out = append(out, ch.Name)
+		}
+		return out
+	}
 	t.Run("all checks pass", func(t *testing.T) {
 		f := newFakeAzure(t)
 		var logs bytes.Buffer
-		info := newTestFoundry(f, &logs).Test(t.Context(), foundryConn(f, true, true))
+		info := newTestFoundry(f, &logs).Test(t.Context(), foundryConn(f, true))
 		assert.True(t, info.OK)
-		require.Len(t, info.Checks, 7)
+		assert.Equal(t, []string{checkSignIn, checkAccounts, checkProjects, checkAgents, checkClassic}, checkNames(info))
 		for _, ch := range info.Checks {
 			assert.Equal(t, models.ShadowCallOK, ch.Outcome, "%s: %s", ch.Name, ch.Message)
+			for _, u := range ch.Unlocks {
+				_, ok := sa.Def(u)
+				assert.True(t, ok, "%s unlocks %s, an evidence code", ch.Name, u)
+			}
 		}
 		assert.Equal(t, "1", f.requests("agents:proj1")[0].URL.Query().Get("limit"))
+		assert.Equal(t, "1", f.requests("assistants:proj1")[0].URL.Query().Get("limit"))
 		assertNoMarkers(t, info, logs.String())
+	})
+	t.Run("classic off: no classic check", func(t *testing.T) {
+		f := newFakeAzure(t)
+		f.forbidden["assistants:proj1"] = true
+		var logs bytes.Buffer
+		info := newTestFoundry(f, &logs).Test(t.Context(), foundryConn(f, false))
+		assert.True(t, info.OK)
+		assert.NotContains(t, checkNames(info), checkClassic)
 	})
 	t.Run("agents denied", func(t *testing.T) {
 		f := newFakeAzure(t)
@@ -353,20 +369,18 @@ func TestFoundryTest(t *testing.T) {
 			writeJSON(w, http.StatusForbidden, `{"error":{"code":"PermissionDenied","message":"agents/read missing"}}`)
 			return true
 		}
-		f.forbidden["responses:proj1"] = true
 		var logs bytes.Buffer
-		info := newTestFoundry(f, &logs).Test(t.Context(), foundryConn(f, false, false))
+		info := newTestFoundry(f, &logs).Test(t.Context(), foundryConn(f, false))
 		assert.False(t, info.OK)
+		found := false
 		for _, ch := range info.Checks {
-			switch ch.Name {
-			case checkAgents:
+			if ch.Name == checkAgents {
+				found = true
 				assert.Equal(t, models.ShadowCallPermissionDenied, ch.Outcome)
-				assert.Equal(t, []string{sa.SigFoundryAgentObject, sa.SigFoundryUsesTools}, ch.Unlocks)
-			case checkResponses:
-				assert.Equal(t, models.ShadowCallSkipped, ch.Outcome)
-				assert.Equal(t, "deep inspection is off", ch.Message)
+				assert.Equal(t, []string{sa.SigFoundryAgentObject}, ch.Unlocks)
 			}
 		}
+		assert.True(t, found)
 	})
 	t.Run("classic unavailable is skipped", func(t *testing.T) {
 		f := newFakeAzure(t)
@@ -375,7 +389,7 @@ func TestFoundryTest(t *testing.T) {
 			return true
 		}
 		var logs bytes.Buffer
-		info := newTestFoundry(f, &logs).Test(t.Context(), foundryConn(f, false, true))
+		info := newTestFoundry(f, &logs).Test(t.Context(), foundryConn(f, true))
 		assert.True(t, info.OK)
 		for _, ch := range info.Checks {
 			if ch.Name == checkClassic {
@@ -388,19 +402,11 @@ func TestFoundryTest(t *testing.T) {
 		f := newFakeAzure(t)
 		f.tokenFail = true
 		var logs bytes.Buffer
-		info := newTestFoundry(f, &logs).Test(t.Context(), foundryConn(f, true, true))
+		info := newTestFoundry(f, &logs).Test(t.Context(), foundryConn(f, true))
 		assert.False(t, info.OK)
 		assert.Equal(t, models.ShadowCallAuthFailed, info.Checks[0].Outcome)
+		assert.ElementsMatch(t, []string{sa.SigFoundryAgentObject, sa.SigFoundryClassicAgent}, info.Checks[0].Unlocks)
 	})
-}
-
-func TestIsToolCall(t *testing.T) {
-	for _, ty := range []string{"function_call", "mcp_call", "openapi_call", "a2a_preview_call", "some_future_call"} {
-		assert.True(t, isToolCall(ty), ty)
-	}
-	for _, ty := range []string{"function_call_output", "output_message", "reasoning", "mcp_list_tools", "mcp_approval_request"} {
-		assert.False(t, isToolCall(ty), ty)
-	}
 }
 
 func mustURL(t *testing.T, raw string) *url.URL {
@@ -444,7 +450,7 @@ func TestCursorListBounds(t *testing.T) {
 
 func TestARMListPageLimit(t *testing.T) {
 	g := &stubGetter{body: `{"value":[{"subscriptionId":"s","state":"Enabled"}],"nextLink":"https://arm.example.com/subscriptions?$skiptoken=x"}`}
-	arm := &armClient{client: g, base: mustURL(t, "https://arm.example.com"), sleep: noSleep}
+	arm := &armClient{client: g, base: mustURL(t, "https://arm.example.com")}
 	n, stop, err := armList(t.Context(), arm, arm.url("/subscriptions"), 4, func(subscription) {})
 	require.NoError(t, err)
 	assert.Equal(t, 4, n)

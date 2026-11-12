@@ -29,7 +29,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
@@ -54,8 +53,10 @@ var retentionMarkers = []string{
 }
 
 // fakeAzure is one TLS server playing Entra, ARM and the Foundry data plane.
-// Routes are keyed (e.g. "deployments:aif1"); each key serves fixture
-// pages, and an override can replace any route.
+// Routes are keyed (e.g. "agents:proj1"); each key serves fixture pages,
+// and an override can replace any route. A route the connector no longer
+// calls (deployments, Azure Monitor metrics, stored responses) fails the
+// test.
 type fakeAzure struct {
 	t   *testing.T
 	srv *httptest.Server
@@ -132,19 +133,12 @@ func routeKey(p string) string {
 			return "agents:" + proj
 		case "assistants":
 			return "assistants:" + proj
-		case "openai/v1/responses":
-			return "responses:" + proj
 		}
 	case len(parts) >= 9 && strings.EqualFold(parts[6], "accounts"):
 		acct := parts[7]
 		rest := strings.Join(parts[8:], "/")
-		switch rest {
-		case "deployments":
-			return "deployments:" + acct
-		case "projects":
+		if rest == "projects" {
 			return "projects:" + acct
-		case "providers/Microsoft.Insights/metrics":
-			return "metrics:" + acct
 		}
 	}
 	return "unknown:" + p
@@ -158,7 +152,7 @@ func (f *fakeAzure) serve(w http.ResponseWriter, r *http.Request) {
 	ov := f.override[key]
 	forbidden := f.forbidden[key]
 	f.mu.Unlock()
-	if forbidden {
+	if forbidden || strings.HasPrefix(key, "unknown:") {
 		f.t.Errorf("route %s must not be called", key)
 		http.Error(w, "forbidden route", http.StatusTeapot)
 		return
@@ -234,25 +228,12 @@ func (f *fakeAzure) fixture(key string, q url.Values) string {
 		return pick("subscriptions_page1.json", "subscriptions_page2.json")
 	case "accounts":
 		return pick("accounts_page1.json", "accounts_page2.json")
-	case "deployments:aif1":
-		return "deployments_aif1.json"
-	case "metrics:aif1":
-		return "metrics_aif1.json"
 	case "projects:aif1":
 		return pick("projects_aif1_page1.json", "projects_aif1_page2.json")
 	case "agents:proj1":
 		return pick("agents_proj1_page1.json", "agents_proj1_page2.json")
 	case "assistants:proj1":
 		return pick("assistants_proj1_page1.json", "assistants_proj1_page2.json")
-	case "responses:proj1":
-		switch q.Get("agent_name") {
-		case "travel-agent":
-			return pick("responses_travel_page1.json", "responses_travel_page2.json")
-		case "server-vad-agent":
-			return "responses_message_only.json"
-		default:
-			return "responses_empty.json"
-		}
 	}
 	return ""
 }
@@ -272,22 +253,12 @@ func writeJSON(w http.ResponseWriter, status int, body string) {
 	_, _ = w.Write([]byte(body))
 }
 
-// testWindow is the scan window the fixtures are written for.
-var testWindow = sa.Window{
-	Start: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
-	End:   time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
-}
-
 // newLogger returns a debug logger writing to buf.
 func newLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-// noSleep replaces the connector's metrics backoff wait.
-func noSleep(context.Context, time.Duration) error { return nil }
-
 func newTestFoundry(f *fakeAzure, logs *bytes.Buffer) *Foundry {
 	c, _ := NewFoundry(f.client(), newLogger(logs)).(*Foundry)
-	c.sleep = noSleep
 	return c
 }

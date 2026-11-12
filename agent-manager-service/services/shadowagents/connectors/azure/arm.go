@@ -14,13 +14,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Package azure holds the Azure OpenAI and the Microsoft Foundry Agent
-// Service connectors of Shadow Agent Discovery. Both sign in with the same
-// Entra app (client credentials), read Azure Resource Manager for
-// subscriptions, Cognitive Services accounts, deployments, Foundry projects,
-// Azure Monitor metrics and the Activity Log, and the Foundry connector also
-// reads the Foundry project data plane (agents, classic agents and, with
-// deep inspection, stored responses).
+// Package azure holds the Microsoft Foundry Agent Service connector of
+// Shadow Agent Discovery. It signs in with an Entra app (client
+// credentials), reads Azure Resource Manager for subscriptions, Cognitive
+// Services accounts and Foundry projects, and lists each project's agents
+// (and, optionally, classic agents) on the Foundry project data plane.
 package azure
 
 import (
@@ -42,8 +40,7 @@ import (
 // API versions (evidence/azure_openai.md §2.0-2.4, evidence/foundry.md).
 const (
 	apiSubscriptions = "2022-12-01" // Subscriptions_List
-	apiCognitive     = "2025-06-01" // Accounts_List, Deployments_List, Projects_List
-	apiMetrics       = "2023-10-01" // Metrics_List
+	apiCognitive     = "2025-06-01" // Accounts_List, Projects_List
 	apiFoundry       = "v1"         // Foundry data plane /agents and classic /assistants
 )
 
@@ -51,10 +48,6 @@ const (
 const (
 	maxARMPages   = 100 // ARM list pages (1,000 items per page typical)
 	maxAgentPages = 100 // Foundry /agents and /assistants pages of 100
-	metricsTop    = 1000
-	// metricsMaxAttempts retries the metrics backend's 529, which the Azure
-	// SDK pipeline does not retry.
-	metricsMaxAttempts = 3
 )
 
 // Call names, recorded per scope (subscription, account, project).
@@ -62,12 +55,10 @@ const (
 	callSignIn        = "Microsoft Entra sign-in"
 	callSubscriptions = "GET /subscriptions"
 	callAccounts      = "GET /subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/accounts"
-	callMetrics       = "GET {accountId}/providers/Microsoft.Insights/metrics"
 	callProjects      = "GET {accountId}/projects"
 	callProjectEP     = `ARM project properties.endpoints["AI Foundry API"]`
 	callAgents        = "GET {projectEndpoint}/agents"
 	callAssistants    = "GET {projectEndpoint}/assistants"
-	callResponses     = "GET {projectEndpoint}/openai/v1/responses"
 )
 
 // Account kinds (free strings in the spec; documented in Learn prose).
@@ -340,35 +331,4 @@ func (a *armClient) accounts(ctx context.Context, sub string, kinds []string, ca
 	})
 	record(calls, logger, callAccounts, n, stop, err)
 	return out, err
-}
-
-// parseTime parses an RFC 3339 timestamp leniently.
-func parseTime(s string) *time.Time {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	t, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		return nil
-	}
-	t = t.UTC()
-	return &t
-}
-
-// ownerHint builds a minimised owner hint from a principal string (an
-// email, a UPN or an application/object ID).
-func ownerHint(principal, typ, source string, at *time.Time) models.ShadowOwnerHint {
-	principal = strings.TrimSpace(principal)
-	h := models.ShadowOwnerHint{Type: typ, Source: source, CreatedAt: at}
-	if strings.Contains(principal, "@") {
-		h.Email = principal
-	} else {
-		h.Username = principal
-	}
-	return sa.MinimiseOwnerHint(h)
-}
-
-func hasOwner(h models.ShadowOwnerHint) bool {
-	return h.Email != "" || h.Username != "" || h.Name != ""
 }

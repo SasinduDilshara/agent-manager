@@ -28,28 +28,18 @@ import (
 )
 
 // platform is the Anthropic organization the connection reaches: the
-// first-party Claude API with the Admin API key for the organization routes
-// and a workspace key for each workspace's routes.
+// first-party Claude API with a workspace key for each workspace's routes.
 type platform struct {
-	// orgAPI calls the organization-level routes (/v1/organizations/*).
-	orgAPI *sa.API
 	// base is the expanded base URL.
 	base string
 	// wsAPI returns the client for a workspace's routes, or false when the
 	// connection has no credential for it.
 	wsAPI func(ws string) (*sa.API, bool)
-	// analyticsGroupBy are the group_by[] dimensions of the analytics calls.
-	analyticsGroupBy []string
 }
 
 // call returns the call name a result records, e.g. "GET /v1/agents".
 func (p *platform) call(name string) string {
 	return name
-}
-
-// orgURL is the URL of an organization-level route.
-func (p *platform) orgURL(path string) string {
-	return p.base + path
 }
 
 // wsURL is the URL of a workspace route; the workspace is named in the
@@ -92,14 +82,15 @@ func errNoData() error {
 	return sa.Unsupported("the response has no data list")
 }
 
-// listByID follows the Admin API pagination ({data, has_more, last_id};
-// next page with after_id=last_id) to the end, or maxPages. It returns the
-// number of items read.
-func listByID[T any](ctx context.Context, api *sa.API, u string, q url.Values, h http.Header, maxPages int, fn pageFunc[T]) (int, error) {
+// listByCursor follows the page/next_page pagination of the Managed Agents
+// list to the end, or maxPages. It returns the number of items read.
+func listByCursor[T any](ctx context.Context, api *sa.API, u string, q url.Values, h http.Header, maxPages int,
+	fn pageFunc[T],
+) (int, error) {
 	n := 0
 	q = cloneQuery(q)
 	for page := 1; ; page++ {
-		var env idPage[T]
+		var env cursorPage[T]
 		if err := api.DoJSON(ctx, sa.Request{Method: http.MethodGet, URL: u, Query: q, Header: h}, &env); err != nil {
 			return n, err
 		}
@@ -110,57 +101,14 @@ func listByID[T any](ctx context.Context, api *sa.API, u string, q url.Values, h
 		if !fn(*env.Data) {
 			return n, nil
 		}
-		if !env.HasMore || env.LastID == nil || *env.LastID == "" {
+		if env.NextPage == nil || *env.NextPage == "" || (env.HasMore != nil && !*env.HasMore) {
 			return n, nil
 		}
 		if page >= maxPages {
 			return n, errPageLimit(maxPages)
 		}
-		if q.Get("after_id") == *env.LastID {
-			return n, sa.Unsupported("the API returned the same page cursor twice")
-		}
-		q.Set("after_id", *env.LastID)
-	}
-}
-
-// listByCursor follows the page/next_page pagination (Managed Agents and the
-// analytics endpoints) to the end, or maxPages. Before each page it calls
-// pace (when set), so a caller can honour a rate limit. It returns the
-// number of items read and the envelope's data_refreshed_at, if any.
-func listByCursor[T any](ctx context.Context, api *sa.API, u string, q url.Values, h http.Header, maxPages int,
-	pace func(context.Context) error, fn pageFunc[T],
-) (int, string, error) {
-	n := 0
-	refreshed := ""
-	q = cloneQuery(q)
-	for page := 1; ; page++ {
-		if pace != nil {
-			if err := pace(ctx); err != nil {
-				return n, refreshed, &sa.CallError{Outcome: models.ShadowCallFailed, Message: "cancelled: " + err.Error()}
-			}
-		}
-		var env cursorPage[T]
-		if err := api.DoJSON(ctx, sa.Request{Method: http.MethodGet, URL: u, Query: q, Header: h}, &env); err != nil {
-			return n, refreshed, err
-		}
-		if env.Data == nil {
-			return n, refreshed, errNoData()
-		}
-		if env.DataRefreshedAt != nil {
-			refreshed = *env.DataRefreshedAt
-		}
-		n += len(*env.Data)
-		if !fn(*env.Data) {
-			return n, refreshed, nil
-		}
-		if env.NextPage == nil || *env.NextPage == "" || (env.HasMore != nil && !*env.HasMore) {
-			return n, refreshed, nil
-		}
-		if page >= maxPages {
-			return n, refreshed, errPageLimit(maxPages)
-		}
 		if q.Get("page") == *env.NextPage {
-			return n, refreshed, sa.Unsupported("the API returned the same page cursor twice")
+			return n, sa.Unsupported("the API returned the same page cursor twice")
 		}
 		q.Set("page", *env.NextPage)
 	}

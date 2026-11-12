@@ -49,13 +49,22 @@ import (
 
 const shadowTestAdminKey = "sk-admin-SHADOWTESTSECRET-0123456789"
 
-// shadowTestProjectKey is proj_alpha's project key in the fake.
-const shadowTestProjectKey = "sk-proj-SHADOWTESTSECRET-alpha-0123"
+// Project keys of the fake: each lists its own project's agents.
+var shadowTestProjectKeys = map[string]string{
+	"sk-proj-SHADOWTESTSECRET-alpha-0123": "proj_alpha",
+	"sk-proj-SHADOWTESTSECRET-beta-45678": "proj_beta",
+}
 
-// fakeOpenAIAdmin serves the OpenAI connector's fixtures (official response
-// shapes, see the connector's testdata) for the Admin API calls: page 2 of a
-// list when the request carries a cursor.
-func fakeOpenAIAdmin(t *testing.T) *httptest.Server {
+const (
+	shadowAlphaKey = "sk-proj-SHADOWTESTSECRET-alpha-0123"
+	shadowBetaKey  = "sk-proj-SHADOWTESTSECRET-beta-45678"
+)
+
+// fakeOpenAI serves the OpenAI connector's fixtures (official response
+// shapes, see the connector's testdata): GET /v1/agents with a project key;
+// page 2 of a list when the request carries a cursor. Any other call fails
+// the test.
+func fakeOpenAI(t *testing.T) *httptest.Server {
 	t.Helper()
 	dir := filepath.Join("..", "services", "shadowagents", "connectors", "openai", "testdata")
 	serve := func(w http.ResponseWriter, name string) {
@@ -68,69 +77,31 @@ func fakeOpenAIAdmin(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(b)
 	}
+	unauthorized := func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}`))
+	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Project routes take proj_alpha's project key (never the Admin key).
-		if !strings.HasPrefix(r.URL.Path, "/v1/organization/") {
-			if r.Header.Get("Authorization") != "Bearer "+shadowTestProjectKey {
-				w.WriteHeader(http.StatusUnauthorized)
-				_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}`))
-				return
-			}
-			page := "1"
-			if r.URL.Query().Get("after") != "" {
-				page = "2"
-			}
-			switch p := strings.TrimPrefix(r.URL.Path, "/v1/"); {
-			case p == "agents":
-				serve(w, "agents.proj_alpha.1.json")
-			case p == "agents/sessions":
-				serve(w, "sessions.proj_alpha."+page+".json")
-			case p == "chat/completions":
-				serve(w, "chat_completions.proj_alpha."+page+".json")
-			case p == "batches":
-				serve(w, "batches.proj_alpha."+page+".json")
-			case strings.HasPrefix(p, "files/") && strings.HasSuffix(p, "/content"):
-				serve(w, strings.TrimSuffix(strings.TrimPrefix(p, "files/"), "/content")+".jsonl")
-			default:
-				serve(w, "missing")
-			}
-			return
-		}
-		if r.Header.Get("Authorization") != "Bearer "+shadowTestAdminKey {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}`))
-			return
-		}
 		page := "1"
-		if r.URL.Query().Get("after") != "" || r.URL.Query().Get("page") != "" {
+		if r.URL.Query().Get("after") != "" {
 			page = "2"
 		}
-		p := strings.TrimPrefix(r.URL.Path, "/v1/organization/")
-		switch {
-		case p == "projects":
-			serve(w, "projects."+page+".json")
-		case strings.HasPrefix(p, "projects/") && strings.HasSuffix(p, "/api_keys"):
-			proj := strings.TrimSuffix(strings.TrimPrefix(p, "projects/"), "/api_keys")
-			if proj == "proj_old" {
-				w.WriteHeader(http.StatusBadRequest)
-				serve(w, "error_archived_project.json")
+		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		switch r.URL.Path {
+		case "/v1/agents":
+			proj, ok := shadowTestProjectKeys[auth]
+			if !ok {
+				unauthorized(w)
 				return
 			}
-			serve(w, "api_keys."+proj+"."+page+".json")
-		case p == "usage/completions":
-			serve(w, "usage_completions."+page+".json")
-		case p == "costs":
-			serve(w, "costs."+page+".json")
-		case p == "usage/web_search_calls":
-			serve(w, "web_search_calls."+page+".json")
-		case p == "usage/file_search_calls":
-			serve(w, "file_search_calls."+page+".json")
-		case p == "usage/code_interpreter_sessions":
-			serve(w, "code_interpreter_sessions."+page+".json")
-		case p == "audit_logs":
-			serve(w, "audit_logs."+page+".json")
+			if r.Header.Get("OpenAI-Beta") != "agents=v1" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			serve(w, "agents."+proj+"."+page+".json")
 		default:
-			serve(w, "missing")
+			t.Errorf("unexpected OpenAI call %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 }
@@ -161,124 +132,284 @@ func decodeInto[T any](t *testing.T, b []byte) T {
 	return v
 }
 
+// runShadowScans runs the queued scans the way the worker does.
+func runShadowScans(t *testing.T, ctx context.Context, logs *bytes.Buffer) {
+	t.Helper()
+	key, err := hex.DecodeString(config.GetConfig().EncryptionKey)
+	require.NoError(t, err)
+	repo := repositories.NewShadowAgentRepository(db.GetDB())
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	services.NewShadowAgentScanner(repo, wiring.ProvideShadowConnectors(logger), key, logger).RunOnce(ctx)
+}
+
+func (a shadowAPI) agents(query string) spec.ShadowFindingListResponse {
+	a.t.Helper()
+	code, body := a.do(http.MethodGet, "/findings"+query, nil)
+	require.Equal(a.t, http.StatusOK, code, string(body))
+	return decodeInto[spec.ShadowFindingListResponse](a.t, body)
+}
+
+func byExternalID(list spec.ShadowFindingListResponse) map[string]spec.ShadowFindingSummary {
+	out := map[string]spec.ShadowFindingSummary{}
+	for _, f := range list.Findings {
+		out[f.ExternalId] = f
+	}
+	return out
+}
+
+func TestShadowAgentDiscoveryAPI_Catalog(t *testing.T) {
+	ouID := "ou-" + uuid.NewString()
+	app := apitestutils.MakeAppClientWithDeps(t, wiring.TestClients{OpenChoreoClient: apitestutils.CreateMockOpenChoreoClient()},
+		jwtassertion.NewMockMiddlewareWithOUID(t, ouID))
+	api := shadowAPI{t: t, app: app, org: "shadow-org-" + uuid.NewString()[:6]}
+
+	code, body := api.do(http.MethodGet, "/providers", nil)
+	require.Equal(t, http.StatusOK, code, string(body))
+	assert.NotContains(t, string(body), `"scoring"`)
+	assert.NotContains(t, string(body), `"weight"`)
+	providers := decodeInto[spec.ShadowProviderListResponse](t, body)
+	var names []string
+	for _, p := range providers.Providers {
+		names = append(names, p.Provider)
+		assert.NotEmpty(t, p.Capabilities, p.Provider)
+		switch p.Provider {
+		case "openai", "anthropic":
+			assert.Nil(t, p.CredentialChoice, p.Provider)
+			for _, f := range p.Fields {
+				switch f.Key {
+				case "scopedKeys":
+					assert.True(t, f.Required, p.Provider)
+				case "apiKey":
+					assert.False(t, f.Required, p.Provider)
+				default:
+					t.Errorf("%s has an unexpected field %s", p.Provider, f.Key)
+				}
+			}
+		case "bedrock":
+			require.NotNil(t, p.CredentialChoice, "Bedrock needs at least one service")
+			assert.Equal(t, []string{"scanAgentCore", "scanAgentRegistry", "scanClassicAgents"}, p.CredentialChoice.Fields)
+		}
+	}
+	assert.Equal(t, []string{"openai", "anthropic", "bedrock", "google", "foundry", "github", "azure_devops"}, names)
+	var codes []string
+	for _, d := range providers.Signals {
+		codes = append(codes, d.Code)
+		assert.NotEmpty(t, d.Condition, d.Code)
+	}
+	assert.Equal(t, []string{
+		"openai.agent_object", "anthropic.managed_agent",
+		"bedrock.agentcore_runtime", "bedrock.registry_agent_record", "bedrock.classic_agent",
+		"google.agent_runtime_engine", "google.registry_agent",
+		"foundry.agent_object", "foundry.classic_agent", "foundry.external_possible_duplicate",
+	}, codes)
+}
+
+// TestShadowAgentDiscoveryAPI covers the whole flow against a fake OpenAI:
+// platforms, tests, scans of one platform and of all, the deduplicated
+// unregistered agents with the platform filter, review status, agents no
+// longer listed, clearing scans, retention and isolation.
 func TestShadowAgentDiscoveryAPI(t *testing.T) {
 	ctx := context.Background()
 	org := "shadow-org-" + uuid.NewString()[:6]
 	ouID := "ou-" + uuid.NewString()
-	agentLookups := 0
 	oc := apitestutils.CreateMockOpenChoreoClient()
-	oc.GetComponentFunc = func(_ context.Context, _ string, projName, agentName string) (*models.AgentResponse, error) {
-		agentLookups++
-		return &models.AgentResponse{Name: agentName, ProjectName: projName}, nil
-	}
 	app := apitestutils.MakeAppClientWithDeps(t, wiring.TestClients{OpenChoreoClient: oc},
 		jwtassertion.NewMockMiddlewareWithOUID(t, ouID))
 	api := shadowAPI{t: t, app: app, org: org}
-	fake := fakeOpenAIAdmin(t)
+	fake := fakeOpenAI(t)
 	defer fake.Close()
+	logs := &bytes.Buffer{}
 
-	// Providers catalog.
-	code, body := api.do(http.MethodGet, "/providers", nil)
-	require.Equal(t, http.StatusOK, code, string(body))
-	providers := decodeInto[spec.ShadowProviderListResponse](t, body)
-	assert.Len(t, providers.Providers, 5)
-	assert.NotEmpty(t, providers.Signals)
-	assert.EqualValues(t, 60, providers.Scoring.AgentThreshold)
+	// A project key is required, and there is no Admin key setting: an Admin
+	// key cannot list agents.
+	code, body := api.do(http.MethodPost, "/connections", map[string]any{
+		"name": "no key", "provider": "openai", "endpoints": map[string]string{"api": fake.URL + "/v1"},
+		"settings": map[string]any{},
+	})
+	require.Equal(t, http.StatusBadRequest, code)
+	assert.Contains(t, string(body), "Project keys needs at least one ID and key")
+	code, body = api.do(http.MethodPost, "/connections", map[string]any{
+		"name": "admin", "provider": "openai", "endpoints": map[string]string{"api": fake.URL + "/v1"},
+		"settings": map[string]any{"apiKey": shadowTestAdminKey, "scopedKeys": map[string]any{"proj_alpha": shadowAlphaKey}},
+	})
+	require.Equal(t, http.StatusBadRequest, code)
+	assert.Contains(t, string(body), `unknown setting \"apiKey\"`)
+	// Removed settings are refused.
+	code, _ = api.do(http.MethodPost, "/connections", map[string]any{
+		"name": "deep", "provider": "openai", "endpoints": map[string]string{"api": fake.URL + "/v1"},
+		"settings": map[string]any{"scopedKeys": map[string]any{"proj_alpha": shadowAlphaKey}, "deepInspection": true},
+	})
+	assert.Equal(t, http.StatusBadRequest, code)
 
-	// Connect OpenAI, pointed at the fake.
+	// Platform 1: both projects.
 	connReq := map[string]any{
-		"name": "OpenAI test", "provider": "openai",
-		"endpoints": map[string]string{"api": fake.URL + "/v1"},
-		"settings":  map[string]any{"apiKey": shadowTestAdminKey},
+		"name": "OpenAI org", "provider": "openai", "endpoints": map[string]string{"api": fake.URL + "/v1"},
+		"settings": map[string]any{
+			"scopedKeys": map[string]any{"proj_alpha": shadowAlphaKey, "proj_beta": shadowBetaKey},
+		},
 	}
 	code, body = api.do(http.MethodPost, "/connections", connReq)
 	require.Equal(t, http.StatusCreated, code, string(body))
-	assert.NotContains(t, string(body), "SHADOWTESTSECRET", "the secret is never returned")
-	conn := decodeInto[spec.ShadowConnectionResponse](t, body)
-	assert.Equal(t, "sk-a…6789", conn.SecretHints["apiKey"])
-	require.Len(t, conn.EndpointWarnings, 1, "a local endpoint is not an official host")
-
+	assert.NotContains(t, string(body), "SHADOWTESTSECRET", "a secret is never returned")
+	conn1 := decodeInto[spec.ShadowConnectionResponse](t, body)
+	assert.NotContains(t, conn1.SecretHints, "apiKey")
+	assert.Contains(t, conn1.SecretHints, "scopedKeys.proj_alpha")
+	assert.Contains(t, conn1.SecretHints, "scopedKeys.proj_beta")
+	require.Len(t, conn1.EndpointWarnings, 1, "a local endpoint is not an official host")
 	code, _ = api.do(http.MethodPost, "/connections", connReq)
 	assert.Equal(t, http.StatusConflict, code, "duplicate name")
-	code, _ = api.do(http.MethodPost, "/connections", map[string]any{"name": "x", "provider": "acme", "settings": map[string]any{}})
-	assert.Equal(t, http.StatusBadRequest, code)
-
-	// The stored credential is encrypted.
 	var stored models.ShadowConnection
-	require.NoError(t, db.GetDB().WithContext(ctx).Where("id = ?", conn.Id).First(&stored).Error)
-	assert.NotContains(t, string(stored.SecretEncrypted), "SHADOWTESTSECRET")
+	require.NoError(t, db.GetDB().WithContext(ctx).Where("id = ?", conn1.Id).First(&stored).Error)
+	assert.NotContains(t, string(stored.SecretEncrypted), "SHADOWTESTSECRET", "the credential is stored encrypted")
 
-	// Test the connection.
-	code, body = api.do(http.MethodPost, "/connections/"+conn.Id+"/test", nil)
+	// Test it: one agent listing per project key, nothing else.
+	code, body = api.do(http.MethodPost, "/connections/"+conn1.Id+"/test", nil)
 	require.Equal(t, http.StatusOK, code, string(body))
-	assert.True(t, decodeInto[spec.ShadowConnectionTest](t, body).Ok, string(body))
+	test := decodeInto[spec.ShadowConnectionTest](t, body)
+	assert.True(t, test.Ok, string(body))
+	var checks []string
+	for _, ch := range test.Checks {
+		checks = append(checks, ch.Name)
+		assert.Equal(t, "ok", ch.Outcome, ch.Name)
+	}
+	assert.Equal(t, []string{"Agents (project proj_alpha)", "Agents (project proj_beta)"}, checks)
 
-	// Queue a scan and run it the way the worker does.
-	code, body = api.do(http.MethodPost, "/scans", map[string]any{"lookbackDays": 30})
+	// Scan this platform only.
+	code, body = api.do(http.MethodPost, "/scans", map[string]any{"connectionIds": []string{conn1.Id}})
 	require.Equal(t, http.StatusAccepted, code, string(body))
-	scan := decodeInto[spec.ShadowScanResponse](t, body)
+	scan1 := decodeInto[spec.ShadowScanResponse](t, body)
+	assert.Equal(t, []string{conn1.Id}, scan1.ConnectionIds)
+	assert.NotContains(t, string(body), "lookbackDays")
 	code, _ = api.do(http.MethodPost, "/scans", map[string]any{})
 	assert.Equal(t, http.StatusConflict, code, "one active scan per org")
-
-	key, err := hex.DecodeString(config.GetConfig().EncryptionKey)
-	require.NoError(t, err)
-	repo := repositories.NewShadowAgentRepository(db.GetDB())
-	logs := &bytes.Buffer{}
-	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	services.NewShadowAgentScanner(repo, wiring.ProvideShadowConnectors(logger), key, logger).RunOnce(ctx)
-
-	code, body = api.do(http.MethodGet, "/scans/"+scan.Id, nil)
+	runShadowScans(t, ctx, logs)
+	code, body = api.do(http.MethodGet, "/scans/"+scan1.Id, nil)
 	require.Equal(t, http.StatusOK, code)
-	scan = decodeInto[spec.ShadowScanResponse](t, body)
-	require.Contains(t, []string{"succeeded", "partial"}, scan.Status, string(body))
-	require.Len(t, scan.Results, 1)
-	assert.Positive(t, scan.Results[0].FindingsCount, string(body))
-
-	// Findings.
-	code, body = api.do(http.MethodGet, "/findings?kind=api_key", nil)
-	require.Equal(t, http.StatusOK, code, string(body))
-	list := decodeInto[spec.ShadowFindingListResponse](t, body)
-	require.NotEmpty(t, list.Findings)
-	var alpha *spec.ShadowFindingSummary
-	for i := range list.Findings {
-		if list.Findings[i].ExternalId == "key_alpha1" {
-			alpha = &list.Findings[i]
-		}
+	scan1 = decodeInto[spec.ShadowScanResponse](t, body)
+	require.Equal(t, "succeeded", scan1.Status, string(body))
+	require.Len(t, scan1.Results, 1)
+	assert.EqualValues(t, 3, scan1.Results[0].FindingsCount)
+	for _, c := range scan1.Results[0].Calls {
+		assert.Equal(t, "GET /v1/agents", c.Call, "only the agent listing is called")
 	}
-	require.NotNil(t, alpha, string(body))
-	assert.Equal(t, "alice@example.com", *alpha.OwnerHint.Email)
-	assert.Positive(t, alpha.Score)
 
-	code, body = api.do(http.MethodGet, "/findings/"+alpha.Id, nil)
-	require.Equal(t, http.StatusOK, code)
-	detail := decodeInto[spec.ShadowFindingDetail](t, body)
-	assert.NotEmpty(t, detail.Signals)
-	require.NotEmpty(t, detail.Keys)
-	assert.Equal(t, "sk-abc...def", detail.Keys[0].RedactedHint)
-	assert.Empty(t, detail.Retirement.State)
+	list := api.agents("")
+	assert.EqualValues(t, 3, list.Total)
+	agents := byExternalID(list)
+	require.Contains(t, agents, "agent_alpha")
+	alpha := agents["agent_alpha"]
+	assert.Equal(t, "Support agent", alpha.DisplayName)
+	assert.Equal(t, "platform_agent", alpha.Kind)
+	assert.Equal(t, "openai", alpha.Provider)
+	assert.True(t, alpha.Present)
+	require.Len(t, alpha.FoundBy, 1)
+	assert.Equal(t, "OpenAI org", alpha.FoundBy[0].ConnectionName)
+	assert.Contains(t, agents, "agent_b1")
+	assert.Contains(t, agents, "agent_b2", "both pages of proj_beta's agents")
 
+	// Platform 2: only proj_alpha's key. Scan every platform.
+	code, body = api.do(http.MethodPost, "/connections", map[string]any{
+		"name": "OpenAI alpha team", "provider": "openai", "endpoints": map[string]string{"api": fake.URL + "/v1"},
+		"settings": map[string]any{"scopedKeys": map[string]any{"proj_alpha": shadowAlphaKey}},
+	})
+	require.Equal(t, http.StatusCreated, code, string(body))
+	conn2 := decodeInto[spec.ShadowConnectionResponse](t, body)
+	code, body = api.do(http.MethodPost, "/connections/"+conn2.Id+"/test", nil)
+	require.Equal(t, http.StatusOK, code, string(body))
+	test = decodeInto[spec.ShadowConnectionTest](t, body)
+	assert.True(t, test.Ok, string(body))
+	require.Len(t, test.Checks, 1)
+	assert.Equal(t, "Agents (project proj_alpha)", test.Checks[0].Name)
+	code, body = api.do(http.MethodPost, "/scans", map[string]any{})
+	require.Equal(t, http.StatusAccepted, code, string(body))
+	scan2 := decodeInto[spec.ShadowScanResponse](t, body)
+	assert.ElementsMatch(t, []string{conn1.Id, conn2.Id}, scan2.ConnectionIds)
+	runShadowScans(t, ctx, logs)
+
+	// The same agent found through two platforms is one agent.
+	list = api.agents("")
+	assert.EqualValues(t, 3, list.Total, "agent_alpha is listed once")
+	alpha = byExternalID(list)["agent_alpha"]
+	require.Len(t, alpha.FoundBy, 2)
+	assert.Equal(t, "OpenAI alpha team", alpha.FoundBy[0].ConnectionName)
+	assert.Equal(t, "OpenAI org", alpha.FoundBy[1].ConnectionName)
 	code, body = api.do(http.MethodGet, "/summary", nil)
 	require.Equal(t, http.StatusOK, code)
 	summary := decodeInto[spec.ShadowAgentSummary](t, body)
-	assert.EqualValues(t, 1, summary.Connections)
-	assert.Positive(t, summary.TotalFindings)
+	assert.EqualValues(t, 3, summary.TotalFindings)
+	assert.EqualValues(t, map[string]int32{"openai": 3}, summary.ByProvider)
+	assert.EqualValues(t, 2, summary.Connections)
+	assert.NotContains(t, string(body), "byVerdict")
 
-	// Review, onboard, retirement guard.
-	code, _ = api.do(http.MethodPatch, "/findings/"+alpha.Id, map[string]any{"status": "reviewed"})
-	assert.Equal(t, http.StatusOK, code)
-	code, body = api.do(http.MethodPost, "/findings/"+alpha.Id+"/onboarding", map[string]any{"projectName": "default", "agentName": "alpha"})
+	// The platform filter.
+	assert.EqualValues(t, 3, api.agents("?provider=openai").Total)
+	assert.EqualValues(t, 0, api.agents("?provider=bedrock").Total)
+	code, _ = api.do(http.MethodGet, "/findings?provider=acme", nil)
+	assert.Equal(t, http.StatusBadRequest, code)
+
+	// The agent's detail: evidence, found by both platforms.
+	code, body = api.do(http.MethodGet, "/findings/"+alpha.Id, nil)
 	require.Equal(t, http.StatusOK, code, string(body))
-	assert.Equal(t, 1, agentLookups)
-	onboarded := decodeInto[spec.ShadowFindingDetail](t, body)
-	assert.Equal(t, "onboarded", onboarded.Status)
-	assert.Equal(t, "monitoring", onboarded.Retirement.State)
-	code, _ = api.do(http.MethodPost, "/findings/"+alpha.Id+"/onboarding", map[string]any{"projectName": "default", "agentName": "alpha"})
-	assert.Equal(t, http.StatusConflict, code)
-	code, _ = api.do(http.MethodPost, "/findings/"+alpha.Id+"/retirement/confirm", nil)
-	assert.Equal(t, http.StatusConflict, code, "not ready before 7 days without direct usage")
+	detail := decodeInto[spec.ShadowFindingDetail](t, body)
+	require.Len(t, detail.Signals, 1, "the same evidence from two platforms is shown once")
+	assert.Equal(t, "openai.agent_object", detail.Signals[0].Code)
+	assert.Equal(t, "Agent object", detail.Signals[0].Name)
+	assert.Equal(t, "GET /v1/agents", detail.Signals[0].Source)
+	assert.Contains(t, detail.Signals[0].Condition, "GET /v1/agents")
+	assert.Len(t, detail.FoundBy, 2)
+	assert.Equal(t, "gpt-x", detail.Attributes["model"])
+	for _, removed := range []string{"score", "verdict", "usage", "keys", "retirement", "linkedAgent", "requestsInWindow"} {
+		assert.NotContains(t, string(body), `"`+removed+`"`, removed)
+	}
 
-	// Retention: no secret or prompt anywhere in the stored data or logs.
-	for _, table := range []string{"shadow_connections", "shadow_scans", "shadow_findings", "shadow_finding_signals", "shadow_api_keys", "shadow_usage_daily"} {
+	// Review: one status for the agent, on every platform that found it.
+	code, body = api.do(http.MethodPatch, "/findings/"+alpha.Id, map[string]any{"status": "reviewed"})
+	require.Equal(t, http.StatusOK, code, string(body))
+	for _, src := range detail.FoundBy {
+		code, body = api.do(http.MethodGet, "/findings/"+src.FindingId, nil)
+		require.Equal(t, http.StatusOK, code)
+		assert.Equal(t, "reviewed", decodeInto[spec.ShadowFindingDetail](t, body).Status, src.ConnectionName)
+	}
+	assert.EqualValues(t, 1, api.agents("?status=reviewed").Total)
+	code, _ = api.do(http.MethodPatch, "/findings/"+alpha.Id, map[string]any{"status": "onboarded"})
+	assert.Equal(t, http.StatusBadRequest, code)
+
+	// Onboarding and retirement are gone.
+	code, _ = api.do(http.MethodPost, "/findings/"+alpha.Id+"/onboarding", map[string]any{"projectName": "p", "agentName": "a"})
+	assert.GreaterOrEqual(t, code, 400)
+	code, _ = api.do(http.MethodPost, "/findings/"+alpha.Id+"/retirement/confirm", nil)
+	assert.GreaterOrEqual(t, code, 400)
+
+	// Platform 1 drops proj_beta: its complete listing no longer returns
+	// proj_beta's agents, so they are no longer listed.
+	code, body = api.do(http.MethodPut, "/connections/"+conn1.Id, map[string]any{
+		"name": "OpenAI org", "provider": "openai", "settings": map[string]any{"scopedKeys": map[string]any{"proj_alpha": ""}},
+	})
+	require.Equal(t, http.StatusOK, code, string(body))
+	code, body = api.do(http.MethodPost, "/scans", map[string]any{"connectionIds": []string{conn1.Id}})
+	require.Equal(t, http.StatusAccepted, code, string(body))
+	runShadowScans(t, ctx, logs)
+	list = api.agents("")
+	assert.EqualValues(t, 1, list.Total)
+	assert.Equal(t, "agent_alpha", list.Findings[0].ExternalId)
+	// The first scan's own list still shows them, as no longer listed.
+	scanList := api.agents("?scanId=" + scan1.Id)
+	require.EqualValues(t, 3, scanList.Total)
+	for id, a := range byExternalID(scanList) {
+		assert.Equal(t, id == "agent_alpha", a.Present, id)
+	}
+
+	// Clear the scans: the agents stay.
+	code, body = api.do(http.MethodDelete, "/scans", nil)
+	require.Equal(t, http.StatusOK, code, string(body))
+	assert.EqualValues(t, 3, decodeInto[spec.ShadowScanClearResponse](t, body).Deleted)
+	code, body = api.do(http.MethodGet, "/scans", nil)
+	require.Equal(t, http.StatusOK, code)
+	assert.Empty(t, decodeInto[spec.ShadowScanListResponse](t, body).Scans)
+	assert.EqualValues(t, 1, api.agents("").Total)
+
+	// Retention: no secret or instruction anywhere in the stored data or logs.
+	for _, table := range []string{"shadow_connections", "shadow_scans", "shadow_findings", "shadow_finding_signals"} {
 		var dump string
 		require.NoError(t, db.GetDB().WithContext(ctx).Raw(
 			fmt.Sprintf("SELECT COALESCE(string_agg(t::text, ' '), '') FROM %s t WHERE ou_id = ?", table), ouID).Scan(&dump).Error)
@@ -292,188 +423,57 @@ func TestShadowAgentDiscoveryAPI(t *testing.T) {
 		wiring.TestClients{OpenChoreoClient: oc}, jwtassertion.NewMockMiddlewareWithOUID(t, "ou-"+uuid.NewString()))}
 	code, _ = other.do(http.MethodGet, "/findings/"+alpha.Id, nil)
 	assert.Equal(t, http.StatusNotFound, code)
-	code, _ = other.do(http.MethodGet, "/connections/"+conn.Id, nil)
+	code, _ = other.do(http.MethodGet, "/connections/"+conn1.Id, nil)
 	assert.Equal(t, http.StatusNotFound, code)
+	assert.EqualValues(t, 0, other.agents("").Total)
+	code, _ = other.do(http.MethodDelete, "/findings/"+alpha.Id, nil)
+	assert.Equal(t, http.StatusNotFound, code, "another org cannot delete the agent")
+	code, body = other.do(http.MethodDelete, "/findings", nil)
+	require.Equal(t, http.StatusOK, code, string(body))
+	assert.EqualValues(t, 0, decodeInto[spec.ShadowFindingClearResponse](t, body).Deleted)
+	require.EqualValues(t, 1, api.agents("").Total, "another org's delete all leaves this org's agents")
 
-	// Delete the connection: its findings go with it.
-	code, _ = api.do(http.MethodDelete, "/connections/"+conn.Id, nil)
+	// Delete one agent: it goes for both platforms that found it.
+	code, _ = api.do(http.MethodDelete, "/findings/"+alpha.Id, nil)
 	assert.Equal(t, http.StatusNoContent, code)
-	code, body = api.do(http.MethodGet, "/findings", nil)
-	require.Equal(t, http.StatusOK, code)
-	assert.Empty(t, decodeInto[spec.ShadowFindingListResponse](t, body).Findings)
-}
+	code, _ = api.do(http.MethodGet, "/findings/"+alpha.Id, nil)
+	assert.Equal(t, http.StatusNotFound, code)
+	assert.EqualValues(t, 0, api.agents("").Total)
+	code, _ = api.do(http.MethodDelete, "/findings/"+alpha.Id, nil)
+	assert.Equal(t, http.StatusNotFound, code, "already deleted")
+	code, _ = api.do(http.MethodDelete, "/findings/not-a-uuid", nil)
+	assert.Equal(t, http.StatusNotFound, code, "as GET: a malformed ID names no agent")
 
-// TestShadowAgentDiscoveryAPI_ProjectKeysOnly covers a connection without an
-// Admin API key end to end: the provider catalog says so, the connection is
-// accepted with a project key alone, the test and the scan read only the
-// project routes, tool-call evidence lands on a project finding, a project
-// finding cannot be retired, and an Admin key can be added and removed.
-func TestShadowAgentDiscoveryAPI_ProjectKeysOnly(t *testing.T) {
-	ctx := context.Background()
-	org := "shadow-org-" + uuid.NewString()[:6]
-	ouID := "ou-" + uuid.NewString()
-	oc := apitestutils.CreateMockOpenChoreoClient()
-	oc.GetComponentFunc = func(_ context.Context, _ string, projName, agentName string) (*models.AgentResponse, error) {
-		return &models.AgentResponse{Name: agentName, ProjectName: projName}, nil
-	}
-	app := apitestutils.MakeAppClientWithDeps(t, wiring.TestClients{OpenChoreoClient: oc},
-		jwtassertion.NewMockMiddlewareWithOUID(t, ouID))
-	api := shadowAPI{t: t, app: app, org: org}
-	fake := fakeOpenAIAdmin(t)
-	defer fake.Close()
-
-	// The catalog marks the Admin key optional and recommended, names the
-	// credential choice and lists capabilities.
-	code, body := api.do(http.MethodGet, "/providers", nil)
-	require.Equal(t, http.StatusOK, code, string(body))
-	providers := decodeInto[spec.ShadowProviderListResponse](t, body)
-	for _, p := range providers.Providers {
-		assert.NotEmpty(t, p.Capabilities, p.Provider)
-		if p.Provider == "bedrock" {
-			require.NotNil(t, p.CredentialChoice, "Bedrock needs at least one service")
-			assert.Len(t, p.CredentialChoice.Fields, 6)
-			continue
-		}
-		if p.Provider != "openai" && p.Provider != "anthropic" {
-			assert.Nil(t, p.CredentialChoice, p.Provider)
-			continue
-		}
-		require.NotNil(t, p.CredentialChoice, p.Provider)
-		assert.Equal(t, []string{"apiKey", "scopedKeys"}, p.CredentialChoice.Fields)
-		for _, f := range p.Fields {
-			if f.Key == "apiKey" {
-				assert.False(t, f.Required, p.Provider)
-				require.NotNil(t, f.Recommended, p.Provider)
-				assert.True(t, *f.Recommended, p.Provider)
-			}
-		}
-	}
-
-	// Neither credential: refused with the choice's message.
-	code, body = api.do(http.MethodPost, "/connections", map[string]any{
-		"name": "none", "provider": "openai", "settings": map[string]any{},
-	})
-	require.Equal(t, http.StatusBadRequest, code)
-	assert.Contains(t, string(body), "at least one project key")
-
-	// A project key alone is accepted.
-	code, body = api.do(http.MethodPost, "/connections", map[string]any{
-		"name": "OpenAI projects", "provider": "openai",
-		"endpoints": map[string]string{"api": fake.URL + "/v1"},
-		"settings": map[string]any{
-			"scopedKeys": map[string]any{"proj_alpha": shadowTestProjectKey}, "deepInspection": true,
-		},
-	})
-	require.Equal(t, http.StatusCreated, code, string(body))
-	conn := decodeInto[spec.ShadowConnectionResponse](t, body)
-	assert.NotContains(t, conn.SecretHints, "apiKey")
-	assert.Contains(t, conn.SecretHints, "scopedKeys.proj_alpha")
-
-	// The test skips the organization checks and passes on the project key.
-	code, body = api.do(http.MethodPost, "/connections/"+conn.Id+"/test", nil)
-	require.Equal(t, http.StatusOK, code, string(body))
-	test := decodeInto[spec.ShadowConnectionTest](t, body)
-	assert.True(t, test.Ok, string(body))
-	skipped := 0
-	for _, ch := range test.Checks {
-		if ch.Outcome == "skipped" && ch.Message != nil && strings.Contains(*ch.Message, "Admin API key") {
-			skipped++
-		}
-	}
-	assert.Equal(t, 7, skipped, string(body))
-
-	// Scan the way the worker does.
-	code, body = api.do(http.MethodPost, "/scans", map[string]any{"lookbackDays": 30})
+	// A later scan lists it again, because the platform still has it.
+	code, body = api.do(http.MethodPost, "/scans", map[string]any{})
 	require.Equal(t, http.StatusAccepted, code, string(body))
-	scan := decodeInto[spec.ShadowScanResponse](t, body)
-	key, err := hex.DecodeString(config.GetConfig().EncryptionKey)
-	require.NoError(t, err)
-	repo := repositories.NewShadowAgentRepository(db.GetDB())
-	logs := &bytes.Buffer{}
-	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	services.NewShadowAgentScanner(repo, wiring.ProvideShadowConnectors(logger), key, logger).RunOnce(ctx)
-	code, body = api.do(http.MethodGet, "/scans/"+scan.Id, nil)
+	runShadowScans(t, ctx, logs)
+	list = api.agents("")
+	require.EqualValues(t, 1, list.Total)
+	assert.Equal(t, "agent_alpha", list.Findings[0].ExternalId)
+	assert.Equal(t, "new", list.Findings[0].Status)
+	assert.Len(t, list.Findings[0].FoundBy, 2)
+
+	// Delete all: every agent goes; platforms and scans stay.
+	code, body = api.do(http.MethodDelete, "/findings", nil)
+	require.Equal(t, http.StatusOK, code, string(body))
+	// agent_alpha (found by two platforms, counted once) and proj_beta's two
+	// agents, which platform 1 no longer lists but are still recorded.
+	assert.EqualValues(t, 3, decodeInto[spec.ShadowFindingClearResponse](t, body).Deleted)
+	assert.EqualValues(t, 0, api.agents("?scanId="+scan1.Id).Total, "no longer listed agents are deleted too")
+	assert.EqualValues(t, 0, api.agents("").Total)
+	code, body = api.do(http.MethodGet, "/connections", nil)
 	require.Equal(t, http.StatusOK, code)
-	scan = decodeInto[spec.ShadowScanResponse](t, body)
-	require.Len(t, scan.Results, 1)
-	for _, c := range scan.Results[0].Calls {
-		if strings.HasPrefix(c.Call, "GET /v1/organization/") {
-			assert.Equal(t, "skipped", c.Outcome, c.Call)
-		}
-	}
-
-	code, body = api.do(http.MethodGet, "/findings", nil)
-	require.Equal(t, http.StatusOK, code, string(body))
-	list := decodeInto[spec.ShadowFindingListResponse](t, body)
-	kinds := map[string]int{}
-	var project, agent *spec.ShadowFindingSummary
-	for i := range list.Findings {
-		f := &list.Findings[i]
-		kinds[f.Kind]++
-		switch {
-		case f.Kind == "project" && f.ExternalId == "proj_alpha":
-			project = f
-		case f.Kind == "platform_agent" && f.ExternalId == "agent_alpha":
-			agent = f
-		}
-	}
-	assert.Equal(t, map[string]int{"platform_agent": 1, "project": 1}, kinds, string(body))
-	require.NotNil(t, project, string(body))
-	require.NotNil(t, agent, string(body))
-	assert.Equal(t, "Project proj_alpha", project.DisplayName)
-
-	code, body = api.do(http.MethodGet, "/findings/"+project.Id, nil)
+	assert.Len(t, decodeInto[spec.ShadowConnectionListResponse](t, body).Connections, 2)
+	code, body = api.do(http.MethodGet, "/scans", nil)
 	require.Equal(t, http.StatusOK, code)
-	detail := decodeInto[spec.ShadowFindingDetail](t, body)
-	codes := map[string]bool{}
-	for _, s := range detail.Signals {
-		codes[s.Code] = true
+	assert.Len(t, decodeInto[spec.ShadowScanListResponse](t, body).Scans, 1)
+
+	// Delete the platforms: their agents go with them.
+	for _, id := range []string{conn1.Id, conn2.Id} {
+		code, _ = api.do(http.MethodDelete, "/connections/"+id, nil)
+		assert.Equal(t, http.StatusNoContent, code)
 	}
-	assert.True(t, codes["openai.tool_call_stored_completion"], string(body))
-	linked := false
-	for _, r := range detail.Related {
-		if r.Relation == "agent_in_project" && r.FindingId == agent.Id {
-			linked = true
-		}
-		assert.NotEqual(t, "candidate_key", r.Relation, "no candidate keys without the Admin key")
-	}
-	assert.True(t, linked, "the project finding links its agent: %s", string(body))
-
-	// A project finding can be onboarded but never retired.
-	code, body = api.do(http.MethodPost, "/findings/"+project.Id+"/onboarding", map[string]any{"projectName": "default", "agentName": "alpha"})
-	require.Equal(t, http.StatusOK, code, string(body))
-	onboarded := decodeInto[spec.ShadowFindingDetail](t, body)
-	assert.Empty(t, onboarded.Retirement.State, "a project finding has no credential to retire")
-	code, _ = api.do(http.MethodPost, "/findings/"+project.Id+"/retirement/confirm", nil)
-	assert.Equal(t, http.StatusConflict, code)
-
-	// Add an Admin key, then remove it again.
-	code, body = api.do(http.MethodPut, "/connections/"+conn.Id, map[string]any{
-		"name": "OpenAI projects", "provider": "openai", "settings": map[string]any{"apiKey": shadowTestAdminKey},
-	})
-	require.Equal(t, http.StatusOK, code, string(body))
-	assert.Contains(t, decodeInto[spec.ShadowConnectionResponse](t, body).SecretHints, "apiKey")
-	code, body = api.do(http.MethodPut, "/connections/"+conn.Id, map[string]any{
-		"name": "OpenAI projects", "provider": "openai", "settings": map[string]any{}, "removeSecrets": []string{"apiKey"},
-	})
-	require.Equal(t, http.StatusOK, code, string(body))
-	assert.NotContains(t, decodeInto[spec.ShadowConnectionResponse](t, body).SecretHints, "apiKey")
-	// Removing the project keys too would leave no credential.
-	code, body = api.do(http.MethodPut, "/connections/"+conn.Id, map[string]any{
-		"name": "OpenAI projects", "provider": "openai", "settings": map[string]any{"scopedKeys": map[string]any{}},
-	})
-	assert.Equal(t, http.StatusBadRequest, code, string(body))
-
-	// Retention.
-	for _, table := range []string{"shadow_connections", "shadow_scans", "shadow_findings", "shadow_finding_signals"} {
-		var dump string
-		require.NoError(t, db.GetDB().WithContext(ctx).Raw(
-			fmt.Sprintf("SELECT COALESCE(string_agg(t::text, ' '), '') FROM %s t WHERE ou_id = ?", table), ouID).Scan(&dump).Error)
-		assert.NotContains(t, dump, "SHADOWTESTSECRET", table)
-		assert.NotContains(t, dump, "SECRET-PROMPT-MARKER", table)
-	}
-	assert.NotContains(t, logs.String(), "SHADOWTESTSECRET")
-
-	code, _ = api.do(http.MethodDelete, "/connections/"+conn.Id, nil)
-	assert.Equal(t, http.StatusNoContent, code)
+	assert.EqualValues(t, 0, api.agents("?scanId="+scan1.Id).Total)
+	assert.EqualValues(t, 0, api.agents("").Total)
 }

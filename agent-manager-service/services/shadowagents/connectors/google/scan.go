@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
@@ -31,7 +30,6 @@ import (
 type scanner struct {
 	c        *Connector
 	conn     sa.Connection
-	w        sa.Window
 	api      *sa.API
 	calls    *sa.Calls
 	findings *sa.Findings
@@ -48,7 +46,6 @@ type scanner struct {
 	// skipped only if no scope ran them.
 	deferredSkips map[string]string
 	skipOrder     []string
-	lastLogCall   time.Time
 }
 
 // engine is one Agent Runtime engine and its finding.
@@ -61,14 +58,12 @@ type engine struct {
 	nameProject string
 	location    string
 	id          string
-	// owner is how the owner hint was set: "", "create" or "update".
-	owner string
 }
 
 // Scan implements sa.Connector.
-func (c *Connector) Scan(ctx context.Context, conn sa.Connection, w sa.Window) *sa.Result {
+func (c *Connector) Scan(ctx context.Context, conn sa.Connection) *sa.Result {
 	s := &scanner{
-		c: c, conn: conn, w: w, calls: sa.NewCalls(), findings: sa.NewFindings(),
+		c: c, conn: conn, calls: sa.NewCalls(), findings: sa.NewFindings(),
 		aliases: map[string]map[string]bool{}, recorded: map[string]bool{}, deferredSkips: map[string]string{},
 	}
 	st, problems := readSettings(conn)
@@ -85,41 +80,20 @@ func (c *Connector) Scan(ctx context.Context, conn sa.Connection, w sa.Window) *
 	}
 	s.api = api
 
-	// Engines first: the registry, metrics and audit logs are matched to them.
+	// Engines first: registry agents are merged into the engines they run on.
 	for _, p := range st.projects {
 		for _, l := range st.runtimeLocations {
 			s.listEngines(ctx, p, l)
 		}
 	}
-	on := func(opt string) bool { return sa.ServiceEnabled(conn.Config, opt) }
-	if on(sa.OptGoogleRegistry) {
+	if sa.ServiceEnabled(conn.Config, sa.OptGoogleRegistry) {
 		for _, p := range st.projects {
 			for _, l := range st.registryLocations {
 				s.listAgents(ctx, p, l)
 			}
 		}
-		for _, p := range st.projects {
-			for _, l := range st.registryLocations {
-				s.listMCPServers(ctx, p, l)
-			}
-		}
 	} else {
 		s.calls.Skip(callAgents, sa.ReasonServiceOff)
-		s.calls.Skip(callMCPServers, sa.ReasonServiceOff)
-	}
-	if on(sa.OptGoogleMonitoring) {
-		for _, p := range st.projects {
-			s.requestCounts(ctx, p)
-		}
-	} else {
-		s.calls.Skip(callTimeSeries, sa.ReasonServiceOff)
-	}
-	if on(sa.OptGoogleAuditLogs) {
-		for _, p := range st.projects {
-			s.auditLogs(ctx, p)
-		}
-	} else {
-		s.calls.Skip(callLogEntries, sa.ReasonServiceOff)
 	}
 	return s.result()
 }
@@ -136,9 +110,9 @@ func (s *scanner) result() *sa.Result {
 		c[f.Kind]++
 	}
 	s.c.logger.Info("Shadow agent discovery Google scan finished",
-		"connectionId", s.conn.ID.String(), "findings", len(all),
+		"connectionId", s.conn.ID.String(), "agents", len(all),
 		"engines", c[models.ShadowKindRuntime], "registryAgents", c[models.ShadowKindPlatformAgent],
-		"mcpServers", c[models.ShadowKindToolInfra], "authFailed", s.authFailed)
+		"authFailed", s.authFailed)
 	return &sa.Result{Findings: all, Calls: s.calls.Results()}
 }
 
@@ -176,7 +150,7 @@ func (s *scanner) deferSkip(call, reason string) {
 
 // paginate fetches pages until the token runs out, an error, or maxPages,
 // and records the call once for the scope. Hitting maxPages is recorded as
-// a skipped "(page limit)" entry so the result says data may be missing.
+// a failed "(page limit)" entry: the listing is incomplete.
 func (s *scanner) paginate(ctx context.Context, call string, maxPages int, fetch func(pageToken string) (string, int, error)) {
 	items := 0
 	token := ""
@@ -191,7 +165,9 @@ func (s *scanner) paginate(ctx context.Context, call string, maxPages int, fetch
 			break
 		}
 		if page == maxPages {
-			s.calls.Skip(call+" (page limit)", fmt.Sprintf("stopped after %d pages; later pages were not read", maxPages))
+			s.calls.Record(call+" (page limit)", 0, &sa.CallError{
+				Outcome: models.ShadowCallFailed, Message: fmt.Sprintf("stopped after %d pages; later pages were not read", maxPages),
+			})
 			break
 		}
 		if ctx.Err() != nil {

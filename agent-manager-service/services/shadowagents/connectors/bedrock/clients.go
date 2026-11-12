@@ -21,12 +21,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/agentregistrycontrol"
-	awsbedrock "github.com/aws/aws-sdk-go-v2/service/bedrock"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcorecontrol"
-	"github.com/aws/aws-sdk-go-v2/service/cloudtrail"
-	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
-	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
 )
@@ -34,18 +30,15 @@ import (
 // regionClients are the SDK clients for one region, each pointed at the
 // endpoint the connection configured for it.
 type regionClients struct {
-	region     string
-	agentCore  *bedrockagentcorecontrol.Client
-	registry   *agentregistrycontrol.Client
-	agents     *bedrockagent.Client
-	bedrock    *awsbedrock.Client
-	cloudWatch *cloudwatch.Client
-	logs       *cloudwatchlogs.Client
-	cloudTrail *cloudtrail.Client
+	region    string
+	agentCore *bedrockagentcorecontrol.Client
+	registry  *agentregistrycontrol.Client
+	agents    *bedrockagent.Client
 }
 
 // newRegionClients builds the clients for region from the connection's
-// endpoints: the URL set for the region, else the template filled in. An endpoint that cannot be expanded is an error.
+// endpoints: the URL set for the region, else the template filled in. An
+// endpoint that cannot be expanded is an error.
 // retryer, when set, replaces the SDK's standard retryer (the connector's
 // retry policy); nil keeps the one sa.AWSConfig configures.
 func newRegionClients(conn sa.Connection, httpClient *http.Client, region string, retryer func() aws.Retryer) (*regionClients, error) {
@@ -68,10 +61,7 @@ func newRegionClients(conn sa.Connection, httpClient *http.Client, region string
 		cfg.Retryer = retryer
 	}
 	endpoints := map[string]string{}
-	for _, k := range []string{
-		sa.EPBedrockAgentCore, sa.EPBedrockRegistry, sa.EPBedrockAgent, sa.EPBedrock,
-		sa.EPBedrockCloudWatch, sa.EPBedrockLogs, sa.EPBedrockCloudTrail,
-	} {
+	for _, k := range []string{sa.EPBedrockAgentCore, sa.EPBedrockRegistry, sa.EPBedrockAgent} {
 		v, err := ep(k)
 		if err != nil {
 			return nil, err
@@ -88,18 +78,6 @@ func newRegionClients(conn sa.Connection, httpClient *http.Client, region string
 		}),
 		agents: bedrockagent.NewFromConfig(cfg, func(o *bedrockagent.Options) {
 			o.BaseEndpoint = aws.String(endpoints[sa.EPBedrockAgent])
-		}),
-		bedrock: awsbedrock.NewFromConfig(cfg, func(o *awsbedrock.Options) {
-			o.BaseEndpoint = aws.String(endpoints[sa.EPBedrock])
-		}),
-		cloudWatch: cloudwatch.NewFromConfig(cfg, func(o *cloudwatch.Options) {
-			o.BaseEndpoint = aws.String(endpoints[sa.EPBedrockCloudWatch])
-		}),
-		logs: cloudwatchlogs.NewFromConfig(cfg, func(o *cloudwatchlogs.Options) {
-			o.BaseEndpoint = aws.String(endpoints[sa.EPBedrockLogs])
-		}),
-		cloudTrail: cloudtrail.NewFromConfig(cfg, func(o *cloudtrail.Options) {
-			o.BaseEndpoint = aws.String(endpoints[sa.EPBedrockCloudTrail])
 		}),
 	}, nil
 }

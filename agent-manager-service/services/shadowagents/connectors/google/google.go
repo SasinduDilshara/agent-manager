@@ -15,10 +15,8 @@
 // under the License.
 
 // Package google is the Shadow Agent Discovery connector for Google Agent
-// Platform (Gemini Enterprise Agent Platform): Agent Runtime engines
-// (reasoningEngines), Agent Registry agents and MCP servers, the engines'
-// request_count metric in Cloud Monitoring and the Admin Activity audit
-// logs that name who created or updated an engine.
+// Platform (Gemini Enterprise Agent Platform): it lists Agent Runtime
+// engines (reasoningEngines) and Agent Registry agents.
 package google
 
 import (
@@ -35,16 +33,13 @@ import (
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
 )
 
-// Call names, as recorded in scan results and signal sources. One name per
-// call; the projects and locations it runs in are its scopes.
+// Call names, as recorded in scan results and evidence sources. One name
+// per call; the projects and locations it runs in are its scopes.
 const (
-	callToken      = "POST /token (service account key)"
-	callConfig     = "connection settings"
-	callEngines    = "GET /v1/projects/{project}/locations/{location}/reasoningEngines"
-	callAgents     = "GET /v1/projects/{project}/locations/{location}/agents"
-	callMCPServers = "GET /v1/projects/{project}/locations/{location}/mcpServers"
-	callTimeSeries = "GET /v3/projects/{project}/timeSeries"
-	callLogEntries = "POST /v2/entries:list"
+	callToken   = "POST /token (service account key)"
+	callConfig  = "connection settings"
+	callEngines = "GET /v1/projects/{project}/locations/{location}/reasoningEngines"
+	callAgents  = "GET /v1/projects/{project}/locations/{location}/agents"
 )
 
 // Bounds and documented limits (see the evidence log, evidence/google.md).
@@ -55,34 +50,16 @@ const (
 	enginesPageSize = 100
 	// registryPageSize is Agent Registry's "Maximum pagination size 100".
 	registryPageSize = 100
-	// logPageSize: entries.list rejects a pageSize above 1000.
-	logPageSize = 1000
 
 	maxEnginePages   = 20
 	maxRegistryPages = 20
-	maxSeriesPages   = 50
-	// maxLogPages bounds the audit log read per project (up to 30 000
-	// entries, about 30 seconds at the 1 request/second throttle).
-	maxLogPages = 30
-
-	// logRequestInterval keeps entries.list at or under 1 request per
-	// second: the quota is 60 requests per minute per project and cannot be
-	// increased.
-	logRequestInterval = time.Second
-
-	// monitoringRetention: Cloud Monitoring keeps aiplatform metric points 6
-	// weeks.
-	monitoringRetention = 42 * 24 * time.Hour
-	alignmentPeriod     = "86400s"
-	requestCountMetric  = "aiplatform.googleapis.com/reasoning_engine/request_count"
-
 	// builtinAgentPrefix marks Google's own auto-registered agents
 	// (Workspace, Gemini Enterprise); they are not shadow agents.
 	builtinAgentPrefix = "urn:agent:googleapis.com:"
 )
 
-// Locations Agent Runtime serves from the multi-region host, and the Agent
-// Registry location Google remote MCP servers live in.
+// Locations Agent Runtime serves from the multi-region host, and the
+// global Agent Registry location.
 var (
 	multiRegions   = []string{"us", "eu"}
 	globalLocation = "global"
@@ -101,10 +78,8 @@ var (
 type Connector struct {
 	httpClient *http.Client
 	logger     *slog.Logger
-	// sleep waits for the audit log throttle and between retries.
+	// sleep waits between retries.
 	sleep func(ctx context.Context, d time.Duration) error
-	// logInterval is the minimum time between entries.list requests.
-	logInterval time.Duration
 }
 
 // New returns the Google Agent Platform connector. httpClient must be the
@@ -113,7 +88,7 @@ func New(httpClient *http.Client, logger *slog.Logger) sa.Connector {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Connector{httpClient: httpClient, logger: logger, sleep: sleepContext, logInterval: logRequestInterval}
+	return &Connector{httpClient: httpClient, logger: logger, sleep: sleepContext}
 }
 
 // Provider implements sa.Connector.

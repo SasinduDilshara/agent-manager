@@ -63,18 +63,19 @@ const (
 	ActionEventDestinationRotateSecret Action = "event-destination:rotate-secret"
 	ActionEventDestinationTest         Action = "event-destination:test"
 
-	// Shadow Agent Discovery. A connection holds a provider admin credential
-	// (an Admin API key, a client secret, an access key or a service account
-	// key), so its lifecycle is a credential operation. Scans, reviews,
-	// onboarding and retirement confirmations change no credential.
-	ActionShadowConnectionCreate     Action = "shadow-connection:create"
-	ActionShadowConnectionUpdate     Action = "shadow-connection:update"
-	ActionShadowConnectionDelete     Action = "shadow-connection:delete"
-	ActionShadowConnectionTest       Action = "shadow-connection:test"
-	ActionShadowScanCreate           Action = "shadow-scan:create"
-	ActionShadowFindingUpdate        Action = "shadow-finding:update"
-	ActionShadowFindingOnboard       Action = "shadow-finding:onboard"
-	ActionShadowFindingConfirmRetire Action = "shadow-finding:confirm-retirement"
+	// Shadow Agent Discovery. A connection holds a platform credential (an API
+	// key, a client secret, an access key or a service account key), so its
+	// lifecycle is a credential operation. Scans and reviews change no
+	// credential.
+	ActionShadowConnectionCreate Action = "shadow-connection:create"
+	ActionShadowConnectionUpdate Action = "shadow-connection:update"
+	ActionShadowConnectionDelete Action = "shadow-connection:delete"
+	ActionShadowConnectionTest   Action = "shadow-connection:test"
+	ActionShadowScanCreate       Action = "shadow-scan:create"
+	ActionShadowScanClear        Action = "shadow-scan:clear"
+	ActionShadowFindingUpdate    Action = "shadow-finding:update"
+	ActionShadowFindingDelete    Action = "shadow-finding:delete"
+	ActionShadowFindingClear     Action = "shadow-finding:clear"
 
 	// An event subscription decides which events are sent to a destination.
 	ActionEventSubscriptionCreate Action = "event-subscription:create"
@@ -340,12 +341,14 @@ func init() {
 	RegisterDetailSchema(ActionShadowConnectionTest, nil)
 	Register(ActionShadowScanCreate, ClassConfig, SeverityNotice)
 	RegisterDetailSchema(ActionShadowScanCreate, nil)
+	Register(ActionShadowScanClear, ClassConfig, SeverityNotice)
+	RegisterDetailSchema(ActionShadowScanClear, nil)
 	Register(ActionShadowFindingUpdate, ClassConfig, SeverityInfo)
 	RegisterDetailSchema(ActionShadowFindingUpdate, nil)
-	Register(ActionShadowFindingOnboard, ClassConfig, SeverityNotice)
-	RegisterDetailSchema(ActionShadowFindingOnboard, nil)
-	Register(ActionShadowFindingConfirmRetire, ClassConfig, SeverityNotice)
-	RegisterDetailSchema(ActionShadowFindingConfirmRetire, nil)
+	Register(ActionShadowFindingDelete, ClassConfig, SeverityNotice)
+	RegisterDetailSchema(ActionShadowFindingDelete, nil)
+	Register(ActionShadowFindingClear, ClassConfig, SeverityNotice)
+	RegisterDetailSchema(ActionShadowFindingClear, nil)
 
 	// A subscription holds no credential, but it decides which event data
 	// reaches a destination outside the platform.

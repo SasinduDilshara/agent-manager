@@ -83,7 +83,7 @@ func (c *Connector) Provider() string { return models.ShadowProviderAzureDevOps 
 
 // Scan records the source code analysis as not available yet. No
 // repository is read.
-func (c *Connector) Scan(_ context.Context, _ sa.Connection, _ sa.Window) *sa.Result {
+func (c *Connector) Scan(_ context.Context, _ sa.Connection) *sa.Result {
 	calls := sa.NewCalls()
 	calls.Skip(sa.CallSourceAnalysis, sa.ReasonAnalysisUnavailable)
 	return &sa.Result{Calls: calls.Results()}

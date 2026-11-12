@@ -24,7 +24,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"net/http"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -36,33 +35,45 @@ import (
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
 )
 
-func day(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, time.UTC) }
-
 func TestProvider(t *testing.T) {
 	assert.Equal(t, models.ShadowProviderGoogle, New(http.DefaultClient, nil).Provider())
+}
+
+func codes(f *sa.Finding) []string {
+	out := make([]string, 0, len(f.Signals))
+	for _, s := range f.Signals {
+		out = append(out, s.Code)
+	}
+	return out
 }
 
 func TestScanFindings(t *testing.T) {
 	f := newFakeGoogle(t)
 	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
+	res := c.Scan(context.Background(), f.conn(t))
 
-	for _, call := range []string{callEngines, callAgents, callMCPServers, callTimeSeries, callLogEntries} {
+	require.Len(t, res.Calls, 2, "only the two agent listings are called: %+v", res.Calls)
+	for _, call := range []string{callEngines, callAgents} {
 		r := callResult(t, res, call)
 		assert.Equal(t, models.ShadowCallOK, r.Outcome, "%s: %s", call, r.Message)
 	}
-	// 3 engines; 1 registry agent not on Agent Runtime; 2 MCP servers. The
-	// two registry agents on engines A and B and the built-in Google agent
-	// make no finding of their own.
+	// 3 engines and 1 registry agent not on Agent Runtime. The registry
+	// agents of engines A (twice: us-central1 and global) and B merge into
+	// them; Google's built-in agent is left out.
 	kinds := map[string]int{}
 	for _, fd := range res.Findings {
 		kinds[fd.Kind]++
+		for _, s := range fd.Signals {
+			d, ok := sa.Def(s.Code)
+			if assert.True(t, ok, "%s: unknown evidence %s", fd.ExternalID, s.Code) {
+				assert.Equal(t, models.ShadowProviderGoogle, d.Provider)
+			}
+		}
+		assert.Empty(t, fd.OwnerHint, "no owner: the listings do not say who created an agent")
 	}
-	assert.Equal(t, map[string]int{
-		models.ShadowKindRuntime: 3, models.ShadowKindPlatformAgent: 1, models.ShadowKindToolInfra: 2,
-	}, kinds)
+	assert.Equal(t, map[string]int{models.ShadowKindRuntime: 3, models.ShadowKindPlatformAgent: 1}, kinds)
 
-	t.Run("engine A: registry merge, usage, creator", func(t *testing.T) {
+	t.Run("engine A: merged with its registry entry by RuntimeReference", func(t *testing.T) {
 		a := findingOf(t, res, models.ShadowKindRuntime, engineA)
 		assert.Equal(t, "support-agent", a.DisplayName)
 		assert.Equal(t, "projects/my-agents-project/locations/us-central1", a.Scope)
@@ -77,63 +88,29 @@ func TestScanFindings(t *testing.T) {
 		assert.Equal(t, []string{"A2A_AGENT"}, a.Attributes["protocolType"])
 		require.NotNil(t, a.ProviderCreatedAt)
 		assert.Equal(t, time.Date(2026, 10, 1, 10, 0, 0, 123456000, time.UTC), *a.ProviderCreatedAt)
-
-		for _, code := range []string{sa.SigGoogleAgentEngine, sa.SigGoogleRegistryAgent, sa.SigGoogleEngineInUse, sa.SigGoogleEngineCreatedBy} {
-			_, ok := signalOf(a, code)
-			assert.True(t, ok, code)
-		}
-		inUse, _ := signalOf(a, sa.SigGoogleEngineInUse)
-		assert.EqualValues(t, 65, inUse.Observed["requests"])
-		assert.Equal(t, callTimeSeries, inUse.Source)
-		// 25 (200) + 4 (500) on 10 Nov, 36 on 9 Nov; the zero day is left out.
-		assert.ElementsMatch(t, []sa.UsageDay{
-			{Day: day(2026, 11, 10), Requests: 29},
-			{Day: day(2026, 11, 9), Requests: 36},
-		}, a.Usage)
-		require.NotNil(t, a.LastUsedAt)
-		assert.Equal(t, day(2026, 11, 10), *a.LastUsedAt)
-		assert.Equal(t, day(2026, 11, 9), *a.FirstUsedAt)
-
-		// Created by dev@, later updated by other@: the creator is the owner.
-		assert.Equal(t, "dev@example.com", a.OwnerHint.Email)
-		assert.Equal(t, "user", a.OwnerHint.Type)
-		assert.Contains(t, a.OwnerHint.Source, "CreateReasoningEngine")
-		require.NotNil(t, a.OwnerHint.CreatedAt)
-		assert.Equal(t, time.Date(2026, 10, 1, 10, 0, 0, 123000000, time.UTC), *a.OwnerHint.CreatedAt)
-		created, _ := signalOf(a, sa.SigGoogleEngineCreatedBy)
-		assert.EqualValues(t, 1, created.Observed["creates"])
-		assert.EqualValues(t, 1, created.Observed["updates"])
-
-		score, verdict := sa.Score(a.Kind, codes(a))
-		assert.Equal(t, models.ShadowVerdictAgent, verdict)
-		assert.Equal(t, 80, score)
+		assert.ElementsMatch(t, []string{sa.SigGoogleAgentEngine, sa.SigGoogleRegistryAgent}, codes(a))
+		engine, _ := signalOf(a, sa.SigGoogleAgentEngine)
+		assert.Equal(t, callEngines, engine.Source)
+		reg, _ := signalOf(a, sa.SigGoogleRegistryAgent)
+		assert.Equal(t, callAgents, reg.Source)
+		assert.Equal(t, true, reg.Observed["a2a"])
 	})
 
-	t.Run("engine B: registry by agentId URN with the project number; zero requests", func(t *testing.T) {
+	t.Run("engine B: registry by agentId URN with the project number", func(t *testing.T) {
 		b := findingOf(t, res, models.ShadowKindRuntime, engineB)
 		assert.Equal(t, "orders-agent", b.DisplayName)
 		assert.Equal(t, "langgraph", b.Attributes["framework"])
 		assert.Equal(t, "orders-agent@my-agents-project.iam.gserviceaccount.com", b.Attributes["serviceAccount"])
 		assert.NotContains(t, b.Attributes, "repositoryUrl")
 		assert.Equal(t, "projects/123456789012/locations/us-central1/reasoningEngines/9876543210987654321", b.Attributes["runtimeReference"])
-		_, ok := signalOf(b, sa.SigGoogleRegistryAgent)
-		assert.True(t, ok)
-		_, ok = signalOf(b, sa.SigGoogleEngineInUse)
-		assert.False(t, ok, "all-zero request counts must not mark the engine in use")
-		assert.Empty(t, b.Usage)
-		assert.Nil(t, b.LastUsedAt)
-		assert.Equal(t, "ci-deployer@my-agents-project.iam.gserviceaccount.com", b.OwnerHint.Email)
-		assert.Equal(t, "service_account", b.OwnerHint.Type)
+		assert.ElementsMatch(t, []string{sa.SigGoogleAgentEngine, sa.SigGoogleRegistryAgent}, codes(b))
 	})
 
-	t.Run("engine C: us multi-region, creator from the operation name", func(t *testing.T) {
+	t.Run("engine C: us multi-region, no registry entry", func(t *testing.T) {
 		e := findingOf(t, res, models.ShadowKindRuntime, engineC)
 		assert.Equal(t, "us", e.Attributes["location"])
 		assert.Equal(t, "custom", e.Attributes["framework"])
-		assert.Equal(t, "ops@example.com", e.OwnerHint.Email)
-		assert.Equal(t, []sa.UsageDay{{Day: day(2026, 10, 25), Requests: 7}}, e.Usage)
-		_, ok := signalOf(e, sa.SigGoogleRegistryAgent)
-		assert.False(t, ok)
+		assert.Equal(t, []string{sa.SigGoogleAgentEngine}, codes(e))
 	})
 
 	t.Run("registry agent without a runtime engine", func(t *testing.T) {
@@ -148,20 +125,6 @@ func TestScanFindings(t *testing.T) {
 		require.Len(t, h.Signals, 1)
 		assert.Equal(t, sa.SigGoogleRegistryAgent, h.Signals[0].Code)
 		assert.Equal(t, true, h.Signals[0].Observed["a2a"])
-		_, verdict := sa.Score(h.Kind, codes(h))
-		assert.Equal(t, models.ShadowVerdictAgent, verdict)
-	})
-
-	t.Run("MCP servers are tool infrastructure with label and origin only", func(t *testing.T) {
-		bq := findingOf(t, res, models.ShadowKindToolInfra, "urn:mcp:googleapis.com:projects:123456789012:locations:global:bigquery")
-		assert.Equal(t, []sa.MCPServerRef{{Label: "BigQuery MCP server", Origin: "https://bigquery.googleapis.com"}}, bq.Attributes["mcpServers"])
-		assert.Equal(t, "global", bq.Attributes["location"])
-		require.Len(t, bq.Signals, 1)
-		assert.Equal(t, sa.SigGoogleRegistryMCP, bq.Signals[0].Code)
-		_, verdict := sa.Score(bq.Kind, codes(bq))
-		assert.Equal(t, models.ShadowVerdictToolInfra, verdict)
-		crm := findingOf(t, res, models.ShadowKindToolInfra, "urn:mcp:projects-123456789012:projects:123456789012:locations:us-central1:run:services:crm-mcp")
-		assert.Equal(t, []sa.MCPServerRef{{Label: "crm-mcp", Origin: "https://crm-mcp-abc123-uc.a.run.app"}}, crm.Attributes["mcpServers"])
 	})
 
 	t.Run("every attribute key is allowed and survives sanitising", func(t *testing.T) {
@@ -172,18 +135,10 @@ func TestScanFindings(t *testing.T) {
 	})
 }
 
-func codes(f *sa.Finding) []string {
-	out := make([]string, 0, len(f.Signals))
-	for _, s := range f.Signals {
-		out = append(out, s.Code)
-	}
-	return out
-}
-
 func TestScanRequests(t *testing.T) {
 	f := newFakeGoogle(t)
 	c := newTestConnector(f)
-	c.Scan(context.Background(), f.conn(t), testWindow)
+	c.Scan(context.Background(), f.conn(t))
 
 	t.Run("reasoningEngines.list: regional and multi-region hosts", func(t *testing.T) {
 		paths := map[string]bool{}
@@ -201,55 +156,24 @@ func TestScanRequests(t *testing.T) {
 		}, paths)
 	})
 
-	t.Run("Agent Registry: v1 agents and mcpServers in every location incl. global", func(t *testing.T) {
-		for _, route := range []string{"agents", "mcp"} {
-			coll := map[string]string{"agents": "agents", "mcp": "mcpServers"}[route]
-			paths := map[string]bool{}
-			for _, r := range f.requests(route) {
-				assert.Equal(t, http.MethodGet, r.Method)
-				assert.Equal(t, "100", r.Query.Get("pageSize"))
-				paths[r.Path] = true
-			}
-			want := map[string]bool{}
-			for _, l := range []string{"us-central1", "global", "us", "eu"} {
-				want["/v1/projects/my-agents-project/locations/"+l+"/"+coll] = true
-			}
-			assert.Equal(t, want, paths, route)
+	t.Run("Agent Registry: v1 agents in every location incl. global", func(t *testing.T) {
+		paths := map[string]bool{}
+		for _, r := range f.requests("agents") {
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t, "100", r.Query.Get("pageSize"))
+			paths[r.Path] = true
 		}
+		want := map[string]bool{}
+		for _, l := range []string{"us-central1", "global", "us", "eu"} {
+			want["/v1/projects/my-agents-project/locations/"+l+"/agents"] = true
+		}
+		assert.Equal(t, want, paths)
 	})
 
-	t.Run("timeSeries.list: filter, daily ALIGN_SUM, window", func(t *testing.T) {
-		reqs := f.requests("timeseries")
-		require.NotEmpty(t, reqs)
-		r := reqs[0]
-		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/v3/projects/my-agents-project/timeSeries", r.Path)
-		assert.Equal(t, `metric.type="aiplatform.googleapis.com/reasoning_engine/request_count"`, r.Query.Get("filter"))
-		assert.Equal(t, "2026-10-01T00:00:00Z", r.Query.Get("interval.startTime"))
-		assert.Equal(t, "2026-11-10T12:00:00Z", r.Query.Get("interval.endTime"))
-		assert.Equal(t, "86400s", r.Query.Get("aggregation.alignmentPeriod"))
-		assert.Equal(t, "ALIGN_SUM", r.Query.Get("aggregation.perSeriesAligner"))
-		assert.Empty(t, r.Query.Get("aggregation.crossSeriesReducer"))
-		assert.Equal(t, "FULL", r.Query.Get("view"))
-	})
-
-	t.Run("entries.list: POST body", func(t *testing.T) {
-		reqs := f.requests("logs")
-		require.NotEmpty(t, reqs)
-		r := reqs[0]
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "/v2/entries:list", r.Path)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
-		var body map[string]any
-		require.NoError(t, json.Unmarshal(r.Body, &body))
-		assert.Equal(t, []any{"projects/my-agents-project"}, body["resourceNames"])
-		assert.Equal(t, "timestamp asc", body["orderBy"])
-		assert.EqualValues(t, 1000, body["pageSize"])
-		assert.NotContains(t, body, "pageToken")
-		assert.Equal(t, `logName="projects/my-agents-project/logs/cloudaudit.googleapis.com%2Factivity"`+
-			` AND protoPayload.serviceName="aiplatform.googleapis.com"`+
-			` AND protoPayload.methodName:"ReasoningEngineService"`+
-			` AND timestamp>="2026-10-01T00:00:00Z" AND timestamp<="2026-11-10T12:00:00Z"`, body["filter"])
+	t.Run("only the agent listings are called", func(t *testing.T) {
+		for _, r := range f.requests("") {
+			assert.Contains(t, []string{"engines", "agents"}, r.Route, r.Path)
+		}
 	})
 
 	t.Run("one token for the whole scan", func(t *testing.T) {
@@ -260,18 +184,12 @@ func TestScanRequests(t *testing.T) {
 func TestScanPagination(t *testing.T) {
 	f := newFakeGoogle(t)
 	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
+	res := c.Scan(context.Background(), f.conn(t))
 
 	tokens := func(route, loc string) []string {
 		var out []string
 		for _, r := range f.requests(route) {
-			if loc == "" || strings.Contains(r.Path, "/locations/"+loc+"/") {
-				if route == "logs" {
-					var b listLogEntriesRequest
-					require.NoError(t, json.Unmarshal(r.Body, &b))
-					out = append(out, b.PageToken)
-					continue
-				}
+			if strings.Contains(r.Path, "/locations/"+loc+"/") {
 				out = append(out, r.Query.Get("pageToken"))
 			}
 		}
@@ -279,19 +197,15 @@ func TestScanPagination(t *testing.T) {
 	}
 	assert.Equal(t, []string{"", "engines-page-2"}, tokens("engines", "us-central1"))
 	assert.Equal(t, []string{"", "agents-page-2"}, tokens("agents", "us-central1"))
-	assert.Equal(t, []string{"", "mcp-page-2"}, tokens("mcp", "global"))
-	assert.Equal(t, []string{"", "ts-page-2"}, tokens("timeseries", ""))
-	// Page 2 of the logs is empty but has a token: paging goes on.
-	assert.Equal(t, []string{"", "logs-page-2", "logs-page-3"}, tokens("logs", ""))
 
 	// Items add up over pages and scopes.
 	assert.Equal(t, 3, callResult(t, res, callEngines).Items)
 	assert.Equal(t, 5, callResult(t, res, callAgents).Items)
-	assert.Equal(t, 2, callResult(t, res, callMCPServers).Items)
-	assert.Equal(t, 5, callResult(t, res, callTimeSeries).Items)
-	assert.Equal(t, 7, callResult(t, res, callLogEntries).Items)
 }
 
+// TestScanPageLimitIsRecorded: a listing cut at its page bound is
+// incomplete, so it is recorded as a failed call and the connection's
+// listing is not complete.
 func TestScanPageLimitIsRecorded(t *testing.T) {
 	f := newFakeGoogle(t)
 	f.setOverride("engines", func(w http.ResponseWriter, _ *http.Request) {
@@ -300,68 +214,18 @@ func TestScanPageLimitIsRecorded(t *testing.T) {
 	c := newTestConnector(f)
 	conn := f.conn(t)
 	conn.Config.IncludeGlobalAndMultiRegion = false
-	res := c.Scan(context.Background(), conn, testWindow)
+	res := c.Scan(context.Background(), conn)
 	assert.Len(t, f.requests("engines"), maxEnginePages)
 	assert.Equal(t, models.ShadowCallOK, callResult(t, res, callEngines).Outcome)
 	limit := callResult(t, res, callEngines+" (page limit)")
-	assert.Equal(t, models.ShadowCallSkipped, limit.Outcome)
+	assert.Equal(t, models.ShadowCallFailed, limit.Outcome)
 	assert.Contains(t, limit.Message, "stopped after 20 pages")
-}
-
-func TestMonitoringWindowCappedToRetention(t *testing.T) {
-	f := newFakeGoogle(t)
-	c := newTestConnector(f)
-	w := sa.NewWindow(time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC), 90)
-	c.Scan(context.Background(), f.conn(t), w)
-	r := f.requests("timeseries")[0]
-	assert.Equal(t, "2026-09-29T12:00:00Z", r.Query.Get("interval.startTime"), "6 weeks before the end")
-	assert.Equal(t, "2026-11-10T12:00:00Z", r.Query.Get("interval.endTime"))
-	// The audit log keeps 400 days: the whole window is read.
-	var body listLogEntriesRequest
-	require.NoError(t, json.Unmarshal(f.requests("logs")[0].Body, &body))
-	assert.Contains(t, body.Filter, `timestamp>="2026-08-12T00:00:00Z"`)
-}
-
-func TestMonitoringPointsCountedOnce(t *testing.T) {
-	f := newFakeGoogle(t)
-	// The same series served on two pages (e.g. a repeated page): its points
-	// must not be counted twice.
-	f.setOverride("timeseries", func(w http.ResponseWriter, r *http.Request) {
-		body := readFixture("timeseries_page1.json")
-		if r.URL.Query().Get("pageToken") == "" {
-			body = []byte(strings.Replace(string(body), `"ts-page-2"`, `"again"`, 1))
-		} else {
-			body = []byte(strings.Replace(string(body), `"ts-page-2"`, `""`, 1))
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(body)
-	})
-	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
-	a := findingOf(t, res, models.ShadowKindRuntime, engineA)
-	assert.ElementsMatch(t, []sa.UsageDay{{Day: day(2026, 11, 10), Requests: 29}, {Day: day(2026, 11, 9), Requests: 36}}, a.Usage)
-	s, _ := signalOf(a, sa.SigGoogleEngineInUse)
-	assert.EqualValues(t, 65, s.Observed["requests"])
-}
-
-func TestAuditLogThrottle(t *testing.T) {
-	f := newFakeGoogle(t)
-	c := newTestConnector(f)
-	c.Scan(context.Background(), f.conn(t), testWindow)
-	require.Len(t, f.requests("logs"), 3)
-	// One wait before every entries.list request but the first, each at
-	// most the 1-second interval.
-	require.Len(t, c.waits, 2)
-	for _, w := range c.waits {
-		assert.Greater(t, w, time.Duration(0))
-		assert.LessOrEqual(t, w, time.Second)
-	}
 }
 
 func TestRetention(t *testing.T) {
 	f := newFakeGoogle(t)
 	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
+	res := c.Scan(context.Background(), f.conn(t))
 	out, err := json.Marshal(res)
 	require.NoError(t, err)
 	info := c.Test(context.Background(), f.conn(t))
@@ -381,14 +245,12 @@ func TestScanTokenEndpointRefusesKey(t *testing.T) {
 	f := newFakeGoogle(t)
 	f.setOverride("token", serveError(http.StatusBadRequest, "token_error.json"))
 	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
+	res := c.Scan(context.Background(), f.conn(t))
 
 	first := callResult(t, res, callEngines)
 	assert.Equal(t, models.ShadowCallAuthFailed, first.Outcome)
 	assert.Contains(t, first.Message, "token endpoint refused")
-	for _, call := range []string{callAgents, callMCPServers} {
-		assert.Equal(t, models.ShadowCallSkipped, callResult(t, res, call).Outcome, call)
-	}
+	assert.Equal(t, models.ShadowCallSkipped, callResult(t, res, callAgents).Outcome)
 	assert.Empty(t, f.requests(""), "no API call is made without a token")
 	assert.Empty(t, res.Findings)
 }
@@ -398,7 +260,7 @@ func TestScanInvalidServiceAccountKey(t *testing.T) {
 	c := newTestConnector(f)
 	conn := f.conn(t)
 	conn.Secret.ServiceAccountJSON = `{"type":"authorized_user"}`
-	res := c.Scan(context.Background(), conn, testWindow)
+	res := c.Scan(context.Background(), conn)
 	r := callResult(t, res, callToken)
 	assert.Equal(t, models.ShadowCallAuthFailed, r.Outcome)
 	assert.Contains(t, r.Message, "not a valid JSON key file")
@@ -410,89 +272,77 @@ func TestScanUnauthorizedStopsEarly(t *testing.T) {
 	f := newFakeGoogle(t)
 	f.setOverride("engines", serveError(http.StatusUnauthorized, "error_401.json"))
 	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
+	res := c.Scan(context.Background(), f.conn(t))
 	r := callResult(t, res, callEngines)
 	assert.Equal(t, models.ShadowCallAuthFailed, r.Outcome)
 	assert.Contains(t, r.Message, "UNAUTHENTICATED")
 	assert.Len(t, f.requests(""), 1, "the scan stops after the first 401")
 	assert.Equal(t, models.ShadowCallSkipped, callResult(t, res, callAgents).Outcome)
-	assert.Equal(t, models.ShadowCallSkipped, callResult(t, res, callMCPServers).Outcome)
 }
 
 func TestScanRegistryDisabledIsPermissionDenied(t *testing.T) {
 	f := newFakeGoogle(t)
 	f.setOverride("agents", serveError(http.StatusForbidden, "error_403_service_disabled.json"))
-	f.setOverride("mcp", serveError(http.StatusForbidden, "error_403_service_disabled.json"))
 	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
+	res := c.Scan(context.Background(), f.conn(t))
 
 	agents := callResult(t, res, callAgents)
 	assert.Equal(t, models.ShadowCallPermissionDenied, agents.Outcome)
 	assert.Contains(t, agents.Message, "PERMISSION_DENIED")
 	assert.Contains(t, agents.Message, "4 of 4 scopes failed")
-	assert.Equal(t, models.ShadowCallPermissionDenied, callResult(t, res, callMCPServers).Outcome)
-	for _, call := range []string{callEngines, callTimeSeries, callLogEntries} {
-		assert.Equal(t, models.ShadowCallOK, callResult(t, res, call).Outcome, call)
+	assert.Equal(t, models.ShadowCallOK, callResult(t, res, callEngines).Outcome)
+	require.Len(t, res.Findings, 3)
+	for _, fd := range res.Findings {
+		assert.Equal(t, []string{sa.SigGoogleAgentEngine}, codes(fd), fd.ExternalID)
 	}
-	a := findingOf(t, res, models.ShadowKindRuntime, engineA)
-	_, ok := signalOf(a, sa.SigGoogleRegistryAgent)
-	assert.False(t, ok)
-	_, ok = signalOf(a, sa.SigGoogleEngineInUse)
-	assert.True(t, ok)
-	assert.Len(t, res.Findings, 3)
 }
 
 func TestScanRateLimitedThenOK(t *testing.T) {
 	f := newFakeGoogle(t)
 	calls := 0
-	f.setOverride("timeseries", func(w http.ResponseWriter, r *http.Request) {
+	f.setOverride("engines", func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		if calls == 1 {
 			w.Header().Set("Retry-After", "0")
 			serveError(http.StatusTooManyRequests, "error_429.json")(w, r)
 			return
 		}
-		f.defaultHandler("timeseries")(w, r)
+		f.defaultHandler("engines")(w, r)
 	})
 	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
-	assert.Equal(t, models.ShadowCallOK, callResult(t, res, callTimeSeries).Outcome)
-	assert.Equal(t, 3, calls)
-	a := findingOf(t, res, models.ShadowKindRuntime, engineA)
-	_, ok := signalOf(a, sa.SigGoogleEngineInUse)
-	assert.True(t, ok)
+	conn := f.conn(t)
+	conn.Config.IncludeGlobalAndMultiRegion = false
+	res := c.Scan(context.Background(), conn)
+	assert.Equal(t, models.ShadowCallOK, callResult(t, res, callEngines).Outcome)
+	assert.Equal(t, 3, calls, "the 429 is retried, then both pages are read")
+	findingOf(t, res, models.ShadowKindRuntime, engineA)
+	findingOf(t, res, models.ShadowKindRuntime, engineB)
 }
 
 func TestScanMalformedJSON(t *testing.T) {
 	f := newFakeGoogle(t)
 	f.setOverride("engines", func(w http.ResponseWriter, _ *http.Request) { serveJSON(w, `{"reasoningEngines": [`) })
 	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
+	res := c.Scan(context.Background(), f.conn(t))
 	r := callResult(t, res, callEngines)
 	assert.Equal(t, models.ShadowCallUnsupported, r.Outcome)
-	// Registry still runs; metrics and logs have no engine to match.
+	// The registry still runs. Without the engines, the registry agents of
+	// engines A and B are platform agents of their own.
 	assert.Equal(t, models.ShadowCallOK, callResult(t, res, callAgents).Outcome)
-	assert.Equal(t, models.ShadowCallSkipped, callResult(t, res, callTimeSeries).Outcome)
-	assert.Equal(t, models.ShadowCallSkipped, callResult(t, res, callLogEntries).Outcome)
-	assert.Empty(t, f.requests("timeseries"))
-	assert.Empty(t, f.requests("logs"))
-	// Without the engines, the registry agents of engines A and B are
-	// platform agents of their own.
 	kinds := map[string]int{}
 	for _, fd := range res.Findings {
 		kinds[fd.Kind]++
 	}
-	assert.Equal(t, 3, kinds[models.ShadowKindPlatformAgent])
+	assert.Equal(t, map[string]int{models.ShadowKindPlatformAgent: 3}, kinds)
 }
 
 func TestScanWrongShapeIsUnsupported(t *testing.T) {
 	f := newFakeGoogle(t)
-	f.setOverride("timeseries", func(w http.ResponseWriter, _ *http.Request) { serveJSON(w, `{"timeSeries": {"not": "a list"}}`) })
+	f.setOverride("agents", func(w http.ResponseWriter, _ *http.Request) { serveJSON(w, `{"agents": {"not": "a list"}}`) })
 	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
-	r := callResult(t, res, callTimeSeries)
-	assert.Equal(t, models.ShadowCallUnsupported, r.Outcome)
-	assert.Equal(t, models.ShadowCallOK, callResult(t, res, callLogEntries).Outcome)
+	res := c.Scan(context.Background(), f.conn(t))
+	assert.Equal(t, models.ShadowCallUnsupported, callResult(t, res, callAgents).Outcome)
+	assert.Equal(t, models.ShadowCallOK, callResult(t, res, callEngines).Outcome)
 }
 
 func TestScanSettings(t *testing.T) {
@@ -503,7 +353,7 @@ func TestScanSettings(t *testing.T) {
 		conn.Config.ProjectIDs = []string{testProject, "bad/project\"", testProject}
 		conn.Config.Locations = []string{"US-Central1", "evil.example.com/x#"}
 		conn.Config.IncludeGlobalAndMultiRegion = false
-		res := c.Scan(context.Background(), conn, testWindow)
+		res := c.Scan(context.Background(), conn)
 		cfg := callResult(t, res, callConfig)
 		assert.Equal(t, models.ShadowCallFailed, cfg.Outcome)
 		assert.Contains(t, cfg.Message, "is not a valid location")
@@ -520,7 +370,7 @@ func TestScanSettings(t *testing.T) {
 		c := newTestConnector(f)
 		conn := f.conn(t)
 		conn.Config.ProjectIDs = nil
-		res := c.Scan(context.Background(), conn, testWindow)
+		res := c.Scan(context.Background(), conn)
 		assert.Equal(t, models.ShadowCallFailed, callResult(t, res, callConfig).Outcome)
 		assert.Empty(t, f.requests(""))
 		assert.Empty(t, f.requests("token"))
@@ -534,53 +384,89 @@ func TestScanSettings(t *testing.T) {
 		assert.Equal(t, []string{"europe-west1"}, st.runtimeLocations)
 		assert.Equal(t, []string{"europe-west1", "global"}, st.registryLocations)
 	})
+
+	t.Run("multi-regions add us and eu engines and the global registry", func(t *testing.T) {
+		st, problems := readSettings(sa.Connection{Config: models.ShadowConnectionConfig{
+			ProjectIDs: []string{"p-1"}, Locations: []string{"europe-west1"}, IncludeGlobalAndMultiRegion: true,
+		}})
+		assert.Empty(t, problems)
+		assert.Equal(t, []string{"europe-west1", "us", "eu"}, st.runtimeLocations)
+		assert.Equal(t, []string{"europe-west1", "global", "us", "eu"}, st.registryLocations)
+	})
 }
 
 func TestScanEmptyProjectRaisesNothing(t *testing.T) {
 	f := newFakeGoogle(t)
-	for _, route := range []string{"engines", "agents", "mcp"} {
+	for _, route := range []string{"engines", "agents"} {
 		f.setOverride(route, func(w http.ResponseWriter, _ *http.Request) { serveJSON(w, `{}`) })
 	}
 	c := newTestConnector(f)
-	res := c.Scan(context.Background(), f.conn(t), testWindow)
+	res := c.Scan(context.Background(), f.conn(t))
 	assert.Empty(t, res.Findings)
 	assert.Equal(t, models.ShadowCallOK, callResult(t, res, callEngines).Outcome)
-	assert.Equal(t, models.ShadowCallSkipped, callResult(t, res, callTimeSeries).Outcome)
-	assert.Equal(t, models.ShadowCallSkipped, callResult(t, res, callLogEntries).Outcome)
+	assert.Equal(t, models.ShadowCallOK, callResult(t, res, callAgents).Outcome)
 }
 
-// Deep inspection has no effect on this connector: it reads no content
-// source (the audit log is read for method, resource and principal only).
-// Both settings call exactly the same endpoints, and the fake fails the
-// test on any endpoint it does not know.
-func TestDeepInspectionCallsNoContentEndpoint(t *testing.T) {
-	paths := func(deep bool) []string {
-		f := newFakeGoogle(t)
-		c := newTestConnector(f)
-		conn := f.conn(t)
-		conn.Config.DeepInspection = deep
-		c.Scan(context.Background(), conn, testWindow)
-		var out []string
-		for _, r := range f.requests("") {
-			out = append(out, r.Method+" "+r.Path)
-		}
-		sort.Strings(out)
-		return out
+// TestRegistryAgentResolution pins how a registry agent finds its engine:
+// by RuntimeReference, else the agentId URN, else the runtime identity
+// principal; with none of them it is a platform agent of its own, and
+// Google's built-in agents are left out.
+func TestRegistryAgentResolution(t *testing.T) {
+	newScanner := func() *scanner {
+		s := &scanner{c: &Connector{}, findings: sa.NewFindings(), aliases: map[string]map[string]bool{}}
+		s.addEngine(testProject, "us-central1", &reasoningEngine{Name: engineA})
+		return s
 	}
-	assert.Equal(t, paths(false), paths(true))
-}
+	attr := func(field, value string) json.RawMessage {
+		b, err := json.Marshal(map[string]string{field: value})
+		require.NoError(t, err)
+		return b
+	}
+	merged := func(t *testing.T, s *scanner) {
+		t.Helper()
+		assert.Len(t, s.findings.All(), 1, "no finding of its own")
+		_, ok := signalOf(s.engines[0].finding, sa.SigGoogleRegistryAgent)
+		assert.True(t, ok, "merged into the engine")
+	}
 
-func TestSignalConditions(t *testing.T) {
-	s := &scanner{c: &Connector{}, findings: sa.NewFindings(), aliases: map[string]map[string]bool{}}
-	s.addEngine(testProject, "us-central1", &reasoningEngine{Name: engineA})
-	e := s.engines[0]
-
-	t.Run("built-in Google agents are left out", func(t *testing.T) {
-		s.addRegistryAgent(testProject, "global", &registryAgent{AgentID: "urn:agent:googleapis.com:projects:1:locations:global:x", Name: "projects/1/locations/global/agents/x"})
-		assert.Len(t, s.findings.All(), 1)
+	t.Run("RuntimeReference", func(t *testing.T) {
+		s := newScanner()
+		s.addRegistryAgent(testProject, "us-central1", &registryAgent{
+			AgentID: "some-agent", Name: "projects/1/locations/us-central1/agents/a",
+			Attributes: map[string]json.RawMessage{attrRuntimeReference: attr("uri", "//aiplatform.googleapis.com/"+engineA)},
+		})
+		merged(t, s)
 	})
 
-	t.Run("registry agent referencing an unknown engine is a platform agent", func(t *testing.T) {
+	t.Run("agentId URN", func(t *testing.T) {
+		s := newScanner()
+		s.addRegistryAgent(testProject, "us-central1", &registryAgent{
+			AgentID: "urn:agent:projects-123456789012:projects:123456789012:locations:us-central1:aiplatform:reasoningEngines:1234567890123456789",
+			Name:    "projects/123456789012/locations/us-central1/agents/b",
+		})
+		merged(t, s)
+	})
+
+	t.Run("runtime identity principal", func(t *testing.T) {
+		s := newScanner()
+		s.addRegistryAgent(testProject, "us-central1", &registryAgent{
+			AgentID: "another-agent", Name: "projects/1/locations/us-central1/agents/c",
+			Attributes: map[string]json.RawMessage{attrRuntimeIdentity: attr("principal",
+				"principal://agents.global.org-1.system.id.goog/resources/aiplatform/"+engineA)},
+		})
+		merged(t, s)
+	})
+
+	t.Run("built-in Google agents are left out", func(t *testing.T) {
+		s := newScanner()
+		s.addRegistryAgent(testProject, "global", &registryAgent{AgentID: "urn:agent:googleapis.com:projects:1:locations:global:x", Name: "projects/1/locations/global/agents/x"})
+		assert.Len(t, s.findings.All(), 1)
+		_, ok := signalOf(s.engines[0].finding, sa.SigGoogleRegistryAgent)
+		assert.False(t, ok)
+	})
+
+	t.Run("an unknown engine: a platform agent with the reference", func(t *testing.T) {
+		s := newScanner()
 		s.addRegistryAgent(testProject, "us-central1", &registryAgent{
 			AgentID: "urn:agent:projects-1:projects:1:locations:us-central1:aiplatform:reasoningEngines:42",
 			Name:    "projects/1/locations/us-central1/agents/a",
@@ -588,57 +474,13 @@ func TestSignalConditions(t *testing.T) {
 		f, ok := s.findings.Lookup(models.ShadowKindPlatformAgent, "urn:agent:projects-1:projects:1:locations:us-central1:aiplatform:reasoningEngines:42")
 		require.True(t, ok)
 		assert.Equal(t, "projects/1/locations/us-central1/reasoningEngines/42", f.Attributes["runtimeReference"])
+		assert.Equal(t, []string{sa.SigGoogleRegistryAgent}, codes(f))
 	})
 
-	t.Run("in use needs a count above zero", func(t *testing.T) {
-		s.applyUsage(e, map[time.Time]int64{day(2026, 11, 1): 0})
-		_, ok := signalOf(e.finding, sa.SigGoogleEngineInUse)
-		assert.False(t, ok)
-		s.applyUsage(e, map[time.Time]int64{day(2026, 11, 1): 1})
-		_, ok = signalOf(e.finding, sa.SigGoogleEngineInUse)
-		assert.True(t, ok)
-	})
-
-	t.Run("created-by needs a ReasoningEngineService create or update on a known engine", func(t *testing.T) {
-		entry := func(method, resource string) *logEntry {
-			var le logEntry
-			raw := `{"insertId":"` + method + resource + `","timestamp":"2026-10-01T00:00:00Z","protoPayload":{"serviceName":"aiplatform.googleapis.com","methodName":"` + method + `","resourceName":"` + resource + `","authenticationInfo":{"principalEmail":"x@example.com"}}}`
-			require.NoError(t, json.Unmarshal([]byte(raw), &le))
-			return &le
-		}
-		seen := map[string]bool{}
-		for _, le := range []*logEntry{
-			entry("google.cloud.aiplatform.v1.ReasoningEngineService.DeleteReasoningEngine", engineA),
-			entry("google.cloud.aiplatform.v1.ReasoningEngineService.QueryReasoningEngine", engineA),
-			entry("google.cloud.aiplatform.v1.EndpointService.CreateEndpoint", engineA),
-			entry("google.cloud.aiplatform.v1.ReasoningEngineService.CreateReasoningEngine", "projects/1/locations/us-central1/reasoningEngines/404"),
-		} {
-			s.auditEntry(le, seen)
-		}
-		_, ok := signalOf(e.finding, sa.SigGoogleEngineCreatedBy)
-		assert.False(t, ok)
-		assert.Empty(t, e.finding.OwnerHint.Email)
-
-		s.auditEntry(entry("google.cloud.aiplatform.v1beta1.ReasoningEngineService.UpdateReasoningEngine", engineA), seen)
-		sig, ok := signalOf(e.finding, sa.SigGoogleEngineCreatedBy)
-		assert.True(t, ok)
-		assert.EqualValues(t, 1, sig.Observed["updates"])
-		assert.Equal(t, "x@example.com", e.finding.OwnerHint.Email)
-		// The same entry again (same insertId) is not counted twice.
-		s.auditEntry(entry("google.cloud.aiplatform.v1beta1.ReasoningEngineService.UpdateReasoningEngine", engineA), seen)
-		sig, _ = signalOf(e.finding, sa.SigGoogleEngineCreatedBy)
-		assert.EqualValues(t, 1, sig.Observed["updates"])
-	})
-
-	t.Run("redacted principal: signal without an owner hint", func(t *testing.T) {
-		s2 := &scanner{c: &Connector{}, findings: sa.NewFindings(), aliases: map[string]map[string]bool{}}
-		s2.addEngine(testProject, "us-central1", &reasoningEngine{Name: engineA})
-		var le logEntry
-		require.NoError(t, json.Unmarshal([]byte(`{"protoPayload":{"methodName":"google.cloud.aiplatform.v1.ReasoningEngineService.CreateReasoningEngine","resourceName":"`+engineA+`","authenticationInfo":{}}}`), &le))
-		s2.auditEntry(&le, map[string]bool{})
-		_, ok := signalOf(s2.engines[0].finding, sa.SigGoogleEngineCreatedBy)
-		assert.True(t, ok)
-		assert.Equal(t, models.ShadowOwnerHint{}, s2.engines[0].finding.OwnerHint)
+	t.Run("no ID at all: nothing", func(t *testing.T) {
+		s := newScanner()
+		s.addRegistryAgent(testProject, "us-central1", &registryAgent{})
+		assert.Len(t, s.findings.All(), 1)
 	})
 }
 
@@ -676,74 +518,39 @@ func TestEngineReferences(t *testing.T) {
 	})
 }
 
-func TestTypedValueAndPointDay(t *testing.T) {
-	parse := func(raw string) (int64, bool) {
-		var v typedValue
-		require.NoError(t, json.Unmarshal([]byte(raw), &v))
-		return v.count()
-	}
-	n, ok := parse(`{"int64Value":"25"}`)
-	assert.True(t, ok)
-	assert.EqualValues(t, 25, n)
-	n, ok = parse(`{"int64Value":7}`)
-	assert.True(t, ok)
-	assert.EqualValues(t, 7, n)
-	n, ok = parse(`{"doubleValue":2.6}`)
-	assert.True(t, ok)
-	assert.EqualValues(t, 3, n)
-	_, ok = parse(`{"int64Value":"x"}`)
-	assert.False(t, ok)
-	_, ok = parse(`{"boolValue":true}`)
-	assert.False(t, ok)
-
-	d, ok := pointDay("2026-11-09T12:00:00Z", "2026-11-10T12:00:00Z")
-	assert.True(t, ok)
-	assert.Equal(t, day(2026, 11, 10), d)
-	d, ok = pointDay("2026-11-09T00:00:00Z", "2026-11-10T00:00:00Z")
-	assert.True(t, ok)
-	assert.Equal(t, day(2026, 11, 9), d)
-	d, ok = pointDay("", "2026-03-26T18:56:27Z")
-	assert.True(t, ok)
-	assert.Equal(t, day(2026, 3, 26), d)
-	_, ok = pointDay("", "")
-	assert.False(t, ok)
-}
-
 func TestConnectionTest(t *testing.T) {
-	t.Run("all capabilities", func(t *testing.T) {
+	t.Run("both listings", func(t *testing.T) {
 		f := newFakeGoogle(t)
 		c := newTestConnector(f)
 		info := c.Test(context.Background(), f.conn(t))
 		assert.True(t, info.OK)
-		require.Len(t, info.Checks, 5)
+		require.Len(t, info.Checks, 2)
+		assert.Equal(t, checkEngines, info.Checks[0].Name)
+		assert.Equal(t, []string{sa.SigGoogleAgentEngine}, info.Checks[0].Unlocks)
+		assert.Equal(t, checkAgents, info.Checks[1].Name)
+		assert.Equal(t, []string{sa.SigGoogleRegistryAgent}, info.Checks[1].Unlocks)
 		for _, ch := range info.Checks {
 			assert.Equal(t, models.ShadowCallOK, ch.Outcome, ch.Name)
-			assert.NotEmpty(t, ch.Unlocks, ch.Name)
 		}
-		assert.Equal(t, []string{sa.SigGoogleAgentEngine}, info.Checks[0].Unlocks)
 		for _, r := range f.requests("") {
-			if r.Method == http.MethodGet {
-				assert.Equal(t, "1", r.Query.Get("pageSize"), r.Path)
-			} else {
-				var b listLogEntriesRequest
-				require.NoError(t, json.Unmarshal(r.Body, &b))
-				assert.Equal(t, 1, b.PageSize)
-			}
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t, "1", r.Query.Get("pageSize"), r.Path)
 		}
-		assert.Equal(t, "HEADERS", f.requests("timeseries")[0].Query.Get("view"))
-		assert.Contains(t, f.requests("mcp")[0].Path, "/locations/global/")
+		require.Len(t, f.requests("engines"), 1)
 		assert.Contains(t, f.requests("engines")[0].Path, "/regional/us-central1/")
+		require.Len(t, f.requests("agents"), 1)
+		assert.Contains(t, f.requests("agents")[0].Path, "/locations/us-central1/agents")
 	})
 
-	t.Run("registry disabled: still OK, the check says what is missed", func(t *testing.T) {
+	t.Run("registry denied: not OK, the check says what is missed", func(t *testing.T) {
 		f := newFakeGoogle(t)
 		f.setOverride("agents", serveError(http.StatusForbidden, "error_403_service_disabled.json"))
 		c := newTestConnector(f)
 		info := c.Test(context.Background(), f.conn(t))
-		assert.True(t, info.OK)
+		assert.False(t, info.OK, "every selected listing must work")
+		assert.Equal(t, models.ShadowCallOK, info.Checks[0].Outcome)
 		assert.Equal(t, models.ShadowCallPermissionDenied, info.Checks[1].Outcome)
 		assert.Equal(t, []string{sa.SigGoogleRegistryAgent}, info.Checks[1].Unlocks)
-		assert.Equal(t, models.ShadowCallOK, info.Checks[2].Outcome)
 	})
 
 	t.Run("token refused", func(t *testing.T) {
@@ -752,10 +559,9 @@ func TestConnectionTest(t *testing.T) {
 		c := newTestConnector(f)
 		info := c.Test(context.Background(), f.conn(t))
 		assert.False(t, info.OK)
+		require.Len(t, info.Checks, 2)
 		assert.Equal(t, models.ShadowCallAuthFailed, info.Checks[0].Outcome)
-		for _, ch := range info.Checks[1:] {
-			assert.Equal(t, models.ShadowCallSkipped, ch.Outcome)
-		}
+		assert.Equal(t, models.ShadowCallSkipped, info.Checks[1].Outcome)
 		assert.Empty(t, f.requests(""))
 	})
 
@@ -766,7 +572,7 @@ func TestConnectionTest(t *testing.T) {
 		info := c.Test(context.Background(), f.conn(t))
 		assert.False(t, info.OK)
 		assert.Equal(t, models.ShadowCallPermissionDenied, info.Checks[0].Outcome)
-		assert.Equal(t, models.ShadowCallOK, info.Checks[3].Outcome)
+		assert.Equal(t, models.ShadowCallOK, info.Checks[1].Outcome)
 	})
 
 	t.Run("invalid key and missing settings", func(t *testing.T) {
@@ -778,6 +584,7 @@ func TestConnectionTest(t *testing.T) {
 		assert.False(t, info.OK)
 		assert.Equal(t, checkToken, info.Checks[0].Name)
 		assert.Equal(t, models.ShadowCallAuthFailed, info.Checks[0].Outcome)
+		assert.ElementsMatch(t, []string{sa.SigGoogleAgentEngine, sa.SigGoogleRegistryAgent}, info.Checks[0].Unlocks)
 
 		conn = f.conn(t)
 		conn.Config.Locations = nil
@@ -798,37 +605,30 @@ func TestScanServiceAccountKeyNotKnownToGoogle(t *testing.T) {
 	conn := f.conn(t)
 	conn.Secret.ServiceAccountJSON = keyFileJSON(t, string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})))
 
-	res := newTestConnector(f).Scan(context.Background(), conn, testWindow)
+	res := newTestConnector(f).Scan(context.Background(), conn)
 	assert.Equal(t, models.ShadowCallAuthFailed, callResult(t, res, callEngines).Outcome)
 	assert.Len(t, f.requests("token"), 1)
 	assert.Empty(t, f.requests(""))
 }
 
-// TestScanUnselectedServices: with the Agent Registry, Cloud Monitoring and
-// the audit logs unticked, only the engines are read; the other calls are
-// recorded as "not selected" and their signals are absent.
+// TestScanUnselectedServices: with the Agent Registry unticked, only the
+// engines are listed; the registry call is recorded as "not selected".
 func TestScanUnselectedServices(t *testing.T) {
 	f := newFakeGoogle(t)
 	c := newTestConnector(f)
 	conn := f.conn(t)
-	conn.Config.DisabledServices = []string{sa.OptGoogleRegistry, sa.OptGoogleMonitoring, sa.OptGoogleAuditLogs}
-	res := c.Scan(context.Background(), conn, testWindow)
+	conn.Config.DisabledServices = []string{sa.OptGoogleRegistry}
+	res := c.Scan(context.Background(), conn)
 
-	for _, route := range []string{"agents", "mcp", "timeseries", "logs"} {
-		assert.Empty(t, f.requests(route), "%s must not be called", route)
-	}
+	assert.Empty(t, f.requests("agents"), "the registry must not be called")
 	assert.NotEmpty(t, f.requests("engines"))
-	for _, call := range []string{callAgents, callMCPServers, callTimeSeries, callLogEntries} {
-		r := callResult(t, res, call)
-		assert.Equal(t, models.ShadowCallSkipped, r.Outcome, call)
-		assert.Equal(t, sa.ReasonServiceOff, r.Message, call)
-	}
-	assert.NotEmpty(t, res.Findings)
+	r := callResult(t, res, callAgents)
+	assert.Equal(t, models.ShadowCallSkipped, r.Outcome)
+	assert.Equal(t, sa.ReasonServiceOff, r.Message)
+	require.Len(t, res.Findings, 3)
 	for _, fd := range res.Findings {
 		assert.Equal(t, models.ShadowKindRuntime, fd.Kind, "only engines without the registry")
-		for _, s := range fd.Signals {
-			assert.Equal(t, sa.SigGoogleAgentEngine, s.Code, fd.ExternalID)
-		}
+		assert.Equal(t, []string{sa.SigGoogleAgentEngine}, codes(fd), fd.ExternalID)
 	}
 }
 
@@ -836,16 +636,12 @@ func TestConnectionTestUnselectedServices(t *testing.T) {
 	f := newFakeGoogle(t)
 	c := newTestConnector(f)
 	conn := f.conn(t)
-	conn.Config.DisabledServices = []string{sa.OptGoogleMonitoring, sa.OptGoogleAuditLogs}
+	conn.Config.DisabledServices = []string{sa.OptGoogleRegistry}
 	info := c.Test(context.Background(), conn)
-	assert.True(t, info.OK)
-	skipped := map[string]bool{}
-	for _, ch := range info.Checks {
-		if ch.Outcome == models.ShadowCallSkipped {
-			skipped[ch.Name] = ch.Message == sa.ReasonServiceOff
-		}
-	}
-	assert.Equal(t, map[string]bool{checkMetrics: true, checkAuditLogs: true}, skipped)
-	assert.Empty(t, f.requests("timeseries"))
-	assert.Empty(t, f.requests("logs"))
+	assert.True(t, info.OK, "an unticked service does not fail the test")
+	require.Len(t, info.Checks, 2)
+	assert.Equal(t, models.ShadowCallOK, info.Checks[0].Outcome)
+	assert.Equal(t, models.ShadowCallSkipped, info.Checks[1].Outcome)
+	assert.Equal(t, sa.ReasonServiceOff, info.Checks[1].Message)
+	assert.Empty(t, f.requests("agents"))
 }

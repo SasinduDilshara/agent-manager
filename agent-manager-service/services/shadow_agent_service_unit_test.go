@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"math"
 	"strings"
@@ -48,23 +49,19 @@ const (
 
 var shadowTestKey = bytes.Repeat([]byte{7}, 32)
 
-type shadowAgentLookupStub struct {
-	GetAgentFunc func(ctx context.Context, ouID, projectName, agentName string) (*models.AgentResponse, error)
+func newShadowSvc(repo *repomocks.ShadowAgentRepositoryMock) *shadowAgentService {
+	return NewShadowAgentService(repo, ShadowConnectors{}, shadowTestKey, discardLogger()).(*shadowAgentService)
 }
 
-func (s *shadowAgentLookupStub) GetAgent(ctx context.Context, ouID, projectName, agentName string) (*models.AgentResponse, error) {
-	return s.GetAgentFunc(ctx, ouID, projectName, agentName)
-}
+const shadowProjectKey = "sk-proj-AAAAAAAAAAAAAAAA"
 
-func newShadowSvc(repo *repomocks.ShadowAgentRepositoryMock, agents ShadowAgentLookup) *shadowAgentService {
-	return NewShadowAgentService(repo, ShadowConnectors{}, agents, shadowTestKey, discardLogger()).(*shadowAgentService)
+// openAISettings is a valid OpenAI form: a project key.
+func openAISettings() map[string]any {
+	return map[string]any{"scopedKeys": map[string]any{"proj_a": shadowProjectKey}}
 }
 
 func openAIInput() ShadowConnectionInput {
-	return ShadowConnectionInput{
-		Name: "OpenAI prod", Provider: models.ShadowProviderOpenAI,
-		Settings: map[string]any{"apiKey": shadowSecretKey},
-	}
+	return ShadowConnectionInput{Name: "OpenAI prod", Provider: models.ShadowProviderOpenAI, Settings: openAISettings()}
 }
 
 // ---- connections ----
@@ -80,7 +77,7 @@ func TestShadowCreateConnection_EncryptsSecretAndReturnsOnlyHints(t *testing.T) 
 			return nil
 		},
 	}
-	svc := newShadowSvc(repo, nil)
+	svc := newShadowSvc(repo)
 	v, err := svc.CreateConnection(auditableCtx(t), shadowTestOU, openAIInput())
 	require.NoError(t, err)
 	require.NotNil(t, stored)
@@ -89,8 +86,9 @@ func TestShadowCreateConnection_EncryptsSecretAndReturnsOnlyHints(t *testing.T) 
 	assert.NotContains(t, string(stored.SecretEncrypted), "SECRETSECRET", "the secret is stored encrypted")
 	secret, err := decryptShadowSecret(stored.SecretEncrypted, shadowTestKey)
 	require.NoError(t, err)
-	assert.Equal(t, shadowSecretKey, secret.APIKey)
-	assert.Equal(t, "sk-a…wxyz", stored.SecretHints["apiKey"])
+	assert.Equal(t, shadowProjectKey, secret.ScopedKeys["proj_a"])
+	assert.Equal(t, []string{"proj_a"}, stored.Config.ScopedKeyIDs)
+	assert.Equal(t, map[string]string{"scopedKeys.proj_a": "sk-p…AAAA"}, stored.SecretHints)
 	assert.Equal(t, "https://api.openai.com/v1", stored.Config.Endpoints[sa.EPOpenAIAPI])
 
 	view, err := json.Marshal(v.Settings)
@@ -106,7 +104,7 @@ func TestShadowCreateConnection_RefusesWithoutAuditRecorder(t *testing.T) {
 		},
 		// CreateConnectionFunc nil: must not be reached.
 	}
-	_, err := newShadowSvc(repo, nil).CreateConnection(context.Background(), shadowTestOU, openAIInput())
+	_, err := newShadowSvc(repo).CreateConnection(context.Background(), shadowTestOU, openAIInput())
 	assert.ErrorIs(t, err, audit.ErrRecorderUnavailable)
 }
 
@@ -116,18 +114,32 @@ func TestShadowCreateConnection_Validation(t *testing.T) {
 			return []models.ShadowConnection{}, nil
 		},
 	}
-	svc := newShadowSvc(repo, nil)
+	svc := newShadowSvc(repo)
 	tests := map[string]ShadowConnectionInput{
 		"unknown provider":        {Name: "x", Provider: "acme", Settings: map[string]any{}},
-		"missing name":            {Name: " ", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{"apiKey": "k"}},
+		"missing name":            {Name: " ", Provider: models.ShadowProviderOpenAI, Settings: openAISettings()},
 		"missing required secret": {Name: "x", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{}},
-		"unknown setting":         {Name: "x", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{"apiKey": "k", "region": "x"}},
+		"unknown setting": {Name: "x", Provider: models.ShadowProviderOpenAI, Settings: func() map[string]any {
+			s := openAISettings()
+			s["region"] = "x"
+			return s
+		}()},
+		"removed setting (deep inspection)": {Name: "x", Provider: models.ShadowProviderOpenAI, Settings: func() map[string]any {
+			s := openAISettings()
+			s["deepInspection"] = true
+			return s
+		}()},
 		"unknown endpoint": {
-			Name: "x", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{"apiKey": "k"},
+			Name: "x", Provider: models.ShadowProviderOpenAI, Settings: openAISettings(),
 			Endpoints: map[string]string{"nope": "https://x"},
 		},
+		"removed endpoint (CloudTrail)": {
+			Name: "x", Provider: models.ShadowProviderBedrock,
+			Settings:  map[string]any{"regions": []any{"us-east-1"}, "accessKeyId": "AKIA", "secretAccessKey": "s"},
+			Endpoints: map[string]string{"cloudtrail": "https://cloudtrail.us-east-1.amazonaws.com"},
+		},
 		"endpoint with a query": {
-			Name: "x", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{"apiKey": "k"},
+			Name: "x", Provider: models.ShadowProviderOpenAI, Settings: openAISettings(),
 			Endpoints: map[string]string{sa.EPOpenAIAPI: "https://api.openai.com/v1?key=1"},
 		},
 		"wrong type": {Name: "x", Provider: models.ShadowProviderBedrock, Settings: map[string]any{
@@ -157,7 +169,7 @@ func TestShadowCreateConnection_CustomEndpointWarnsButIsAllowed(t *testing.T) {
 	}
 	in := openAIInput()
 	in.Endpoints = map[string]string{sa.EPOpenAIAPI: "http://localhost:18080/v1/"}
-	v, err := newShadowSvc(repo, nil).CreateConnection(auditableCtx(t), shadowTestOU, in)
+	v, err := newShadowSvc(repo).CreateConnection(auditableCtx(t), shadowTestOU, in)
 	require.NoError(t, err)
 	assert.Equal(t, "http://localhost:18080/v1", v.Connection.Config.Endpoints[sa.EPOpenAIAPI])
 	require.Len(t, v.EndpointWarnings, 1)
@@ -175,20 +187,19 @@ func TestShadowCreateConnection_AzureCheckboxDefaultsAndOptionalFields(t *testin
 			return nil
 		},
 	}
-	_, err := newShadowSvc(repo, nil).CreateConnection(auditableCtx(t), shadowTestOU, ShadowConnectionInput{
+	_, err := newShadowSvc(repo).CreateConnection(auditableCtx(t), shadowTestOU, ShadowConnectionInput{
 		Name: "Foundry", Provider: models.ShadowProviderFoundry,
 		Settings: map[string]any{"tenantId": "t", "clientId": "c", "clientSecret": "s3cr3t-value-123456"},
 	})
 	require.NoError(t, err)
 	assert.True(t, stored.Config.AllSubscriptions, "ticked by default")
 	assert.True(t, stored.Config.IncludeClassicAgents, "ticked by default")
-	assert.False(t, stored.Config.DeepInspection, "deep inspection is opt-in")
 }
 
 func TestShadowUpdateConnection_EmptySecretKeepsStoredOne(t *testing.T) {
 	ctx := auditableCtx(t)
 	encrypted, err := (&shadowAgentService{encryptionKey: shadowTestKey}).encryptSecret(models.ShadowConnectionSecret{
-		APIKey: shadowSecretKey, ScopedKeys: map[string]string{"proj_a": "sk-proj-AAAAAAAAAAAAAAAA"},
+		ScopedKeys: map[string]string{"proj_a": "sk-proj-AAAAAAAAAAAAAAAA"},
 	})
 	require.NoError(t, err)
 	id := uuid.New()
@@ -208,16 +219,15 @@ func TestShadowUpdateConnection_EmptySecretKeepsStoredOne(t *testing.T) {
 			return nil
 		},
 	}
-	svc := newShadowSvc(repo, nil)
+	svc := newShadowSvc(repo)
 	_, err = svc.UpdateConnection(ctx, shadowTestOU, id, ShadowConnectionInput{
 		Name: "OpenAI renamed", Provider: models.ShadowProviderOpenAI,
-		// Empty admin key and an empty value for a known project key: keep both.
-		Settings: map[string]any{"apiKey": "", "scopedKeys": map[string]any{"proj_a": ""}},
+		// An empty value for a known project key keeps the stored key.
+		Settings: map[string]any{"scopedKeys": map[string]any{"proj_a": ""}},
 	})
 	require.NoError(t, err)
 	secret, err := decryptShadowSecret(updated.SecretEncrypted, shadowTestKey)
 	require.NoError(t, err)
-	assert.Equal(t, shadowSecretKey, secret.APIKey)
 	assert.Equal(t, "sk-proj-AAAAAAAAAAAAAAAA", secret.ScopedKeys["proj_a"])
 	assert.Equal(t, []string{"proj_a"}, updated.Config.ScopedKeyIDs)
 
@@ -227,23 +237,23 @@ func TestShadowUpdateConnection_EmptySecretKeepsStoredOne(t *testing.T) {
 	assert.ErrorIs(t, err, utils.ErrInvalidInput, "the provider cannot change")
 }
 
-// TestShadowCredentialChoice: OpenAI and Anthropic need an Admin API key or
-// at least one project/workspace key; either alone is enough.
-func TestShadowCredentialChoice(t *testing.T) {
+// TestShadowScopedKeysRequired: OpenAI and Anthropic list agents with
+// project or workspace keys, so at least one is required. There is no Admin
+// API key: it cannot list agents, and the form has no field for it.
+func TestShadowScopedKeysRequired(t *testing.T) {
 	repo := &repomocks.ShadowAgentRepositoryMock{
 		ListConnectionsFunc: func(context.Context, string) ([]models.ShadowConnection, error) {
 			return []models.ShadowConnection{}, nil
 		},
 		CreateConnectionFunc: func(context.Context, *models.ShadowConnection) error { return nil },
 	}
-	svc := newShadowSvc(repo, nil)
+	svc := newShadowSvc(repo)
 	ok := map[string]ShadowConnectionInput{
-		"openai admin key only": {Name: "a", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{"apiKey": "sk-admin-x"}},
 		"openai project keys only": {Name: "b", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{
 			"scopedKeys": map[string]any{"proj_a": "sk-proj-a"},
 		}},
 		"anthropic workspace keys only": {Name: "c", Provider: models.ShadowProviderAnthropic, Settings: map[string]any{
-			"scopedKeys": map[string]any{"wrkspc_a": "sk-ant-api03-a"}, "includeCloudVariants": false,
+			"scopedKeys": map[string]any{"wrkspc_a": "sk-ant-api03-a"},
 		}},
 	}
 	for name, in := range ok {
@@ -256,14 +266,21 @@ func TestShadowCredentialChoice(t *testing.T) {
 		in   ShadowConnectionInput
 		want string
 	}{
-		"openai neither": {ShadowConnectionInput{Name: "d", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{
+		"openai admin key": {ShadowConnectionInput{Name: "a", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{
+			"apiKey": "sk-admin-x", "scopedKeys": map[string]any{"proj_a": "sk-proj-a"},
+		}}, `unknown setting "apiKey" for OpenAI`},
+		"openai empty key map": {ShadowConnectionInput{Name: "d", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{
 			"scopedKeys": map[string]any{},
-		}}, "Add an Admin API key (recommended) or at least one project key."},
-		"anthropic neither": {ShadowConnectionInput{Name: "e", Provider: models.ShadowProviderAnthropic, Settings: map[string]any{
-			"apiKey": "  ", "includeCloudVariants": false,
-		}}, "Add an Admin API key (recommended) or at least one workspace key."},
+		}}, "Project keys needs at least one ID and key"},
+		"anthropic admin key": {ShadowConnectionInput{Name: "e", Provider: models.ShadowProviderAnthropic, Settings: map[string]any{
+			"apiKey": "sk-ant-admin01-x", "scopedKeys": map[string]any{"wrkspc_a": "sk-ant-api03-a"},
+		}}, `unknown setting "apiKey" for Anthropic`},
+		"anthropic no workspace key": {
+			ShadowConnectionInput{Name: "g", Provider: models.ShadowProviderAnthropic, Settings: map[string]any{}},
+			"Workspace keys needs at least one ID and key",
+		},
 		"removeSecrets on create": {ShadowConnectionInput{
-			Name: "f", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{"apiKey": "k"}, RemoveSecrets: []string{"apiKey"},
+			Name: "f", Provider: models.ShadowProviderOpenAI, Settings: openAISettings(), RemoveSecrets: []string{"scopedKeys"},
 		}, "removeSecrets applies only when updating"},
 	}
 	for name, tc := range bad {
@@ -275,12 +292,17 @@ func TestShadowCredentialChoice(t *testing.T) {
 	}
 }
 
-// TestShadowUpdateConnection_RemoveSecrets: an optional stored secret can be
-// removed, a required one cannot, and the credential choice still applies.
+// TestShadowUpdateConnection_RemoveSecrets: only an optional secret field
+// can be removed, the project keys stay required, and an Admin API key
+// stored by an earlier version is dropped when the platform is saved.
 func TestShadowUpdateConnection_RemoveSecrets(t *testing.T) {
-	stored := func(t *testing.T, secret models.ShadowConnectionSecret, provider string) (*repomocks.ShadowAgentRepositoryMock, uuid.UUID, **models.ShadowConnection) {
+	// stored takes the secret as the earlier JSON may have held it, so a
+	// map can carry a member the current model no longer has.
+	stored := func(t *testing.T, secret any, provider string) (*repomocks.ShadowAgentRepositoryMock, uuid.UUID, **models.ShadowConnection) {
 		t.Helper()
-		encrypted, err := (&shadowAgentService{encryptionKey: shadowTestKey}).encryptSecret(secret)
+		plain, err := json.Marshal(secret)
+		require.NoError(t, err)
+		encrypted, err := utils.EncryptBytes(plain, shadowTestKey)
 		require.NoError(t, err)
 		id := uuid.New()
 		existing := &models.ShadowConnection{
@@ -300,44 +322,52 @@ func TestShadowUpdateConnection_RemoveSecrets(t *testing.T) {
 		}
 		return repo, id, &updated
 	}
-	both := models.ShadowConnectionSecret{APIKey: shadowSecretKey, ScopedKeys: map[string]string{"proj_a": "sk-proj-AAAAAAAAAAAAAAAA"}}
+	both := models.ShadowConnectionSecret{ScopedKeys: map[string]string{"proj_a": "sk-proj-AAAAAAAAAAAAAAAA"}}
+	legacy := map[string]any{"apiKey": shadowSecretKey, "scopedKeys": map[string]string{"proj_a": "sk-proj-AAAAAAAAAAAAAAAA"}}
 
-	t.Run("remove the Admin key, keep project keys", func(t *testing.T) {
-		repo, id, updated := stored(t, both, models.ShadowProviderOpenAI)
-		v, err := newShadowSvc(repo, nil).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
-			Name: "c", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{}, RemoveSecrets: []string{"apiKey"},
+	t.Run("an Admin key stored by an earlier version is dropped on save", func(t *testing.T) {
+		repo, id, updated := stored(t, legacy, models.ShadowProviderOpenAI)
+		v, err := newShadowSvc(repo).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
+			Name: "c", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{},
 		})
 		require.NoError(t, err)
+		plain, err := utils.DecryptBytes((*updated).SecretEncrypted, shadowTestKey)
+		require.NoError(t, err)
+		assert.NotContains(t, string(plain), "apiKey")
+		assert.NotContains(t, string(plain), "SECRETSECRET")
 		secret, err := decryptShadowSecret((*updated).SecretEncrypted, shadowTestKey)
 		require.NoError(t, err)
-		assert.Empty(t, secret.APIKey)
 		assert.Equal(t, "sk-proj-AAAAAAAAAAAAAAAA", secret.ScopedKeys["proj_a"])
-		assert.NotContains(t, v.Connection.SecretHints, "apiKey")
-		assert.Contains(t, v.Connection.SecretHints, "scopedKeys.proj_a")
+		assert.Equal(t, map[string]string{"scopedKeys.proj_a": "sk-p…AAAA"}, v.Connection.SecretHints)
 	})
-	t.Run("removing the only credential is refused", func(t *testing.T) {
-		repo, id, _ := stored(t, models.ShadowConnectionSecret{APIKey: shadowSecretKey}, models.ShadowProviderOpenAI)
-		_, err := newShadowSvc(repo, nil).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
+	t.Run("the Admin key cannot be removed: it is not a field", func(t *testing.T) {
+		repo, id, _ := stored(t, legacy, models.ShadowProviderOpenAI)
+		_, err := newShadowSvc(repo).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
 			Name: "c", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{}, RemoveSecrets: []string{"apiKey"},
 		})
 		require.ErrorIs(t, err, utils.ErrInvalidInput)
-		assert.Contains(t, err.Error(), "at least one project key")
+		assert.Contains(t, err.Error(), `"apiKey" is not a secret field of OpenAI`)
+	})
+	t.Run("a stored connection with only the Admin key must add a project key", func(t *testing.T) {
+		repo, id, _ := stored(t, map[string]any{"apiKey": shadowSecretKey}, models.ShadowProviderOpenAI)
+		_, err := newShadowSvc(repo).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
+			Name: "c", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{},
+		})
+		require.ErrorIs(t, err, utils.ErrInvalidInput)
+		assert.Contains(t, err.Error(), "Project keys needs at least one ID and key")
 		assert.Empty(t, repo.UpdateConnectionCalls())
 	})
-	t.Run("removing project keys keeps a stored Admin key valid", func(t *testing.T) {
-		repo, id, updated := stored(t, both, models.ShadowProviderOpenAI)
-		_, err := newShadowSvc(repo, nil).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
+	t.Run("removing every project key is refused", func(t *testing.T) {
+		repo, id, _ := stored(t, both, models.ShadowProviderOpenAI)
+		_, err := newShadowSvc(repo).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
 			Name: "c", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{"scopedKeys": map[string]any{}},
 		})
-		require.NoError(t, err)
-		secret, err := decryptShadowSecret((*updated).SecretEncrypted, shadowTestKey)
-		require.NoError(t, err)
-		assert.Equal(t, shadowSecretKey, secret.APIKey)
-		assert.Empty(t, secret.ScopedKeys)
+		require.ErrorIs(t, err, utils.ErrInvalidInput)
+		assert.Empty(t, repo.UpdateConnectionCalls())
 	})
 	t.Run("a required secret cannot be removed", func(t *testing.T) {
 		repo, id, _ := stored(t, models.ShadowConnectionSecret{ClientSecret: "s3cr3t-value-123456"}, models.ShadowProviderFoundry)
-		_, err := newShadowSvc(repo, nil).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
+		_, err := newShadowSvc(repo).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
 			Name: "c", Provider: models.ShadowProviderFoundry,
 			Settings:      map[string]any{"tenantId": "t", "clientId": "c"},
 			RemoveSecrets: []string{"clientSecret"},
@@ -345,17 +375,10 @@ func TestShadowUpdateConnection_RemoveSecrets(t *testing.T) {
 		require.ErrorIs(t, err, utils.ErrInvalidInput)
 		assert.Contains(t, err.Error(), "cannot be removed")
 	})
-	t.Run("remove and set in one request", func(t *testing.T) {
-		repo, id, _ := stored(t, both, models.ShadowProviderOpenAI)
-		_, err := newShadowSvc(repo, nil).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
-			Name: "c", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{"apiKey": "sk-admin-new"}, RemoveSecrets: []string{"apiKey"},
-		})
-		assert.ErrorIs(t, err, utils.ErrInvalidInput)
-	})
 	t.Run("not a secret field", func(t *testing.T) {
 		repo, id, _ := stored(t, both, models.ShadowProviderOpenAI)
-		for _, k := range []string{"scopedKeys", "deepInspection", "nope"} {
-			_, err := newShadowSvc(repo, nil).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
+		for _, k := range []string{"scopedKeys", "deepInspection", "apiKey", "nope"} {
+			_, err := newShadowSvc(repo).UpdateConnection(auditableCtx(t), shadowTestOU, id, ShadowConnectionInput{
 				Name: "c", Provider: models.ShadowProviderOpenAI, Settings: map[string]any{}, RemoveSecrets: []string{k},
 			})
 			assert.ErrorIs(t, err, utils.ErrInvalidInput, k)
@@ -366,7 +389,7 @@ func TestShadowUpdateConnection_RemoveSecrets(t *testing.T) {
 // TestShadowServiceOptions: unticked Bedrock/Google services are stored as
 // DisabledServices and read back as unticked; a connection saved before the
 // options existed has every service on; a Bedrock connection needs at least
-// one service.
+// one service; the removed services are not options any more.
 func TestShadowServiceOptions(t *testing.T) {
 	var stored *models.ShadowConnection
 	repo := &repomocks.ShadowAgentRepositoryMock{
@@ -378,7 +401,7 @@ func TestShadowServiceOptions(t *testing.T) {
 			return nil
 		},
 	}
-	svc := newShadowSvc(repo, nil)
+	svc := newShadowSvc(repo)
 	bedrock := func(name string, extra map[string]any) ShadowConnectionInput {
 		settings := map[string]any{"regions": []any{"us-east-1"}, "accessKeyId": "AKIA", "secretAccessKey": "s"}
 		for k, v := range extra {
@@ -386,15 +409,13 @@ func TestShadowServiceOptions(t *testing.T) {
 		}
 		return ShadowConnectionInput{Name: name, Provider: models.ShadowProviderBedrock, Settings: settings}
 	}
-	v, err := svc.CreateConnection(auditableCtx(t), shadowTestOU, bedrock("b1", map[string]any{
-		sa.OptBedrockRegistry: false, sa.OptBedrockInvocationLogs: false,
-	}))
+	v, err := svc.CreateConnection(auditableCtx(t), shadowTestOU, bedrock("b1", map[string]any{sa.OptBedrockRegistry: false}))
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{sa.OptBedrockRegistry, sa.OptBedrockInvocationLogs}, stored.Config.DisabledServices)
+	assert.Equal(t, []string{sa.OptBedrockRegistry}, stored.Config.DisabledServices)
 	assert.Equal(t, false, v.Settings[sa.OptBedrockRegistry])
-	assert.Equal(t, false, v.Settings[sa.OptBedrockInvocationLogs])
 	assert.Equal(t, true, v.Settings[sa.OptBedrockAgentCore])
-	assert.Equal(t, true, v.Settings[sa.OptBedrockCloudTrail])
+	assert.Equal(t, true, v.Settings[sa.OptBedrockClassicAgents])
+	assert.Len(t, v.Settings, 7, "regions, access key ID, role, external ID and the three services; secrets are never settings")
 
 	// Defaults: every service on.
 	_, err = svc.CreateConnection(auditableCtx(t), shadowTestOU, bedrock("b2", nil))
@@ -403,31 +424,41 @@ func TestShadowServiceOptions(t *testing.T) {
 
 	// A connection stored before the options existed reads as all on.
 	legacy := shadowSettingsOf(models.ShadowProviderBedrock, models.ShadowConnectionConfig{Regions: []string{"us-east-1"}})
-	for _, k := range []string{
-		sa.OptBedrockAgentCore, sa.OptBedrockRegistry, sa.OptBedrockClassicAgents,
-		sa.OptBedrockMetrics, sa.OptBedrockCloudTrail, sa.OptBedrockInvocationLogs,
-	} {
+	for _, k := range []string{sa.OptBedrockAgentCore, sa.OptBedrockRegistry, sa.OptBedrockClassicAgents} {
 		assert.Equal(t, true, legacy[k], k)
 	}
-	assert.True(t, sa.ServiceEnabled(models.ShadowConnectionConfig{}, sa.OptGoogleMonitoring))
+
+	// The removed services are unknown settings.
+	for _, k := range []string{"readCloudWatchMetrics", "readCloudTrail", "readInvocationLogging"} {
+		_, err = svc.CreateConnection(auditableCtx(t), shadowTestOU, bedrock("b-"+k, map[string]any{k: false}))
+		assert.ErrorIs(t, err, utils.ErrInvalidInput, k)
+	}
 
 	// Nothing selected: refused.
 	_, err = svc.CreateConnection(auditableCtx(t), shadowTestOU, bedrock("b3", map[string]any{
 		sa.OptBedrockAgentCore: false, sa.OptBedrockRegistry: false, sa.OptBedrockClassicAgents: false,
-		sa.OptBedrockMetrics: false, sa.OptBedrockCloudTrail: false, sa.OptBedrockInvocationLogs: false,
 	}))
 	require.ErrorIs(t, err, utils.ErrInvalidInput)
 	assert.Contains(t, err.Error(), "Select at least one Bedrock service to scan.")
 
-	// Google: the engines always run, so unticking every optional service is allowed.
+	// Google: the engines are always listed, so the registry can be unticked.
 	_, err = svc.CreateConnection(auditableCtx(t), shadowTestOU, ShadowConnectionInput{
 		Name: "g", Provider: models.ShadowProviderGoogle, Settings: map[string]any{
 			"projectIds": []any{"p"}, "locations": []any{"us-central1"}, "serviceAccountJson": `{"type":"service_account"}`,
-			sa.OptGoogleRegistry: false, sa.OptGoogleMonitoring: false, sa.OptGoogleAuditLogs: false,
+			sa.OptGoogleRegistry: false,
 		},
 	})
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{sa.OptGoogleRegistry, sa.OptGoogleMonitoring, sa.OptGoogleAuditLogs}, stored.Config.DisabledServices)
+	assert.Equal(t, []string{sa.OptGoogleRegistry}, stored.Config.DisabledServices)
+	for _, k := range []string{"readMonitoring", "readAuditLogs"} {
+		_, err = svc.CreateConnection(auditableCtx(t), shadowTestOU, ShadowConnectionInput{
+			Name: "g-" + k, Provider: models.ShadowProviderGoogle, Settings: map[string]any{
+				"projectIds": []any{"p"}, "locations": []any{"us-central1"}, "serviceAccountJson": `{"type":"service_account"}`,
+				k: false,
+			},
+		})
+		assert.ErrorIs(t, err, utils.ErrInvalidInput, k)
+	}
 }
 
 func TestShadowGetConnection_NotFoundIsNotMasked(t *testing.T) {
@@ -436,13 +467,13 @@ func TestShadowGetConnection_NotFoundIsNotMasked(t *testing.T) {
 			return nil, gorm.ErrRecordNotFound
 		},
 	}
-	_, err := newShadowSvc(repo, nil).GetConnection(context.Background(), shadowTestOU, uuid.New())
+	_, err := newShadowSvc(repo).GetConnection(context.Background(), shadowTestOU, uuid.New())
 	assert.ErrorIs(t, err, utils.ErrShadowConnectionNotFound)
 
 	repo.GetConnectionFunc = func(context.Context, string, uuid.UUID) (*models.ShadowConnection, error) {
 		return nil, assert.AnError
 	}
-	_, err = newShadowSvc(repo, nil).GetConnection(context.Background(), shadowTestOU, uuid.New())
+	_, err = newShadowSvc(repo).GetConnection(context.Background(), shadowTestOU, uuid.New())
 	assert.NotErrorIs(t, err, utils.ErrShadowConnectionNotFound)
 	assert.ErrorIs(t, err, assert.AnError)
 }
@@ -451,40 +482,60 @@ func TestShadowGetConnection_NotFoundIsNotMasked(t *testing.T) {
 
 func TestShadowCreateScan(t *testing.T) {
 	c1 := models.ShadowConnection{ID: uuid.New()}
+	c2 := models.ShadowConnection{ID: uuid.New()}
 	var created *models.ShadowScan
 	repo := &repomocks.ShadowAgentRepositoryMock{
 		ListConnectionsFunc: func(context.Context, string) ([]models.ShadowConnection, error) {
-			return []models.ShadowConnection{c1}, nil
+			return []models.ShadowConnection{c1, c2}, nil
 		},
 		CreateScanFunc: func(_ context.Context, s *models.ShadowScan) error {
 			created = s
 			return nil
 		},
 	}
-	svc := newShadowSvc(repo, nil)
-	scan, err := svc.CreateScan(auditableCtx(t), shadowTestOU, nil, 0)
+	svc := newShadowSvc(repo)
+	// All connections.
+	scan, err := svc.CreateScan(auditableCtx(t), shadowTestOU, nil)
 	require.NoError(t, err)
-	assert.Equal(t, ShadowDefaultLookbackDays, scan.LookbackDays)
 	assert.Equal(t, models.ShadowScanQueued, created.Status)
-	assert.Equal(t, []string{c1.ID.String()}, created.ConnectionIDs)
+	assert.Equal(t, []string{c1.ID.String(), c2.ID.String()}, created.ConnectionIDs)
+	assert.Equal(t, created, scan)
 
-	_, err = svc.CreateScan(auditableCtx(t), shadowTestOU, nil, 91)
-	assert.ErrorIs(t, err, utils.ErrInvalidInput)
-	_, err = svc.CreateScan(auditableCtx(t), shadowTestOU, []uuid.UUID{uuid.New()}, 7)
+	// One connection, and a repeated ID counted once.
+	_, err = svc.CreateScan(auditableCtx(t), shadowTestOU, []uuid.UUID{c2.ID, c2.ID})
+	require.NoError(t, err)
+	assert.Equal(t, []string{c2.ID.String()}, created.ConnectionIDs)
+
+	_, err = svc.CreateScan(auditableCtx(t), shadowTestOU, []uuid.UUID{uuid.New()})
 	assert.ErrorIs(t, err, utils.ErrInvalidInput, "a connection of another org is not found")
 
 	repo.CreateScanFunc = func(context.Context, *models.ShadowScan) error { return utils.ErrShadowScanInProgress }
-	_, err = svc.CreateScan(auditableCtx(t), shadowTestOU, nil, 7)
+	_, err = svc.CreateScan(auditableCtx(t), shadowTestOU, nil)
 	assert.ErrorIs(t, err, utils.ErrShadowScanInProgress)
 
 	repo.ListConnectionsFunc = func(context.Context, string) ([]models.ShadowConnection, error) {
 		return []models.ShadowConnection{}, nil
 	}
-	_, err = svc.CreateScan(auditableCtx(t), shadowTestOU, nil, 7)
+	_, err = svc.CreateScan(auditableCtx(t), shadowTestOU, nil)
 	assert.ErrorIs(t, err, utils.ErrShadowNoConnections)
 }
 
-// ---- findings ----
+func TestShadowClearScans(t *testing.T) {
+	repo := &repomocks.ShadowAgentRepositoryMock{
+		DeleteFinishedScansFunc: func(context.Context, string) (int64, error) { return 3, nil },
+	}
+	n, err := newShadowSvc(repo).ClearScans(context.Background(), shadowTestOU)
+	require.NoError(t, err)
+	assert.Equal(t, 3, n)
+	require.Len(t, repo.DeleteFinishedScansCalls(), 1)
+	assert.Equal(t, shadowTestOU, repo.DeleteFinishedScansCalls()[0].OuID)
+
+	repo.DeleteFinishedScansFunc = func(context.Context, string) (int64, error) { return 0, assert.AnError }
+	_, err = newShadowSvc(repo).ClearScans(context.Background(), shadowTestOU)
+	assert.ErrorIs(t, err, assert.AnError)
+}
+
+// ---- agents ----
 
 func findingRepo(f models.ShadowFinding) *repomocks.ShadowAgentRepositoryMock {
 	return &repomocks.ShadowAgentRepositoryMock{
@@ -492,200 +543,82 @@ func findingRepo(f models.ShadowFinding) *repomocks.ShadowAgentRepositoryMock {
 			return &repositories.ShadowFindingRow{ShadowFinding: f}, nil
 		},
 		ListSignalsFunc: func(context.Context, string, uuid.UUID) ([]models.ShadowFindingSignal, error) {
-			return []models.ShadowFindingSignal{}, nil
-		},
-		ListFindingKeysFunc: func(context.Context, string, uuid.UUID) ([]models.ShadowAPIKey, error) {
-			return []models.ShadowAPIKey{}, nil
-		},
-		ListUsageFunc: func(context.Context, string, uuid.UUID) ([]models.ShadowUsageDaily, error) {
-			return []models.ShadowUsageDaily{}, nil
-		},
-		LatestScanFunc: func(context.Context, string) (*models.ShadowScan, error) {
-			return nil, gorm.ErrRecordNotFound
+			return []models.ShadowFindingSignal{{Code: sa.SigOpenAIAgentObject, Source: "GET /v1/agents"}}, nil
 		},
 	}
 }
 
-func TestShadowOnboard_ChecksTheAgentExistsInTheCallersOrg(t *testing.T) {
-	f := models.ShadowFinding{ID: uuid.New(), OUID: shadowTestOU, Kind: models.ShadowKindAPIKey, Provider: models.ShadowProviderOpenAI}
-	repo := findingRepo(f)
-	var lookedUpOU string
-	agents := &shadowAgentLookupStub{GetAgentFunc: func(_ context.Context, ouID, _, _ string) (*models.AgentResponse, error) {
-		lookedUpOU = ouID
-		return nil, utils.ErrAgentNotFound
-	}}
-	_, err := newShadowSvc(repo, agents).Onboard(auditableCtx(t), shadowTestOU, f.ID, "proj", "agent")
-	assert.ErrorIs(t, err, utils.ErrAgentNotFound)
-	assert.Equal(t, shadowTestOU, lookedUpOU)
-	assert.Empty(t, repo.OnboardFindingCalls(), "nothing is linked to a missing agent")
-
-	agents.GetAgentFunc = func(context.Context, string, string, string) (*models.AgentResponse, error) {
-		return &models.AgentResponse{}, nil
-	}
-	repo.OnboardFindingFunc = func(_ context.Context, ouID string, _ uuid.UUID, project, agent, _ string, _ time.Time) error {
-		assert.Equal(t, shadowTestOU, ouID)
-		assert.Equal(t, "proj", project)
-		assert.Equal(t, "agent", agent)
-		return nil
-	}
-	_, err = newShadowSvc(repo, agents).Onboard(auditableCtx(t), shadowTestOU, f.ID, " proj ", " agent ")
-	require.NoError(t, err)
-	assert.Len(t, repo.OnboardFindingCalls(), 1)
-}
-
-func TestShadowOnboard_RefusesToolInfrastructure(t *testing.T) {
-	f := models.ShadowFinding{ID: uuid.New(), Kind: models.ShadowKindToolInfra}
-	_, err := newShadowSvc(findingRepo(f), nil).Onboard(auditableCtx(t), shadowTestOU, f.ID, "p", "a")
-	assert.ErrorIs(t, err, utils.ErrInvalidInput)
-}
-
-func TestShadowConfirmRetirement_NeedsReadyState(t *testing.T) {
-	onboarded := time.Now().UTC().AddDate(0, 0, -3)
+func TestShadowGetFinding(t *testing.T) {
+	other := models.ShadowFinding{ID: uuid.New(), DisplayName: "Orders agent", Provider: models.ShadowProviderBedrock}
 	f := models.ShadowFinding{
-		ID: uuid.New(), Kind: models.ShadowKindAPIKey, LinkedAgent: "a", OnboardedAt: &onboarded,
-		RetirementState: models.ShadowRetirementMonitoring, LastSeenAt: time.Now().UTC(),
+		ID: uuid.New(), Provider: models.ShadowProviderFoundry, Kind: models.ShadowKindPlatformAgent,
+		Related: []models.ShadowFindingRelation{
+			{FindingID: other.ID.String(), Relation: "possible_duplicate"},
+			{FindingID: uuid.New().String(), Relation: "possible_duplicate"}, // deleted with its connection
+		},
 	}
-	_, err := newShadowSvc(findingRepo(f), nil).ConfirmRetirement(auditableCtx(t), shadowTestOU, f.ID)
-	assert.ErrorIs(t, err, utils.ErrConflict, "3 zero days are not enough")
+	repo := findingRepo(f)
+	repo.GetFindingFunc = func(_ context.Context, _ string, id uuid.UUID) (*repositories.ShadowFindingRow, error) {
+		switch id {
+		case f.ID:
+			return &repositories.ShadowFindingRow{ShadowFinding: f}, nil
+		case other.ID:
+			return &repositories.ShadowFindingRow{ShadowFinding: other}, nil
+		}
+		return nil, gorm.ErrRecordNotFound
+	}
+	v, err := newShadowSvc(repo).GetFinding(context.Background(), shadowTestOU, f.ID)
+	require.NoError(t, err)
+	require.Len(t, v.Signals, 1)
+	require.Len(t, v.Related, 1, "a relation to a deleted agent is left out")
+	assert.Equal(t, "Orders agent", v.Related[0].DisplayName)
+	assert.Equal(t, models.ShadowProviderBedrock, v.Related[0].Provider)
 
-	f.LinkedAgent = ""
-	_, err = newShadowSvc(findingRepo(f), nil).ConfirmRetirement(auditableCtx(t), shadowTestOU, f.ID)
-	assert.ErrorIs(t, err, utils.ErrShadowNotOnboarded)
+	_, err = newShadowSvc(repo).GetFinding(context.Background(), shadowTestOU, uuid.New())
+	assert.ErrorIs(t, err, utils.ErrShadowFindingNotFound)
 }
 
-// TestShadowProjectFinding_OnboardButNoRetirement: a project finding can be
-// onboarded (linked to an agent) but has no credential to retire.
-func TestShadowProjectFinding_OnboardButNoRetirement(t *testing.T) {
-	f := models.ShadowFinding{ID: uuid.New(), OUID: shadowTestOU, Kind: models.ShadowKindProject, Provider: models.ShadowProviderOpenAI}
-	repo := findingRepo(f)
-	repo.OnboardFindingFunc = func(context.Context, string, uuid.UUID, string, string, string, time.Time) error { return nil }
-	agents := &shadowAgentLookupStub{GetAgentFunc: func(context.Context, string, string, string) (*models.AgentResponse, error) {
-		return &models.AgentResponse{}, nil
-	}}
-	_, err := newShadowSvc(repo, agents).Onboard(auditableCtx(t), shadowTestOU, f.ID, "proj", "agent")
-	require.NoError(t, err)
-	assert.Len(t, repo.OnboardFindingCalls(), 1)
-
-	onboarded := day("2026-10-01")
-	through := day("2026-11-12")
-	pf := &models.ShadowFinding{
-		Provider: models.ShadowProviderOpenAI, Kind: models.ShadowKindProject, LinkedAgent: "a", OnboardedAt: &onboarded,
+func TestShadowListFindings_Validation(t *testing.T) {
+	var got repositories.ShadowFindingFilter
+	repo := &repomocks.ShadowAgentRepositoryMock{
+		ListFindingsFunc: func(_ context.Context, _ string, f repositories.ShadowFindingFilter) ([]repositories.ShadowFindingRow, int, error) {
+			got = f
+			return nil, 0, nil
+		},
 	}
-	v := EvaluateShadowRetirement(pf, nil, nil, &through, &through)
-	assert.Empty(t, v.State, "no retirement for a project")
-	assert.Empty(t, v.Guidance.Title)
-	assert.Empty(t, v.Guidance.Steps)
-
-	now := time.Now().UTC().AddDate(0, 0, -30)
-	f2 := models.ShadowFinding{ID: uuid.New(), Kind: models.ShadowKindProject, LinkedAgent: "a", OnboardedAt: &now, LastSeenAt: time.Now().UTC()}
-	_, err = newShadowSvc(findingRepo(f2), nil).ConfirmRetirement(auditableCtx(t), shadowTestOU, f2.ID)
-	assert.ErrorIs(t, err, utils.ErrConflict, "a project cannot be retired")
+	svc := newShadowSvc(repo)
+	_, _, err := svc.ListFindings(context.Background(), shadowTestOU, repositories.ShadowFindingFilter{Provider: "openai", Limit: 0, Offset: -3})
+	require.NoError(t, err)
+	assert.Equal(t, 50, got.Limit)
+	assert.Equal(t, 0, got.Offset)
+	for _, f := range []repositories.ShadowFindingFilter{
+		{Provider: "acme"},
+		{Status: "onboarded"},
+		{Status: "retired"},
+	} {
+		_, _, err = svc.ListFindings(context.Background(), shadowTestOU, f)
+		assert.ErrorIs(t, err, utils.ErrInvalidInput, f)
+	}
 }
 
 func TestShadowUpdateFindingStatus(t *testing.T) {
 	f := models.ShadowFinding{ID: uuid.New()}
 	repo := findingRepo(f)
 	repo.UpdateFindingStatusFunc = func(context.Context, string, uuid.UUID, string) error { return nil }
-	svc := newShadowSvc(repo, nil)
-	_, err := svc.UpdateFindingStatus(auditableCtx(t), shadowTestOU, f.ID, models.ShadowStatusDismissed)
-	require.NoError(t, err)
-	_, err = svc.UpdateFindingStatus(auditableCtx(t), shadowTestOU, f.ID, models.ShadowStatusOnboarded)
-	assert.ErrorIs(t, err, utils.ErrInvalidInput, "onboarding has its own endpoint")
-}
-
-// ---- retirement ----
-
-func day(s string) time.Time {
-	t, err := time.Parse(time.DateOnly, s)
-	if err != nil {
-		panic(err)
+	svc := newShadowSvc(repo)
+	for _, s := range []string{models.ShadowStatusReviewed, models.ShadowStatusDismissed, models.ShadowStatusNew} {
+		_, err := svc.UpdateFindingStatus(auditableCtx(t), shadowTestOU, f.ID, s)
+		require.NoError(t, err, s)
 	}
-	return t
-}
-
-func TestZeroUsageDays(t *testing.T) {
-	onboarded := day("2026-11-01").Add(10 * time.Hour)
-	through := day("2026-11-10").Add(5 * time.Hour)
-	// Complete days after onboarding up to the day before the data's end: 2..9.
-	assert.Equal(t, 8, zeroUsageDays(onboarded, nil, &through))
-	last := day("2026-11-05")
-	assert.Equal(t, 4, zeroUsageDays(onboarded, &last, &through), "counting restarts after the last direct use")
-	assert.Equal(t, 0, zeroUsageDays(onboarded, nil, nil))
-}
-
-func TestEvaluateShadowRetirement(t *testing.T) {
-	onboarded := day("2026-11-01")
-	f := &models.ShadowFinding{
-		Provider: models.ShadowProviderOpenAI, Kind: models.ShadowKindAPIKey, LinkedAgent: "a", OnboardedAt: &onboarded,
-		RetirementState: models.ShadowRetirementMonitoring,
+	require.Len(t, repo.UpdateFindingStatusCalls(), 3)
+	for _, s := range []string{"onboarded", "retired", "agent"} {
+		_, err := svc.UpdateFindingStatus(auditableCtx(t), shadowTestOU, f.ID, s)
+		assert.ErrorIs(t, err, utils.ErrInvalidInput, s)
 	}
-	through := day("2026-11-06")
-	v := EvaluateShadowRetirement(f, nil, nil, &through, &through)
-	assert.Equal(t, models.ShadowRetirementMonitoring, v.State)
-	assert.Equal(t, 4, v.ZeroUsageDays)
-
-	through = day("2026-11-12")
-	v = EvaluateShadowRetirement(f, nil, nil, &through, &through)
-	assert.Equal(t, models.ShadowRetirementReady, v.State)
-	assert.Contains(t, v.Guidance.Title, "OpenAI")
-
-	usage := []models.ShadowUsageDaily{{Day: day("2026-11-09"), Requests: 3}}
-	v = EvaluateShadowRetirement(f, usage, nil, &through, &through)
-	assert.Equal(t, models.ShadowRetirementMonitoring, v.State, "direct usage after onboarding restarts the window")
-	assert.Equal(t, 2, v.ZeroUsageDays)
+	repo.UpdateFindingStatusFunc = func(context.Context, string, uuid.UUID, string) error { return gorm.ErrRecordNotFound }
+	_, err := svc.UpdateFindingStatus(auditableCtx(t), shadowTestOU, f.ID, models.ShadowStatusReviewed)
+	assert.ErrorIs(t, err, utils.ErrShadowFindingNotFound)
 }
-
-func TestVerifyShadowRetirement(t *testing.T) {
-	marked := day("2026-11-10")
-	after := day("2026-11-12")
-	key := func(present bool, status string) []models.ShadowAPIKey {
-		return []models.ShadowAPIKey{{KeyID: "k", Name: "prod", Present: present, Status: status}}
-	}
-	f := &models.ShadowFinding{Kind: models.ShadowKindAPIKey, RetirementMarkedAt: &marked, LastSeenAt: after}
-
-	ok, msg := verifyShadowRetirement(f, nil, key(true, "active"), &marked)
-	assert.False(t, ok)
-	assert.Contains(t, msg, "Run a scan")
-	ok, msg = verifyShadowRetirement(f, nil, key(true, "active"), &after)
-	assert.False(t, ok)
-	assert.Contains(t, msg, "still lists")
-	ok, _ = verifyShadowRetirement(f, nil, key(true, "archived"), &after)
-	assert.True(t, ok, "Anthropic archived keys stay listed")
-	ok, _ = verifyShadowRetirement(f, nil, key(false, ""), &after)
-	assert.True(t, ok, "OpenAI deleted keys disappear")
-	ok, msg = verifyShadowRetirement(f, []models.ShadowUsageDaily{{Day: day("2026-11-11"), Requests: 1}}, key(false, ""), &after)
-	assert.False(t, ok)
-	assert.Contains(t, msg, "after you confirmed")
-
-	foundry := &models.ShadowFinding{Kind: models.ShadowKindPlatformAgent, State: "disabled", RetirementMarkedAt: &marked, LastSeenAt: after}
-	ok, _ = verifyShadowRetirement(foundry, nil, nil, &after)
-	assert.True(t, ok)
-
-	gone := &models.ShadowFinding{Kind: models.ShadowKindRuntime, RetirementMarkedAt: &marked, LastSeenAt: marked}
-	ok, msg = verifyShadowRetirement(gone, nil, nil, &after)
-	assert.True(t, ok, msg)
-
-	principal := &models.ShadowFinding{Kind: models.ShadowKindPrincipal, RetirementMarkedAt: &marked, LastSeenAt: after}
-	nextDay := day("2026-11-11")
-	ok, _ = verifyShadowRetirement(principal, nil, nil, &nextDay)
-	assert.False(t, ok, "a principal needs a full day of CloudTrail data")
-	ok, _ = verifyShadowRetirement(principal, nil, nil, &after)
-	assert.True(t, ok)
-}
-
-func TestDataThroughStrictNeedsAFullySuccessfulConnection(t *testing.T) {
-	conn := uuid.New()
-	seen := day("2026-11-05")
-	started, finished := day("2026-11-08"), day("2026-11-08").Add(time.Minute)
-	f := &models.ShadowFinding{ConnectionID: conn, LastSeenAt: seen}
-	scan := &models.ShadowScan{StartedAt: &started, FinishedAt: &finished, Results: []models.ShadowScanConnectionResult{
-		{ConnectionID: conn.String(), Outcome: shadowConnectionPartial},
-	}}
-	assert.Equal(t, started, *dataThrough(f, scan, false))
-	assert.Equal(t, seen, *dataThrough(f, scan, true), "a partial scan does not prove the finding is gone")
-}
-
-// ---- correlation ----
 
 func TestCorrelateShadowFindings(t *testing.T) {
 	account := "/subscriptions/s/resourceGroups/rg/providers/Microsoft.CognitiveServices/accounts/acct"
@@ -712,62 +645,72 @@ func TestCorrelateShadowFindings(t *testing.T) {
 	assert.Empty(t, rel[unrelated.ID], "only Foundry external agents are matched by name")
 }
 
-// ---- persistence input: retention, catalog weights, aggregation ----
+// ---- persistence input: retention and the evidence catalog ----
 
 func TestToShadowApply_AppliesRetentionAndCatalog(t *testing.T) {
 	logs := &bytes.Buffer{}
 	log := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	nan := math.NaN()
+	created := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	out := &sa.Result{
 		Findings: []*sa.Finding{
 			{
-				Kind: models.ShadowKindPlatformAgent, ExternalID: "agent_1", DisplayName: "Bot",
-				Attributes: map[string]any{"model": "gpt-4.1", "instructions": shadowPromptMark, "system": shadowPromptMark},
+				Kind: models.ShadowKindPlatformAgent, ExternalID: "agent_1", DisplayName: "Bot", State: "active",
+				ProviderCreatedAt: &created,
+				OwnerHint:         models.ShadowOwnerHint{Email: "dev@example.com", Source: "GET /v1/agents"},
+				Attributes: map[string]any{
+					"model": "gpt-4.1", "instructions": shadowPromptMark, "system": shadowPromptMark,
+					"sessionCount": 4, "models": []string{"x"},
+				},
 				Signals: []sa.Signal{
 					{Code: sa.SigOpenAIAgentObject, Source: "GET /v1/agents", Observed: map[string]any{
-						"count": 1, "prompt": shadowPromptMark + strings.Repeat("x", 100), "nan": nan,
+						"toolCount": 1, "prompt": shadowPromptMark + strings.Repeat("x", 100), "nan": nan,
 					}},
-					{Code: "made.up.signal", Source: "x"},
+					{Code: "openai.plain_usage", Source: "GET /v1/organization/usage/completions"},
 				},
-				Usage: []sa.UsageDay{{Day: day("2026-11-01").Add(5 * time.Hour), Requests: 3, CostAmount: &nan}},
 			},
-			{Kind: "not_a_kind", ExternalID: "x"},
-			{Kind: models.ShadowKindAPIKey, ExternalID: " "},
+			// No agent evidence (only a removed code): not stored.
+			{Kind: models.ShadowKindRuntime, ExternalID: "rt", Signals: []sa.Signal{{Code: "bedrock.runtime_in_use"}}},
+			{Kind: "api_key", ExternalID: "key_1", Signals: []sa.Signal{{Code: sa.SigOpenAIAgentObject}}},
+			{Kind: "tool_infrastructure", ExternalID: "gw", Signals: []sa.Signal{{Code: sa.SigOpenAIAgentObject}}},
+			{Kind: models.ShadowKindPlatformAgent, ExternalID: " ", Signals: []sa.Signal{{Code: sa.SigOpenAIAgentObject}}},
 		},
-		Keys: []sa.Key{{KeyID: "key_1", Name: "prod", RedactedHint: "sk-proj-FULLKEYFULLKEYFULLKEY"}},
 	}
 	scan := &models.ShadowScan{ID: uuid.New(), OUID: shadowTestOU}
 	conn := &models.ShadowConnection{ID: uuid.New(), Provider: models.ShadowProviderOpenAI}
-	in := toShadowApply(scan, conn, out, sa.NewWindow(time.Now(), 30), time.Now(), time.Now(), log)
+	started := time.Now().UTC()
+	in := toShadowApply(scan, conn, out, started, started, true, log)
 
-	require.Len(t, in.Findings, 1, "invalid kinds and empty IDs are dropped")
+	assert.True(t, in.Complete)
+	assert.Equal(t, started, in.ScanStartedAt)
+	require.Len(t, in.Findings, 1, "only agent kinds with agent evidence and an ID are stored")
 	f := in.Findings[0]
-	require.Len(t, f.Signals, 1, "unknown signal codes are dropped")
-	d, _ := sa.Def(sa.SigOpenAIAgentObject)
-	assert.Equal(t, d.Weight, f.Signals[0].Weight, "weights come from the catalog")
-	assert.Equal(t, d.Condition, f.Signals[0].Condition)
+	assert.Equal(t, models.ShadowProviderOpenAI, f.Finding.Provider)
+	assert.Equal(t, "active", f.Finding.State)
+	assert.Equal(t, &created, f.Finding.ProviderCreatedAt)
+	assert.Equal(t, "dev@example.com", f.Finding.OwnerHint.Email, "an owner the listing gives is kept")
+	assert.Equal(t, map[string]any{"model": "gpt-4.1"}, f.Finding.Attributes, "only allow-listed attributes")
+	require.Len(t, f.Signals, 1, "unknown and removed evidence codes are dropped")
+	assert.Equal(t, sa.SigOpenAIAgentObject, f.Signals[0].Code)
+	assert.Equal(t, "GET /v1/agents", f.Signals[0].Source)
 	assert.NotContains(t, f.Signals[0].Observed, "prompt", "long free text is not observed data")
 	assert.NotContains(t, f.Signals[0].Observed, "nan")
-	assert.Nil(t, f.Usage[0].CostAmount, "a non-finite cost is dropped")
-	assert.Equal(t, day("2026-11-01"), f.Usage[0].Day)
-	assert.Equal(t, models.ShadowProviderOpenAI, f.Finding.Provider)
+	assert.EqualValues(t, 1, f.Signals[0].Observed["toolCount"])
 
 	stored, err := json.Marshal(in)
 	require.NoError(t, err)
 	assert.NotContains(t, string(stored), shadowPromptMark)
-	assert.NotContains(t, string(stored), "FULLKEYFULLKEY", "a whole key is never stored as a hint")
 	assert.NotContains(t, logs.String(), shadowPromptMark)
+
+	assert.False(t, toShadowApply(scan, conn, out, started, started, false, log).Complete)
 }
 
-func TestValidShadowKind_IncludesProject(t *testing.T) {
-	for _, k := range []string{
-		models.ShadowKindPlatformAgent, models.ShadowKindRuntime, models.ShadowKindAPIKey,
-		models.ShadowKindPrincipal, models.ShadowKindToolInfra, models.ShadowKindProject,
-	} {
-		assert.True(t, validShadowKind(k), k)
+func TestValidShadowKind_AgentsOnly(t *testing.T) {
+	assert.True(t, validShadowKind(models.ShadowKindPlatformAgent))
+	assert.True(t, validShadowKind(models.ShadowKindRuntime))
+	for _, k := range []string{"api_key", "principal", "tool_infrastructure", "project", "deployment", ""} {
+		assert.False(t, validShadowKind(k), k)
 	}
-	assert.False(t, validShadowKind("workspace"))
-	assert.False(t, validShadowKind("deployment"), "Azure OpenAI deployments are no longer a finding kind")
 }
 
 func TestConnectionOutcome(t *testing.T) {
@@ -794,7 +737,7 @@ type fakeShadowConnector struct {
 }
 
 func (f *fakeShadowConnector) Provider() string { return f.provider }
-func (f *fakeShadowConnector) Scan(_ context.Context, conn sa.Connection, _ sa.Window) *sa.Result {
+func (f *fakeShadowConnector) Scan(_ context.Context, conn sa.Connection) *sa.Result {
 	return f.scan(conn)
 }
 
@@ -802,20 +745,75 @@ func (f *fakeShadowConnector) Test(context.Context, sa.Connection) models.Shadow
 	return models.ShadowConnectionTestInfo{OK: true, Checks: []models.ShadowConnectionCheck{}}
 }
 
-// One provider failing (here, panicking) never breaks the others: its
-// connection fails, the other's findings are saved, the scan is partial.
+type shadowScannerHarness struct {
+	mu       sync.Mutex
+	applied  map[string]repositories.ShadowConnectionApply
+	finished *models.ShadowScan
+	repo     *repomocks.ShadowAgentRepositoryMock
+}
+
+// newShadowScannerHarness runs one claimed scan over conns with an in-memory
+// repository that records what each connection applied.
+func newShadowScannerHarness(scan models.ShadowScan, conns ...models.ShadowConnection) *shadowScannerHarness {
+	h := &shadowScannerHarness{applied: map[string]repositories.ShadowConnectionApply{}}
+	byID := map[uuid.UUID]models.ShadowConnection{}
+	for _, c := range conns {
+		byID[c.ID] = c
+	}
+	h.repo = &repomocks.ShadowAgentRepositoryMock{
+		ClaimDueScansFunc: func(context.Context, time.Time, time.Duration, int) ([]models.ShadowScan, error) {
+			return []models.ShadowScan{scan}, nil
+		},
+		GetConnectionFunc: func(_ context.Context, _ string, id uuid.UUID) (*models.ShadowConnection, error) {
+			c, ok := byID[id]
+			if !ok {
+				return nil, gorm.ErrRecordNotFound
+			}
+			return &c, nil
+		},
+		// Connections run concurrently, so the mock's callbacks are too.
+		ApplyConnectionResultFunc: func(_ context.Context, in repositories.ShadowConnectionApply) (int, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.applied[in.ConnectionID.String()] = in
+			return len(in.Findings), nil
+		},
+		ListOrgFindingsFunc: func(context.Context, string) ([]models.ShadowFinding, error) { return []models.ShadowFinding{}, nil },
+		ApplyCorrelationFunc: func(context.Context, string, map[uuid.UUID][]models.ShadowFindingRelation,
+			map[uuid.UUID][]models.ShadowFindingSignal,
+		) error {
+			return nil
+		},
+		FinishScanFunc: func(_ context.Context, s *models.ShadowScan) error {
+			h.finished = s
+			return nil
+		},
+		RenewScanLeaseFunc: func(context.Context, uuid.UUID, time.Time) error { return nil },
+	}
+	return h
+}
+
+func agentResult(id string, calls ...models.ShadowScanCallResult) *sa.Result {
+	return &sa.Result{
+		Findings: []*sa.Finding{{
+			Kind: models.ShadowKindPlatformAgent, ExternalID: id,
+			Signals: []sa.Signal{{Code: sa.SigOpenAIAgentObject, Source: "GET /v1/agents"}},
+		}},
+		Calls: calls,
+	}
+}
+
+// One platform failing (here, panicking) never breaks the others: its
+// connection fails, the other's agents are saved, the scan is partial.
 func TestShadowScannerIsolatesFailingProviders(t *testing.T) {
-	enc, err := (&shadowAgentService{encryptionKey: shadowTestKey}).encryptSecret(models.ShadowConnectionSecret{APIKey: shadowSecretKey})
+	enc, err := (&shadowAgentService{encryptionKey: shadowTestKey}).encryptSecret(models.ShadowConnectionSecret{ScopedKeys: map[string]string{"proj_a": shadowSecretKey}})
 	require.NoError(t, err)
 	good := models.ShadowConnection{ID: uuid.New(), OUID: shadowTestOU, Name: "good", Provider: models.ShadowProviderOpenAI, SecretEncrypted: enc}
 	bad := models.ShadowConnection{ID: uuid.New(), OUID: shadowTestOU, Name: "bad", Provider: models.ShadowProviderAnthropic, SecretEncrypted: enc}
 	connectors := ShadowConnectors{
 		models.ShadowProviderOpenAI: &fakeShadowConnector{provider: models.ShadowProviderOpenAI, scan: func(conn sa.Connection) *sa.Result {
-			assert.Equal(t, shadowSecretKey, conn.Secret.APIKey, "the connector gets the decrypted secret")
-			return &sa.Result{
-				Findings: []*sa.Finding{{Kind: models.ShadowKindAPIKey, ExternalID: "key_1", Signals: []sa.Signal{{Code: sa.SigOpenAIPlainUsage}}}},
-				Calls:    []models.ShadowScanCallResult{{Call: "GET /usage", Outcome: models.ShadowCallOK, Items: 1}},
-			}
+			assert.Equal(t, shadowSecretKey, conn.Secret.ScopedKeys["proj_a"], "the connector gets the decrypted secret")
+			return agentResult("agent_1", models.ShadowScanCallResult{Call: "GET /v1/agents", Outcome: models.ShadowCallOK, Items: 1})
 		}},
 		models.ShadowProviderAnthropic: &fakeShadowConnector{provider: models.ShadowProviderAnthropic, scan: func(sa.Connection) *sa.Result {
 			panic("connector bug")
@@ -823,59 +821,60 @@ func TestShadowScannerIsolatesFailingProviders(t *testing.T) {
 	}
 	started := time.Now().UTC()
 	scan := models.ShadowScan{
-		ID: uuid.New(), OUID: shadowTestOU, Status: models.ShadowScanRunning, LookbackDays: 30, Attempts: 1,
+		ID: uuid.New(), OUID: shadowTestOU, Status: models.ShadowScanRunning, Attempts: 1,
 		StartedAt: &started, ConnectionIDs: []string{good.ID.String(), bad.ID.String()},
 	}
-	var finished *models.ShadowScan
-	// Connections run concurrently, so the mock's callbacks are too.
-	var mu sync.Mutex
-	var applied []repositories.ShadowConnectionApply
-	repo := &repomocks.ShadowAgentRepositoryMock{
-		ClaimDueScansFunc: func(context.Context, time.Time, time.Duration, int) ([]models.ShadowScan, error) {
-			return []models.ShadowScan{scan}, nil
-		},
-		GetConnectionFunc: func(_ context.Context, _ string, id uuid.UUID) (*models.ShadowConnection, error) {
-			if id == good.ID {
-				return &good, nil
-			}
-			return &bad, nil
-		},
-		ApplyConnectionResultFunc: func(_ context.Context, in repositories.ShadowConnectionApply, _ repositories.ShadowScoreFunc) (int, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			applied = append(applied, in)
-			return len(in.Findings), nil
-		},
-		ListOrgFindingsFunc: func(context.Context, string) ([]models.ShadowFinding, error) { return []models.ShadowFinding{}, nil },
-		ApplyCorrelationFunc: func(context.Context, string, map[uuid.UUID][]models.ShadowFindingRelation,
-			map[uuid.UUID][]models.ShadowFindingSignal, repositories.ShadowScoreFunc,
-		) error {
-			return nil
-		},
-		FinishScanFunc: func(_ context.Context, s *models.ShadowScan) error {
-			finished = s
-			return nil
-		},
-		ListOnboardedFindingsFunc: func(context.Context, string) ([]models.ShadowFinding, error) { return []models.ShadowFinding{}, nil },
-		RenewScanLeaseFunc:        func(context.Context, uuid.UUID, time.Time) error { return nil },
-	}
+	h := newShadowScannerHarness(scan, good, bad)
 	logs := &bytes.Buffer{}
-	scanner := NewShadowAgentScanner(repo, connectors, shadowTestKey, slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	scanner := NewShadowAgentScanner(h.repo, connectors, shadowTestKey, slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	scanner.RunOnce(context.Background())
 
-	require.NotNil(t, finished)
-	assert.Equal(t, models.ShadowScanPartial, finished.Status)
-	require.Len(t, finished.Results, 2)
+	require.NotNil(t, h.finished)
+	assert.Equal(t, models.ShadowScanPartial, h.finished.Status)
+	require.Len(t, h.finished.Results, 2)
 	byName := map[string]models.ShadowScanConnectionResult{}
-	for _, r := range finished.Results {
+	for _, r := range h.finished.Results {
 		byName[r.ConnectionName] = r
 	}
 	assert.Equal(t, shadowConnectionOK, byName["good"].Outcome)
 	assert.Equal(t, 1, byName["good"].FindingsCount)
 	assert.Equal(t, shadowConnectionFailed, byName["bad"].Outcome)
 	assert.Contains(t, byName["bad"].Calls[0].Message, "internal error")
-	require.NotEmpty(t, applied)
+	assert.True(t, h.applied[good.ID.String()].Complete, "every call succeeded: the listing is complete")
+	assert.False(t, h.applied[bad.ID.String()].Complete, "a failed connection never marks an agent as gone")
+	assert.Equal(t, started, h.applied[good.ID.String()].ScanStartedAt)
 	assert.NotContains(t, logs.String(), "SECRETSECRET", "the credential is never logged")
+}
+
+// A listing is complete only when every call succeeded or was skipped on
+// purpose; then the repository may mark agents that were not returned.
+func TestShadowScannerCompleteListing(t *testing.T) {
+	enc, err := (&shadowAgentService{encryptionKey: shadowTestKey}).encryptSecret(models.ShadowConnectionSecret{})
+	require.NoError(t, err)
+	cases := map[string]struct {
+		calls    []models.ShadowScanCallResult
+		complete bool
+	}{
+		"all ok":             {[]models.ShadowScanCallResult{{Call: "a", Outcome: models.ShadowCallOK}}, true},
+		"ok and skipped":     {[]models.ShadowScanCallResult{{Call: "a", Outcome: models.ShadowCallOK}, {Call: "b", Outcome: models.ShadowCallSkipped}}, true},
+		"one call failed":    {[]models.ShadowScanCallResult{{Call: "a", Outcome: models.ShadowCallOK}, {Call: "b", Outcome: models.ShadowCallPermissionDenied}}, false},
+		"page limit reached": {[]models.ShadowScanCallResult{{Call: "a", Outcome: models.ShadowCallOK}, {Call: "a (page limit)", Outcome: models.ShadowCallFailed}}, false},
+		"auth failed":        {[]models.ShadowScanCallResult{{Call: "a", Outcome: models.ShadowCallAuthFailed}}, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := models.ShadowConnection{ID: uuid.New(), OUID: shadowTestOU, Name: "c", Provider: models.ShadowProviderOpenAI, SecretEncrypted: enc}
+			started := time.Now().UTC()
+			scan := models.ShadowScan{ID: uuid.New(), OUID: shadowTestOU, Attempts: 1, StartedAt: &started, ConnectionIDs: []string{c.ID.String()}}
+			h := newShadowScannerHarness(scan, c)
+			connectors := ShadowConnectors{models.ShadowProviderOpenAI: &fakeShadowConnector{
+				provider: models.ShadowProviderOpenAI, scan: func(sa.Connection) *sa.Result { return agentResult("agent_1", tc.calls...) },
+			}}
+			NewShadowAgentScanner(h.repo, connectors, shadowTestKey, discardLogger()).RunOnce(context.Background())
+			assert.Equal(t, tc.complete, h.applied[c.ID.String()].Complete)
+			assert.Len(t, h.applied[c.ID.String()].Findings, 1, "the agents found are saved either way")
+		})
+	}
 }
 
 func TestShadowScannerGivesUpAfterMaxAttempts(t *testing.T) {
@@ -893,4 +892,26 @@ func TestShadowScannerGivesUpAfterMaxAttempts(t *testing.T) {
 	NewShadowAgentScanner(repo, ShadowConnectors{}, shadowTestKey, discardLogger()).RunOnce(context.Background())
 	require.NotNil(t, finished)
 	assert.Equal(t, models.ShadowScanFailed, finished.Status)
+}
+
+func TestShadowDeleteAgents(t *testing.T) {
+	id := uuid.New()
+	repo := &repomocks.ShadowAgentRepositoryMock{
+		DeleteFindingFunc: func(_ context.Context, ou string, got uuid.UUID) (bool, error) {
+			return ou == shadowTestOU && got == id, nil
+		},
+		DeleteFindingsFunc: func(context.Context, string) (int64, error) { return 4, nil },
+	}
+	svc := newShadowSvc(repo)
+	require.NoError(t, svc.DeleteFinding(context.Background(), shadowTestOU, id))
+	assert.ErrorIs(t, svc.DeleteFinding(context.Background(), shadowTestOU, uuid.New()), utils.ErrShadowFindingNotFound)
+	assert.ErrorIs(t, svc.DeleteFinding(context.Background(), "other-ou", id), utils.ErrShadowFindingNotFound)
+	n, err := svc.DeleteFindings(context.Background(), shadowTestOU)
+	require.NoError(t, err)
+	assert.Equal(t, 4, n)
+
+	repo.DeleteFindingFunc = func(context.Context, string, uuid.UUID) (bool, error) { return false, errors.New("db down") }
+	err = svc.DeleteFinding(context.Background(), shadowTestOU, id)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, utils.ErrShadowFindingNotFound)
 }

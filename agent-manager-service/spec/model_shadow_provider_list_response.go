@@ -19,20 +19,19 @@ var _ MappedNullable = &ShadowProviderListResponse{}
 
 // ShadowProviderListResponse struct for ShadowProviderListResponse
 type ShadowProviderListResponse struct {
-	Providers []ShadowProviderSpec     `json:"providers"`
-	Signals   []ShadowSignalDefinition `json:"signals"`
-	Scoring   ShadowScoringRules       `json:"scoring"`
+	Providers []ShadowProviderSpec `json:"providers"`
+	// The evidence definitions, one per agent listing.
+	Signals []ShadowSignalDefinition `json:"signals"`
 }
 
 // NewShadowProviderListResponse instantiates a new ShadowProviderListResponse object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewShadowProviderListResponse(providers []ShadowProviderSpec, signals []ShadowSignalDefinition, scoring ShadowScoringRules) *ShadowProviderListResponse {
+func NewShadowProviderListResponse(providers []ShadowProviderSpec, signals []ShadowSignalDefinition) *ShadowProviderListResponse {
 	this := ShadowProviderListResponse{}
 	this.Providers = providers
 	this.Signals = signals
-	this.Scoring = scoring
 	return &this
 }
 
@@ -92,30 +91,6 @@ func (o *ShadowProviderListResponse) SetSignals(v []ShadowSignalDefinition) {
 	o.Signals = v
 }
 
-// GetScoring returns the Scoring field value
-func (o *ShadowProviderListResponse) GetScoring() ShadowScoringRules {
-	if o == nil {
-		var ret ShadowScoringRules
-		return ret
-	}
-
-	return o.Scoring
-}
-
-// GetScoringOk returns a tuple with the Scoring field value
-// and a boolean to check if the value has been set.
-func (o *ShadowProviderListResponse) GetScoringOk() (*ShadowScoringRules, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Scoring, true
-}
-
-// SetScoring sets field value
-func (o *ShadowProviderListResponse) SetScoring(v ShadowScoringRules) {
-	o.Scoring = v
-}
-
 func (o ShadowProviderListResponse) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -128,7 +103,6 @@ func (o ShadowProviderListResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["providers"] = o.Providers
 	toSerialize["signals"] = o.Signals
-	toSerialize["scoring"] = o.Scoring
 	return toSerialize, nil
 }
 

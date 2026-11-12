@@ -19,33 +19,26 @@ package openai
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
 )
 
-// listAgents lists the agents of every project that has a project key
-// (the Admin key cannot call /v1/agents), and their recent sessions.
+// listAgents lists the agents of every project that has a project key.
 func (s *scan) listAgents(ctx context.Context) {
 	ids := s.scopedProjects()
-	s.noteProjectsWithoutKey(ids)
 	if len(ids) == 0 {
 		s.calls.Skip(callAgents, reasonNoProjectKey)
-		s.calls.Skip(callSessions, reasonNoProjectKey)
 		return
 	}
-	sessionsRead := false
 	for _, pid := range ids {
 		if ctx.Err() != nil {
 			break
 		}
-		api := s.projectAPI(pid)
 		var got []agent
-		truncated, err := listAll(ctx, api, s.base+"/agents", url.Values{"order": []string{"desc"}}, betaAgentsHeader(),
+		truncated, err := listAll(ctx, s.projectAPI(pid), s.base+"/agents", url.Values{"order": []string{"desc"}}, betaAgentsHeader(),
 			listPageSize, maxListPages, func(a agent) bool {
 				got = append(got, a)
 				return true
@@ -59,40 +52,6 @@ func (s *scan) listAgents(ctx context.Context) {
 		for _, a := range got {
 			s.addAgent(pid, a)
 		}
-		if err == nil && !truncated {
-			s.agentsComplete[pid] = true
-		}
-		if len(s.agents[pid]) > 0 {
-			s.listSessions(ctx, api, pid)
-			sessionsRead = true
-		}
-	}
-	if !sessionsRead {
-		s.calls.Skip(callSessions, "no agents")
-	}
-}
-
-// noteProjectsWithoutKey reports the active projects that have no project
-// key, for which agents, stored completions and batches are not read.
-func (s *scan) noteProjectsWithoutKey(withKey []string) {
-	has := map[string]bool{}
-	for _, id := range withKey {
-		has[id] = true
-	}
-	missing, active := 0, 0
-	for _, p := range s.projects {
-		if p.archived() {
-			continue
-		}
-		active++
-		if !has[p.ID] {
-			missing++
-		}
-	}
-	if missing > 0 {
-		s.calls.Skip(callProjectKeysMiss, fmt.Sprintf(
-			"%d of %s have no project key: their agents, stored chat completions and batches are not read",
-			missing, plural(active, "active project", "active projects")))
 	}
 }
 
@@ -110,14 +69,9 @@ func (s *scan) addAgent(projectID string, a agent) {
 	}
 	f.Scope = projectID
 	f.State = stateActive
-	if s.projectArchived(projectID) {
-		f.State = stateArchived
-		f.Attributes["archived"] = true
-	}
 	f.ProviderCreatedAt = unixTime(a.CreatedAt)
 	tools, mcp := toolRefs(a.Tools)
 	f.Attributes["model"] = a.Model
-	f.Attributes["project"] = s.projectLabel(projectID)
 	f.Attributes["toolCount"] = int64(len(a.Tools))
 	if len(tools) > 0 {
 		f.Attributes["tools"] = tools
@@ -129,7 +83,6 @@ func (s *scan) addAgent(projectID string, a agent) {
 		Code: sa.SigOpenAIAgentObject, Source: callAgents,
 		Observed: map[string]any{"toolCount": int64(len(a.Tools)), "mcpServerCount": int64(len(mcp))},
 	})
-	s.agents[projectID] = append(s.agents[projectID], a.ID)
 }
 
 // toolRefs keeps each tool's type and name (an MCP tool's server label) and
@@ -179,50 +132,4 @@ func mcpOrigin(t agentTool) string {
 		}
 	}
 	return ""
-}
-
-// listSessions reads the most recent sessions of a project (bounded) and
-// records, per agent, how many were active in the window and when the last
-// one was active. Session content (instructions snapshot, errors, required
-// actions) is not decoded.
-func (s *scan) listSessions(ctx context.Context, api *sa.API, projectID string) {
-	type activity struct {
-		count int64
-		last  int64
-	}
-	byAgent := map[string]*activity{}
-	n := 0
-	_, err := listAll(ctx, api, s.base+"/agents/sessions", url.Values{"order": []string{"desc"}}, betaAgentsHeader(),
-		sessionsPageSize, maxSessionsPerProject/sessionsPageSize, func(ss agentSession) bool {
-			n++
-			if ss.Agent != nil && ss.Agent.ID != "" {
-				a := byAgent[ss.Agent.ID]
-				if a == nil {
-					a = &activity{}
-					byAgent[ss.Agent.ID] = a
-				}
-				if ss.LastActiveAt >= s.w.Start.Unix() {
-					a.count++
-				}
-				if ss.LastActiveAt > a.last {
-					a.last = ss.LastActiveAt
-				}
-			}
-			return n < maxSessionsPerProject
-		})
-	s.calls.Record(callSessions, n, err)
-	for _, id := range sortedKeys(byAgent) {
-		f, ok := s.fs.Lookup(models.ShadowKindPlatformAgent, id)
-		if !ok {
-			continue
-		}
-		a := byAgent[id]
-		f.Attributes["sessionCount"] = a.count
-		if t := unixTime(a.last); t != nil {
-			f.Attributes["lastSessionAt"] = t.Format(time.RFC3339)
-			if !t.Before(s.w.Start) {
-				f.ObserveUse(*t)
-			}
-		}
-	}
 }

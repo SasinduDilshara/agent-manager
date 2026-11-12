@@ -15,19 +15,16 @@
 // under the License.
 
 // Package bedrock is the Amazon Bedrock / AgentCore connector of Shadow
-// Agent Discovery (Method 1). Per region it lists AgentCore runtimes and
-// gateways, AWS Agent Registry records and classic Bedrock agents, reads
-// AgentCore session metrics from CloudWatch, model calls from CloudTrail
-// event history and, with deep inspection, tool use from model invocation
-// logs. It uses the vendored aws-sdk-go-v2 clients; see
-// evidence/impl_notes_bedrock.md for the wire protocol each one speaks.
+// Agent Discovery. Per region it lists AgentCore runtimes, AWS Agent
+// Registry agent records and classic Bedrock agents. It uses the vendored
+// aws-sdk-go-v2 clients; see evidence/impl_notes_bedrock.md for the wire
+// protocol each one speaks.
 package bedrock
 
 import (
 	"context"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -37,23 +34,15 @@ import (
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
 )
 
-// Call names, as recorded in scan results and signal sources.
+// Call names, as recorded in scan results and evidence sources.
 const (
 	callListRuntimes   = "AgentCore ListAgentRuntimes"
 	callGetRuntime     = "AgentCore GetAgentRuntime"
-	callListGateways   = "AgentCore ListGateways"
-	callGetGateway     = "AgentCore GetGateway"
-	callListTargets    = "AgentCore ListGatewayTargets"
 	callListRegistries = "Agent Registry ListRegistries"
 	callListRecords    = "Agent Registry ListRegistryRecords"
 	callListAgents     = "Bedrock Agents ListAgents"
 	callGetAgent       = "Bedrock Agents GetAgent"
 	callListActions    = "Bedrock Agents ListAgentActionGroups"
-	callLoggingConfig  = "Bedrock GetModelInvocationLoggingConfiguration"
-	callFilterLogs     = "CloudWatch Logs FilterLogEvents"
-	callListMetrics    = "CloudWatch ListMetrics"
-	callGetMetricData  = "CloudWatch GetMetricData"
-	callLookupEvents   = "CloudTrail LookupEvents"
 	callConfigure      = "AWS client configuration"
 )
 
@@ -63,35 +52,12 @@ const (
 	maxPages = 50
 	// pageSize is the maxResults sent to the list APIs (all accept 100).
 	pageSize = 100
-	// maxTrailPages bounds CloudTrail LookupEvents per region: 100 pages of
-	// 50 events at 2 TPS is under a minute.
-	maxTrailPages = 100
-	// trailPageSize is LookupEvents' maximum MaxResults.
-	trailPageSize = 50
-	// trailMaxDays is how far back CloudTrail event history reaches.
-	trailMaxDays = 90
-	// defaultTrailInterval keeps LookupEvents at 2 TPS per account and
-	// region, the documented limit.
-	defaultTrailInterval = 500 * time.Millisecond
-	// maxLogEvents and maxLogBytes bound the invocation log records read in
-	// memory per region (deep inspection only).
-	maxLogEvents = 1000
-	maxLogBytes  = 16 << 20
-	// logPageSize is the FilterLogEvents limit per page.
-	logPageSize = 100
-	// maxMetricQueries is GetMetricData's maximum queries per request.
-	maxMetricQueries = 500
-	// metricPeriod is one day, in seconds.
-	metricPeriod = 86400
 )
 
 // Connector scans Amazon Bedrock and AgentCore in the connection's regions.
 type Connector struct {
 	http   *http.Client
 	logger *slog.Logger
-	// trailInterval is the minimum time between LookupEvents requests in a
-	// region.
-	trailInterval time.Duration
 	// retryer, when set, replaces the SDK's standard retryer.
 	retryer func() aws.Retryer
 }
@@ -102,20 +68,20 @@ func New(httpClient *http.Client, logger *slog.Logger) sa.Connector {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Connector{http: httpClient, logger: logger, trailInterval: defaultTrailInterval, retryer: nil}
+	return &Connector{http: httpClient, logger: logger, retryer: nil}
 }
 
 // Provider implements sa.Connector.
 func (c *Connector) Provider() string { return models.ShadowProviderBedrock }
 
 // Scan implements sa.Connector.
-func (c *Connector) Scan(ctx context.Context, conn sa.Connection, w sa.Window) *sa.Result {
-	s := newScan(c, conn, w)
+func (c *Connector) Scan(ctx context.Context, conn sa.Connection) *sa.Result {
+	s := newScan(c, conn)
 	s.run(ctx)
-	res := &sa.Result{Findings: s.fs.All(), Keys: nil, Calls: s.calls.Results(), KeysListed: false}
+	res := &sa.Result{Findings: s.fs.All(), Calls: s.calls.Results()}
 	c.logger.Info("Shadow agent discovery Bedrock scan finished",
 		"connectionId", conn.ID.String(), "regions", len(conn.Config.Regions),
-		"findings", len(res.Findings), "calls", len(res.Calls))
+		"agents", len(res.Findings), "calls", len(res.Calls))
 	return res
 }
 
@@ -123,7 +89,6 @@ func (c *Connector) Scan(ctx context.Context, conn sa.Connection, w sa.Window) *
 type scan struct {
 	c     *Connector
 	conn  sa.Connection
-	w     sa.Window
 	calls *sa.Calls
 	fs    *sa.Findings
 	log   *slog.Logger
@@ -134,39 +99,18 @@ type scan struct {
 	// finding from a registry record's provenance.
 	runtimeByARN map[string]*sa.Finding
 	runtimeByID  map[string]*sa.Finding
-	// gatewayByID (region + "|" + gatewayId) finds a gateway finding.
-	gatewayByID map[string]*sa.Finding
-	// runtimesByRole and agentsByRole map an execution role (account + "|"
-	// + role name) to the runtimes and classic agents that run as it.
-	runtimesByRole map[string][]*sa.Finding
-	agentsByRole   map[string][]*sa.Finding
-	// regionRuntimes are the runtime findings of each region.
-	regionRuntimes map[string][]*sa.Finding
-	// principalRegions are the regions where a principal finding had
-	// model traffic.
-	principalRegions map[*sa.Finding]map[string]bool
-	// logsOff are the regions without a model invocation logging config.
-	logsOff map[string]bool
-	// pendingSkips are calls not made in a region, recorded as skipped at
-	// the end only if no region made them.
-	pendingSkips []skip
+	// mcpRuntimes are the runtimes (by ARN) that host an MCP server: they are
+	// not agents, so they are not findings, and a registry record about one
+	// is not one either.
+	mcpRuntimes map[string]bool
 }
 
-type skip struct{ call, reason string }
-
-func newScan(c *Connector, conn sa.Connection, w sa.Window) *scan {
+func newScan(c *Connector, conn sa.Connection) *scan {
 	return &scan{
-		c: c, conn: conn, w: w,
+		c: c, conn: conn,
 		calls: sa.NewCalls(), fs: sa.NewFindings(), log: c.logger,
-		runtimeByARN: map[string]*sa.Finding{}, runtimeByID: map[string]*sa.Finding{},
-		gatewayByID: map[string]*sa.Finding{}, runtimesByRole: map[string][]*sa.Finding{},
-		agentsByRole: map[string][]*sa.Finding{}, regionRuntimes: map[string][]*sa.Finding{},
-		principalRegions: map[*sa.Finding]map[string]bool{}, logsOff: map[string]bool{},
+		runtimeByARN: map[string]*sa.Finding{}, runtimeByID: map[string]*sa.Finding{}, mcpRuntimes: map[string]bool{},
 	}
-}
-
-func (s *scan) skipLater(call, reason string) {
-	s.pendingSkips = append(s.pendingSkips, skip{call: call, reason: reason})
 }
 
 func (s *scan) run(ctx context.Context) {
@@ -190,8 +134,8 @@ func (s *scan) run(ctx context.Context) {
 	on := func(opt string) bool { return sa.ServiceEnabled(s.conn.Config, opt) }
 	s.skipUnselected()
 
-	// Inventory first, in every region, so the registry and the traffic
-	// phase can attribute evidence to the workloads they belong to.
+	// Runtimes and classic agents first, in every region, so registry
+	// records can be merged into the runtimes they describe.
 	for i, rc := range s.regions {
 		if ctx.Err() != nil {
 			break
@@ -205,7 +149,6 @@ func (s *scan) run(ctx context.Context) {
 					"connectionId", s.conn.ID.String(), "region", rc.region)
 				return
 			}
-			s.scanGateways(ctx, rc)
 		}
 		if on(sa.OptBedrockClassicAgents) {
 			s.scanClassicAgents(ctx, rc)
@@ -219,21 +162,6 @@ func (s *scan) run(ctx context.Context) {
 			s.scanRegistry(ctx, rc)
 		}
 	}
-	for _, rc := range s.regions {
-		if ctx.Err() != nil {
-			break
-		}
-		if on(sa.OptBedrockMetrics) {
-			s.scanRuntimeMetrics(ctx, rc)
-		}
-		if on(sa.OptBedrockCloudTrail) {
-			s.scanCloudTrail(ctx, rc)
-		}
-		if on(sa.OptBedrockInvocationLogs) {
-			s.scanInvocationLogs(ctx, rc)
-		}
-	}
-	s.finish()
 }
 
 // serviceCalls are the calls of each optional service.
@@ -241,12 +169,9 @@ var serviceCalls = []struct {
 	option string
 	calls  []string
 }{
-	{sa.OptBedrockAgentCore, []string{callListRuntimes, callGetRuntime, callListGateways, callGetGateway, callListTargets}},
+	{sa.OptBedrockAgentCore, []string{callListRuntimes, callGetRuntime}},
 	{sa.OptBedrockClassicAgents, []string{callListAgents, callGetAgent, callListActions}},
 	{sa.OptBedrockRegistry, []string{callListRegistries, callListRecords}},
-	{sa.OptBedrockMetrics, []string{callListMetrics, callGetMetricData}},
-	{sa.OptBedrockCloudTrail, []string{callLookupEvents}},
-	{sa.OptBedrockInvocationLogs, []string{callLoggingConfig, callFilterLogs}},
 }
 
 // skipUnselected records the calls of the services the user unticked.
@@ -258,29 +183,6 @@ func (s *scan) skipUnselected() {
 		for _, call := range sc.calls {
 			s.calls.Skip(call, sa.ReasonServiceOff)
 		}
-	}
-}
-
-// finish applies the region-level signals and records the skipped calls.
-func (s *scan) finish() {
-	for region := range s.logsOff {
-		sig := sa.Signal{Code: sa.SigBedrockInvocationLogsOff, Source: callLoggingConfig, Observed: map[string]any{"loggingConfigured": false}}
-		for _, f := range s.regionRuntimes[region] {
-			f.AddSignal(sig)
-		}
-		for p, regions := range s.principalRegions {
-			if regions[region] {
-				p.AddSignal(sig)
-			}
-		}
-	}
-	for _, f := range s.fs.All() {
-		if ms, ok := f.Attributes["models"].([]string); ok {
-			sort.Strings(ms)
-		}
-	}
-	for _, sk := range s.pendingSkips {
-		s.calls.Skip(sk.call, sk.reason)
 	}
 }
 
@@ -317,20 +219,6 @@ func paginate(ctx context.Context, limit int, hasMore func() bool, next func(con
 		items += n
 	}
 	return items, nil
-}
-
-// addModel adds a model to a finding's "models" attribute.
-func addModel(f *sa.Finding, model string) {
-	if model == "" {
-		return
-	}
-	ms, _ := f.Attributes["models"].([]string)
-	for _, m := range ms {
-		if m == model {
-			return
-		}
-	}
-	f.Attributes["models"] = append(ms, model)
 }
 
 func str(p *string) string {

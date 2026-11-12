@@ -122,23 +122,16 @@ const (
 	EPBedrockAgentCore    = "agentcoreControl"
 	EPBedrockRegistry     = "agentRegistry"
 	EPBedrockAgent        = "bedrockAgent"
-	EPBedrock             = "bedrock"
-	EPBedrockCloudWatch   = "cloudwatch"
-	EPBedrockLogs         = "logs"
-	EPBedrockCloudTrail   = "cloudtrail"
 	EPGoogleToken         = "token"
 	EPGoogleAIPlatform    = "aiplatform"
 	EPGoogleAIPlatformRep = "aiplatformMultiRegion"
 	EPGoogleRegistry      = "agentRegistry"
-	EPGoogleMonitoring    = "monitoring"
-	EPGoogleLogging       = "logging"
 	EPGitHubAPI           = "api"
 	EPAzureDevOps         = "azureDevOps"
 )
 
 // Option (checkbox) keys.
 const (
-	OptDeepInspection   = "deepInspection"
 	OptAllSubscriptions = "allSubscriptions"
 	OptClassicAgents    = "includeClassicAgents"
 	OptGlobalMulti      = "includeGlobalAndMultiRegion"
@@ -171,22 +164,17 @@ func OptionKey(option string) string {
 // Service options: optional services the user can untick. An unticked
 // service is not called, and its endpoint is not shown.
 const (
-	OptBedrockAgentCore      = "scanAgentCore"
-	OptBedrockRegistry       = "scanAgentRegistry"
-	OptBedrockClassicAgents  = "scanClassicAgents"
-	OptBedrockMetrics        = "readCloudWatchMetrics"
-	OptBedrockCloudTrail     = "readCloudTrail"
-	OptBedrockInvocationLogs = "readInvocationLogging"
+	OptBedrockAgentCore     = "scanAgentCore"
+	OptBedrockRegistry      = "scanAgentRegistry"
+	OptBedrockClassicAgents = "scanClassicAgents"
 
-	OptGoogleRegistry   = "scanAgentRegistry"
-	OptGoogleMonitoring = "readMonitoring"
-	OptGoogleAuditLogs  = "readAuditLogs"
+	OptGoogleRegistry = "scanAgentRegistry"
 )
 
-// serviceOptions are the option keys stored as DisabledServices when off.
+// serviceOptions are the option keys stored as DisabledServices when off
+// (OptGoogleRegistry is the same key as OptBedrockRegistry).
 var serviceOptions = map[string]bool{
-	OptBedrockAgentCore: true, OptBedrockRegistry: true, OptBedrockClassicAgents: true, OptBedrockMetrics: true,
-	OptBedrockCloudTrail: true, OptBedrockInvocationLogs: true, OptGoogleMonitoring: true, OptGoogleAuditLogs: true,
+	OptBedrockAgentCore: true, OptBedrockRegistry: true, OptBedrockClassicAgents: true,
 }
 
 // IsServiceOption reports whether an option key turns a service on or off.
@@ -206,17 +194,11 @@ func ServiceEnabled(cfg models.ShadowConnectionConfig, key string) bool {
 const SectionServices = "Services to scan"
 
 // ReasonServiceOff is recorded for the calls of an unticked service.
-const ReasonServiceOff = "not selected in this connection"
+const ReasonServiceOff = "not selected for this platform"
 
 // serviceField is the checkbox of an optional service, ticked by default.
 func serviceField(key, label, help string) FieldSpec {
 	return FieldSpec{Key: key, Label: label, Kind: FieldCheckbox, DefaultBool: true, Help: help, Section: SectionServices}
-}
-
-var deepInspectionField = FieldSpec{
-	Key: OptDeepInspection, Label: "Deep inspection", Kind: FieldCheckbox, DefaultBool: false,
-	Help: "Read sources that contain prompts or tool payloads (batches, stored responses, logs, session events) " +
-		"in memory to detect tool calls. Only counts are kept; the content is never stored. Off by default.",
 }
 
 var azureEndpoints = []EndpointSpec{
@@ -245,122 +227,74 @@ var providerSpecs = []ProviderSpec{
 	{
 		Provider:    models.ShadowProviderOpenAI,
 		DisplayName: "OpenAI",
-		Description: "OpenAI API platform: projects, API keys, usage and costs, audit logs (Admin key), and agents, stored completions and batches (project keys).",
+		Description: "OpenAI API platform: the agents in each project (GET /v1/agents, with a project key).",
 		Endpoints: []EndpointSpec{{
 			Key: EPOpenAIAPI, Label: "OpenAI API", Default: "https://api.openai.com/v1",
 			OfficialHostSuffixes: []string{"api.openai.com"},
 		}},
 		Fields: []FieldSpec{
 			{
-				Key: FieldAPIKey, Label: "Admin API key", Kind: FieldSecret, Recommended: true, Placeholder: "sk-admin-...",
-				Help: "Lists every project and API key with its owner, usage and cost, so workloads that call OpenAI " +
-					"directly are found. Without it, only the projects you add a project key for are scanned.",
+				Key: FieldScopedKeys, Label: "Project keys", Kind: FieldKeyMap, Required: true, Placeholder: "proj_abc123",
+				Help: "A read-only project key (scope api.agents.read or api.all.read) per project ID. GET /v1/agents is a " +
+					"project endpoint: only a project's own key lists its agents.",
 			},
-			{
-				Key: FieldScopedKeys, Label: "Project keys", Kind: FieldKeyMap, Placeholder: "proj_abc123",
-				Help: "Read-only project keys (scope api.all.read) per project ID, for agents, sessions, stored chat " +
-					"completions and batches. The Admin key cannot read these. Required if you don't add an Admin API key.",
-			},
-			deepInspectionField,
 		},
 		Permissions: []PermissionSpec{
 			{
-				Title:   "Admin API key (recommended)",
-				Summary: "Finds every workload that calls OpenAI directly, including code with no agent object: who owns each key, how much it is used, and whether it drives the Agents API.",
+				Title:   "Project keys",
+				Summary: "Lists the agents of each project you add a key for. Every project you want scanned needs its own key.",
 				Reads: []string{
-					"Projects and their API keys: name, owner, status and last use (never the key itself).",
-					"Daily usage and cost per key, model and api_source; api_source agents_api marks Agents API traffic.",
-					"Web search, file search and code interpreter usage.",
-					"api_key.created audit events: who created a key and when.",
-					"After you revoke a key, the key list again, to confirm it is gone.",
+					"Agents (GET /v1/agents): ID, name, model, creation time, the type and name of each tool, and the label and URL origin of each MCP server.",
+					"Never an agent's instructions or tool definitions.",
 				},
 				Items: []string{
-					"Created by an organization owner at platform.openai.com/settings/organization/admin-keys.",
-					"Used only for /v1/organization/* (projects, API keys, usage, costs, audit logs). It cannot call /v1/agents and cannot read project keys.",
-					"OpenAI documents no read-only Admin key; set an expiry date and store it only here.",
-					"Owner hints use audit logs, which must be active for the organization.",
-				},
-			},
-			{
-				Title:   "Project keys (required without an Admin key)",
-				Summary: "Reads what only a project can see: its agent objects and, with deep inspection, whether its stored completions and batches contain tool calls.",
-				Reads: []string{
-					"Agents (GET /v1/agents) with their tools and MCP servers, and their sessions (count, last session).",
-					"With deep inspection: stored chat completions and batch input and output files, read in memory and only counted.",
-				},
-				Items: []string{
-					"One key per project, ideally a service account key with scopes [\"api.all.read\"].",
-					"Without an Admin key, only these projects are scanned, and keys, usage, costs and owners are not read.",
+					"One key per project, ideally a service account key with the scope api.agents.read (or api.all.read).",
+					"Add the project ID (proj_...) and its key as one row.",
+					"An Admin API key cannot list agents: GET /v1/agents accepts project keys only.",
 				},
 			},
 		},
-		Docs: []string{"https://platform.openai.com/docs/api-reference/administration", "https://platform.openai.com/docs/api-reference/usage"},
+		Docs: []string{"https://developers.openai.com/api/docs/guides/agents-api/overview"},
 	},
 	{
 		Provider:    models.ShadowProviderAnthropic,
 		DisplayName: "Anthropic",
-		Description: "Claude Developer Platform: workspaces, API keys, usage and cost analytics (Admin key), and Managed Agents, sessions and batches (workspace keys).",
+		Description: "Claude Developer Platform: the Managed Agents in each workspace (GET /v1/agents, with a workspace key).",
 		Endpoints: []EndpointSpec{
 			{Key: EPAnthropicAPI, Label: "Anthropic API", Default: "https://api.anthropic.com", OfficialHostSuffixes: []string{"api.anthropic.com"}},
 		},
 		Fields: []FieldSpec{
 			{
-				Key: FieldAPIKey, Label: "Admin API key", Kind: FieldSecret, Recommended: true, Placeholder: "sk-ant-admin01-...",
-				Help: "Lists every workspace and API key with its creator, usage and cost, so workloads that call Claude " +
-					"directly are found. Without it, only the workspaces you add a workspace key for are scanned.",
+				Key: FieldScopedKeys, Label: "Workspace keys", Kind: FieldKeyMap, Required: true, Placeholder: "wrkspc_01ABC...",
+				Help: "An API key per workspace ID. Managed Agents are listed per workspace, with that workspace's key.",
 			},
-			{
-				Key: FieldScopedKeys, Label: "Workspace keys", Kind: FieldKeyMap, Placeholder: "wrkspc_01ABC...",
-				Help: "Workspace API keys per workspace ID, for Managed Agents, sessions and message batches. These are " +
-					"workspace endpoints. Required if you don't add an Admin API key.",
-			},
-			deepInspectionField,
 		},
 		Permissions: []PermissionSpec{
 			{
-				Title:   "Admin API key (recommended)",
-				Summary: "Finds every workspace and API key, who created it, and its daily usage and cost, including the usage of each Managed Agent.",
+				Title:   "Workspace keys",
+				Summary: "Lists the Managed Agents of each workspace you add a key for, archived ones included.",
 				Reads: []string{
-					"Workspaces, API keys (status, creator) and users (name and email, for owner hints).",
-					"Daily usage and cost analytics per key, model, product and agent.",
-					"Server web search and code execution use.",
-					"After you revoke a key, its status again (inactive, archived or expired).",
-				},
-				Items: []string{
-					"Created by an organization member with the admin role (Console > Settings > Admin keys).",
-					"Admin keys always have write access; Anthropic offers no read-only Admin key. Set an expiry date.",
-					"Used for /v1/organizations/* only.",
-				},
-			},
-			{
-				Title:   "Workspace keys (required without an Admin key)",
-				Summary: "Reads each workspace's Managed Agents and, with deep inspection, the tool use in their sessions and in message batches.",
-				Reads: []string{
-					"Managed Agents, archived ones included, with their tools, MCP servers and skills, and their sessions.",
-					"With deep inspection: session events of a tool-use type and message batch results, only counted.",
+					"Managed Agents (GET /v1/agents): ID, name, model, creation and archive time, the type and name of each tool, MCP server names and URL origins, and skill IDs.",
+					"Never an agent's system prompt or tool schemas.",
 				},
 				Items: []string{
 					"A key per workspace (or a service account key added to the workspaces).",
-					"Without an Admin key, only these workspaces are scanned, and keys, usage, costs and creators are not read.",
+					"Add the workspace ID (wrkspc_...) and its key as one row.",
 				},
 			},
 		},
-		Docs: []string{"https://platform.claude.com/docs/en/build-with-claude/administration-api"},
+		Docs: []string{"https://platform.claude.com/docs/en/managed-agents/overview"},
 	},
 	{
 		Provider:    models.ShadowProviderBedrock,
 		DisplayName: "Amazon Bedrock",
-		Description: "AgentCore runtimes, gateways and Agent Registry, classic Bedrock agents, CloudTrail model calls, CloudWatch metrics and (optional) model invocation logs.",
+		Description: "AgentCore runtimes, AWS Agent Registry agent records and classic Bedrock agents in each region.",
 		Endpoints: []EndpointSpec{
 			// STS is used only to assume a role, so it shows only when one is set.
 			{Key: EPBedrockSTS, Label: "AWS STS", Default: "https://sts.{region}.amazonaws.com", Placeholders: []string{"region"}, FillFrom: "regions", OfficialHostSuffixes: []string{".amazonaws.com"}, Option: "roleArn"},
 			{Key: EPBedrockAgentCore, Label: "AgentCore control plane", Default: "https://bedrock-agentcore-control.{region}.amazonaws.com", Placeholders: []string{"region"}, FillFrom: "regions", OfficialHostSuffixes: []string{".amazonaws.com"}, Option: OptBedrockAgentCore},
 			{Key: EPBedrockRegistry, Label: "AWS Agent Registry", Default: "https://agent-registry-control.{region}.api.aws", Placeholders: []string{"region"}, FillFrom: "regions", OfficialHostSuffixes: []string{".api.aws"}, Option: OptBedrockRegistry},
 			{Key: EPBedrockAgent, Label: "Bedrock Agents", Default: "https://bedrock-agent.{region}.amazonaws.com", Placeholders: []string{"region"}, FillFrom: "regions", OfficialHostSuffixes: []string{".amazonaws.com"}, Option: OptBedrockClassicAgents},
-			{Key: EPBedrock, Label: "Bedrock control plane", Default: "https://bedrock.{region}.amazonaws.com", Placeholders: []string{"region"}, FillFrom: "regions", OfficialHostSuffixes: []string{".amazonaws.com"}, Option: OptBedrockInvocationLogs},
-			{Key: EPBedrockCloudWatch, Label: "CloudWatch", Default: "https://monitoring.{region}.amazonaws.com", Placeholders: []string{"region"}, FillFrom: "regions", OfficialHostSuffixes: []string{".amazonaws.com"}, Option: OptBedrockMetrics},
-			{Key: EPBedrockLogs, Label: "CloudWatch Logs", Default: "https://logs.{region}.amazonaws.com", Placeholders: []string{"region"}, FillFrom: "regions", OfficialHostSuffixes: []string{".amazonaws.com"}, Option: OptBedrockInvocationLogs},
-			{Key: EPBedrockCloudTrail, Label: "CloudTrail", Default: "https://cloudtrail.{region}.amazonaws.com", Placeholders: []string{"region"}, FillFrom: "regions", OfficialHostSuffixes: []string{".amazonaws.com"}, Option: OptBedrockCloudTrail},
 		},
 		Fields: []FieldSpec{
 			{Key: "regions", Label: "Regions", Kind: FieldList, Required: true, Placeholder: "e.g. us-east-1"},
@@ -372,16 +306,10 @@ var providerSpecs = []ProviderSpec{
 				Help: "A cross-account read-only role. When set, the access key is used only to assume it.", Advanced: true,
 			},
 			{Key: "externalId", Label: "External ID", Kind: FieldText, Advanced: true},
-			deepInspectionField,
-			serviceField(OptBedrockAgentCore, "Scan AgentCore runtimes and gateways",
-				"AgentCore control plane: runtimes, gateways and gateway targets."),
-			serviceField(OptBedrockRegistry, "Scan the AWS Agent Registry", "Agent and tool records in the registries."),
+			serviceField(OptBedrockAgentCore, "Scan AgentCore runtimes",
+				"AgentCore control plane: agent runtimes (a runtime that hosts an MCP server is not an agent and is left out)."),
+			serviceField(OptBedrockRegistry, "Scan the AWS Agent Registry", "Agent records in the registries."),
 			serviceField(OptBedrockClassicAgents, "Scan classic Bedrock agents", "Bedrock Agents and their action groups."),
-			serviceField(OptBedrockMetrics, "Read CloudWatch metrics", "Sessions per AgentCore runtime, to tell live runtimes from idle ones."),
-			serviceField(OptBedrockCloudTrail, "Read CloudTrail model calls",
-				"InvokeModel and Converse calls per IAM user or role: workloads that call Bedrock directly (last 90 days)."),
-			serviceField(OptBedrockInvocationLogs, "Read model invocation logging",
-				"Whether model invocation logging is on and, with deep inspection, tool calls in the logs."),
 		},
 		Permissions: []PermissionSpec{
 			{
@@ -397,100 +325,63 @@ var providerSpecs = []ProviderSpec{
 				Summary: "Every action is a Read or List action. Attach it to the role or user Agent Manager uses.",
 				Items: []string{
 					"There is no AgentCore read-only managed policy; AmazonBedrockReadOnly and AgentRegistryReadOnlyAccess cover parts of it.",
-					"Leave out the actions of services you untick: bedrock-agentcore:* (AgentCore), agent-registry:* (Agent Registry), bedrock:ListAgents/GetAgent/ListAgentActionGroups (classic agents), cloudwatch:* (metrics), cloudtrail:LookupEvents (CloudTrail), bedrock:GetModelInvocationLoggingConfiguration and logs:FilterLogEvents (invocation logging).",
-					"Scope logs:FilterLogEvents to the invocation log group.",
+					"Leave out the actions of services you untick: bedrock-agentcore:* (AgentCore runtimes), agent-registry:* (Agent Registry), bedrock:* (classic agents).",
 				},
-				Policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock-agentcore:ListAgentRuntimes","bedrock-agentcore:GetAgentRuntime","bedrock-agentcore:ListGateways","bedrock-agentcore:GetGateway","bedrock-agentcore:ListGatewayTargets","bedrock-agentcore:GetGatewayTarget","agent-registry:ListRegistries","agent-registry:GetRegistry","agent-registry:ListRegistryRecords","agent-registry:GetRegistryRecord","bedrock:ListAgents","bedrock:GetAgent","bedrock:ListAgentActionGroups","bedrock:GetAgentActionGroup","bedrock:GetModelInvocationLoggingConfiguration","logs:FilterLogEvents","cloudwatch:GetMetricData","cloudwatch:ListMetrics","cloudtrail:LookupEvents"],"Resource":"*"}]}`,
+				Policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock-agentcore:ListAgentRuntimes","bedrock-agentcore:GetAgentRuntime","agent-registry:ListRegistries","agent-registry:ListRegistryRecords","bedrock:ListAgents","bedrock:GetAgent","bedrock:ListAgentActionGroups"],"Resource":"*"}]}`,
 			},
 			{
-				Title:   "Agents AWS hosts",
-				Summary: "Lists AgentCore runtimes and gateways, Agent Registry records and classic Bedrock agents: the agents AWS knows about.",
+				Title:   "What Agent Manager lists",
+				Summary: "The agents AWS knows about: AgentCore runtimes, Agent Registry agent records and classic Bedrock agents.",
 				Reads: []string{
 					"Runtimes: name, status, version, execution role, protocol and artifact type (never environment variables or descriptions).",
-					"Gateways and their targets; registry agent and tool records; classic agents and their action groups.",
-				},
-			},
-			{
-				Title:   "CloudWatch metrics",
-				Summary: "Counts sessions per AgentCore runtime, to tell live runtimes from idle ones.",
-			},
-			{
-				Title:   "CloudTrail model calls",
-				Summary: "Shows who calls Bedrock directly: each InvokeModel and Converse call in the last 90 days, by IAM user or role, day and model. CloudTrail holds no prompts.",
-				Reads: []string{
-					"LookupEvents for bedrock.amazonaws.com, one count per call (a streaming call's second record is not counted twice).",
-					"Calls made by a runtime's own execution role belong to that runtime.",
-				},
-			},
-			{
-				Title:   "Model invocation logs",
-				Summary: "Finds agents written in plain code: a call where the model asked for a tool, and a next call that sent the tool's result back, is the agent loop.",
-				Reads: []string{
-					"With deep inspection only: the invocation log records in CloudWatch Logs, read in memory. Only whether a tool call or tool result is present is kept, never the text.",
-				},
-				Items: []string{
-					"Model invocation logging is off by default; without it, code-built agents show only plain model usage.",
+					"Registry agent records: name, status, version and the runtime they describe.",
+					"Classic agents: name, status, model, orchestration type, service role and action group names.",
 				},
 			},
 		},
-		Docs: []string{"https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/Welcome.html", "https://docs.aws.amazon.com/bedrock/latest/userguide/logging-using-cloudtrail.html"},
+		Docs: []string{"https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/Welcome.html", "https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_ListAgents.html"},
 	},
 	{
 		Provider:    models.ShadowProviderGoogle,
 		DisplayName: "Google Agent Platform",
-		Description: "Agent Runtime (reasoning engines), Agent Registry agents and MCP servers, request metrics and Admin Activity audit logs.",
+		Description: "Agent Runtime engines (reasoning engines) and Agent Registry agents in each project and location.",
 		Endpoints: []EndpointSpec{
 			{Key: EPGoogleToken, Label: "OAuth token endpoint", Default: "https://oauth2.googleapis.com/token", OfficialHostSuffixes: []string{"oauth2.googleapis.com"}, Advanced: true},
 			// Agent Runtime has no global location, and us/eu use the multi-region endpoint.
 			{Key: EPGoogleAIPlatform, Label: "Agent Runtime (regional)", Default: "https://{location}-aiplatform.googleapis.com", Placeholders: []string{"location"}, OfficialHostSuffixes: []string{"aiplatform.googleapis.com"}, FillFrom: "locations", FillExclude: []string{"global", "us", "eu"}},
 			{Key: EPGoogleAIPlatformRep, Label: "Agent Runtime (us/eu multi-region)", Default: "https://aiplatform.{location}.rep.googleapis.com", Placeholders: []string{"location"}, OfficialHostSuffixes: []string{".rep.googleapis.com"}, Option: OptGlobalMulti, FillValues: []string{"us", "eu"}},
 			{Key: EPGoogleRegistry, Label: "Agent Registry", Default: "https://agentregistry.googleapis.com", OfficialHostSuffixes: []string{"agentregistry.googleapis.com"}, Option: OptGoogleRegistry},
-			{Key: EPGoogleMonitoring, Label: "Cloud Monitoring", Default: "https://monitoring.googleapis.com", OfficialHostSuffixes: []string{"monitoring.googleapis.com"}, Option: OptGoogleMonitoring},
-			{Key: EPGoogleLogging, Label: "Cloud Logging", Default: "https://logging.googleapis.com", OfficialHostSuffixes: []string{"logging.googleapis.com"}, Option: OptGoogleAuditLogs},
 		},
 		Fields: []FieldSpec{
 			{Key: "projectIds", Label: "Project IDs", Kind: FieldList, Required: true, Placeholder: "e.g. my-agents-project"},
 			{Key: "locations", Label: "Locations", Kind: FieldList, Required: true, Placeholder: "e.g. us-central1"},
 			{Key: "serviceAccountJson", Label: "Service account key (JSON)", Kind: FieldSecret, Required: true, Placeholder: "{\"type\": \"service_account\", ...}"},
 			{Key: OptGlobalMulti, Label: "Include the global Agent Registry location and the us/eu multi-regions", Kind: FieldCheckbox, DefaultBool: true, Advanced: true},
-			serviceField(OptGoogleRegistry, "Scan the Agent Registry", "Registered agents and MCP servers."),
-			serviceField(OptGoogleMonitoring, "Read Cloud Monitoring metrics", "Requests per Agent Runtime engine, to tell live engines from idle ones."),
-			serviceField(OptGoogleAuditLogs, "Read Admin Activity audit logs", "Who created or updated each engine."),
+			serviceField(OptGoogleRegistry, "Scan the Agent Registry", "Registered agents."),
 		},
 		Permissions: []PermissionSpec{
 			{
 				Title:   "Service account key",
-				Summary: "A key for a read-only service account. Agent Manager exchanges it for a short-lived token and calls only list and read APIs.",
+				Summary: "A key for a read-only service account. Agent Manager exchanges it for a short-lived token and calls only list APIs.",
 				Items: []string{
 					"Organizations created on or after 3 May 2024 block service account key creation by default; an administrator must allow it for this account.",
 				},
 			},
 			{
 				Title:   "Read-only roles",
-				Summary: "Grant only the roles of the services you scan.",
+				Summary: "Grant only the roles of what you scan.",
 				Items: []string{
 					"roles/aiplatform.viewer: list Agent Runtime engines (always needed).",
-					"roles/agentregistry.viewer: Agent Registry agents and MCP servers (roles/dialogflow.viewer is not enough).",
-					"roles/monitoring.viewer: engine request metrics.",
-					"roles/logging.viewer: Admin Activity audit logs (always on, kept 400 days).",
-					"roles/logging.privateLogViewer only if you want Data Access logs (off by default).",
+					"roles/agentregistry.viewer: Agent Registry agents (roles/dialogflow.viewer is not enough).",
 				},
 			},
 			{
-				Title:   "Agent Runtime engines",
-				Summary: "Lists the agents deployed on Agent Runtime (reasoning engines) in each project and location, with their framework.",
-			},
-			{
-				Title:   "Agent Registry",
-				Summary: "Lists registered agents and MCP servers; an entry for an engine is merged into that engine.",
-			},
-			{
-				Title:   "Cloud Monitoring",
-				Summary: "Counts requests per engine, to tell live engines from idle ones.",
-			},
-			{
-				Title:   "Admin Activity audit logs",
-				Summary: "Shows who created or updated each engine, as an owner hint.",
+				Title:   "What Agent Manager lists",
+				Summary: "The agents deployed on Agent Runtime and the agents in the Agent Registry; a registry entry for an engine is merged into that engine.",
+				Reads: []string{
+					"Engines: resource name, display name, framework, service account, source repository, labels and creation time.",
+					"Registry agents: ID, name, version, framework, protocols, skill names and the engine they run on. Google's built-in agents are left out.",
+				},
 			},
 		},
 		Docs: []string{"https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/projects.locations.reasoningEngines/list", "https://docs.cloud.google.com/agent-registry/roles-permissions"},
@@ -498,11 +389,10 @@ var providerSpecs = []ProviderSpec{
 	{
 		Provider:    models.ShadowProviderFoundry,
 		DisplayName: "Microsoft Foundry Agent Service",
-		Description: "Foundry projects and their agents (prompt, hosted, workflow, external), tools and MCP servers, and deployment usage.",
+		Description: "The agents in every Foundry project (prompt, hosted, workflow, external), and optionally classic agents.",
 		Endpoints:   azureEndpoints,
 		Fields: append(append([]FieldSpec{}, azureFields...),
 			FieldSpec{Key: OptClassicAgents, Label: "Also list classic agents (retires 31 March 2027)", Kind: FieldCheckbox, DefaultBool: true},
-			deepInspectionField,
 		),
 		Permissions: []PermissionSpec{
 			{
@@ -510,22 +400,17 @@ var providerSpecs = []ProviderSpec{
 				Summary: "An app registration with a client secret. Agent Manager signs in with client credentials and reads agent metadata only.",
 				Items: []string{
 					"Plain Reader cannot read agents. Foundry User is not read-only (it can create, delete and invoke, and list keys).",
-					"The agents read permission also allows reading threads and messages; Agent Manager calls only the agent metadata endpoints.",
-					"For stored responses (deep inspection), add Microsoft.CognitiveServices/accounts/AIServices/responses/read.",
+					"The agents read permission also allows reading threads and messages; Agent Manager calls only the agent listing endpoints.",
 				},
-				Policy: `{"Name":"Agent Manager Foundry Discovery Reader","IsCustom":true,"Actions":["Microsoft.Resources/subscriptions/read","Microsoft.CognitiveServices/accounts/read","Microsoft.CognitiveServices/accounts/projects/read","Microsoft.CognitiveServices/accounts/deployments/read","Microsoft.Insights/metrics/read"],"NotActions":[],"DataActions":["Microsoft.CognitiveServices/accounts/AIServices/agents/read"],"NotDataActions":[],"AssignableScopes":["/subscriptions/{subscriptionId}"]}`,
+				Policy: `{"Name":"Agent Manager Foundry Discovery Reader","IsCustom":true,"Actions":["Microsoft.Resources/subscriptions/read","Microsoft.CognitiveServices/accounts/read","Microsoft.CognitiveServices/accounts/projects/read"],"NotActions":[],"DataActions":["Microsoft.CognitiveServices/accounts/AIServices/agents/read"],"NotDataActions":[],"AssignableScopes":["/subscriptions/{subscriptionId}"]}`,
 			},
 			{
-				Title:   "Projects and agents",
-				Summary: "Lists the Foundry projects of each AI Services account and their agents (prompt, hosted, workflow, external), with tools and MCP servers; optionally classic agents.",
-			},
-			{
-				Title:   "Deployment metrics",
-				Summary: "Counts requests on the deployment each agent's model names, from Azure Monitor (plain usage).",
-			},
-			{
-				Title:   "Stored responses (deep inspection)",
-				Summary: "Counts tool calls in an agent's stored responses, read in memory; the text is never kept.",
+				Title:   "What Agent Manager lists",
+				Summary: "The Foundry projects of each AI Services account and their agents; optionally classic agents.",
+				Reads: []string{
+					"Agents: ID, name, state, kind (prompt, hosted, workflow, external), version, model, the type and name of each tool, and MCP server labels and URL origins.",
+					"Classic agents: ID, name, model and tools.",
+				},
 			},
 		},
 		Docs: []string{"https://learn.microsoft.com/en-us/azure/ai-foundry/agents/overview"},

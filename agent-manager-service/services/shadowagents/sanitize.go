@@ -39,54 +39,51 @@ const (
 // dropped before storage: an allow-list, so a new provider field cannot
 // slip a prompt or a secret into the database.
 var allowedAttributes = map[string]bool{
-	"model":              true, // model or deployment name
-	"models":             true, // models seen in usage
-	"modelVersion":       true, // deployed model version
-	"framework":          true, // agent framework (Google spec.agentFramework)
-	"agentKind":          true, // Foundry kind (prompt, hosted, external, ...)
-	"agentVersion":       true,
-	"orchestrationType":  true, // Bedrock classic agent
-	"serverProtocol":     true, // AgentCore runtime protocol (MCP, HTTP, A2A, AGUI)
-	"protocolType":       true, // AgentCore gateway protocol
-	"authorizerType":     true, // AgentCore gateway authorizer
-	"recordType":         true, // AgentCore registry record type
-	"tools":              true, // []ToolRef: type and name only
-	"toolCount":          true,
-	"mcpServers":         true, // []MCPServerRef: label and origin only
-	"skills":             true, // names only
-	"image":              true, // container image URI
-	"repositoryUrl":      true, // source repository (origin + path, no credentials)
-	"endpoint":           true, // agent endpoint origin
-	"region":             true,
-	"location":           true,
-	"accountId":          true, // cloud account / subscription
-	"resourceId":         true, // ARM ID / ARN / resource name
-	"roleArn":            true, // AgentCore runtime / classic agent role
-	"serviceAccount":     true, // Google engine identity
-	"project":            true, // OpenAI project / Google project / Foundry project
-	"workspace":          true, // Anthropic workspace
-	"deployment":         true, // Foundry model deployment name
-	"sku":                true,
-	"capacity":           true,
-	"accountKind":        true, // Azure account kind
-	"apiSources":         true, // OpenAI api_source values seen
-	"products":           true, // Anthropic products seen
-	"principalType":      true, // AWS identity type
-	"archived":           true,
-	"state":              true,
-	"status":             true,
-	"labels":             true, // provider labels (keys and values, short)
-	"otelAgentId":        true, // Foundry external agent telemetry ID
-	"deepInspection":     true, // whether payload-derived signals were looked for
-	"invocationLogging":  true, // Bedrock invocation logging on/off
-	"sessionCount":       true,
-	"lastSessionAt":      true,
-	"description":        true, // the provider's short description field (not instructions)
-	"displayName":        true,
-	"runtimeReference":   true, // Google registry -> engine reference
-	"agentEndpointURL":   true, // origin only
-	"agentCardURL":       true, // origin only
-	"possibleDuplicates": true,
+	"model":             true, // model or deployment name
+	"framework":         true, // agent framework (Google spec.agentFramework, registry framework)
+	"agentKind":         true, // Foundry kind (prompt, hosted, external, ...), AgentCore artifact kind
+	"agentVersion":      true,
+	"orchestrationType": true, // Bedrock classic agent
+	"serverProtocol":    true, // AgentCore runtime protocol (HTTP, A2A, AGUI)
+	"protocolType":      true, // Google Agent Registry protocols
+	"recordType":        true, // AWS Agent Registry record type
+	"tools":             true, // []ToolRef: type and name only
+	"toolCount":         true,
+	"mcpServers":        true, // []MCPServerRef: label and origin only
+	"skills":            true, // names or IDs only
+	"image":             true, // container image URI
+	"repositoryUrl":     true, // source repository (origin + path, no credentials)
+	"endpoint":          true, // Foundry project endpoint origin
+	"region":            true,
+	"location":          true,
+	"accountId":         true, // cloud account / subscription
+	"accountKind":       true, // Azure account kind
+	"resourceId":        true, // ARM ID / ARN / resource name
+	"roleArn":           true, // AgentCore runtime / classic agent / Managed Agent role
+	"serviceAccount":    true, // Google engine identity
+	"project":           true, // OpenAI project / Google project / Foundry project
+	"workspace":         true, // Anthropic workspace
+	"deployment":        true, // Foundry model deployment name
+	"archived":          true,
+	"state":             true,
+	"status":            true,
+	"labels":            true, // platform labels (keys and values, short)
+	"otelAgentId":       true, // Foundry external agent telemetry ID
+	"description":       true, // the platform's short description field (not instructions)
+	"displayName":       true,
+	"runtimeReference":  true, // Google registry -> engine reference
+}
+
+// AllowedAttributes returns the attributes whose keys are on the allow-list,
+// so a stored attribute an earlier version kept is not shown.
+func AllowedAttributes(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		if allowedAttributes[k] {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // ToolRef is the part of a tool definition that may be stored: its type and

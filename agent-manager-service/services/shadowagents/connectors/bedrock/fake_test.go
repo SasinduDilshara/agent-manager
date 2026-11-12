@@ -20,40 +20,25 @@ package bedrock
 // uses (see evidence/impl_notes_bedrock.md):
 //
 //   - restJson1 (bedrock-agentcore-control, agent-registry-control,
-//     bedrock-agent, bedrock): REST paths, JSON bodies, error code in the
+//     bedrock-agent): REST paths, JSON bodies, error code in the
 //     X-Amzn-Errortype header.
-//   - awsJson1_1 (logs, cloudtrail): POST /, X-Amz-Target, JSON bodies,
-//     error code in __type.
-//   - smithy-rpc-v2-cbor (cloudwatch): POST /service/<svc>/operation/<op>,
-//     CBOR bodies, Smithy-Protocol: rpc-v2-cbor.
 //   - awsQuery (sts): POST / form, XML response.
 //
-// Fixtures (testdata/), named <Operation>[_<id>][_page2].json, follow the
-// official shapes in evidence/bedrock.md:
+// Fixtures (testdata/), named <Operation>[_<id>][_<variant>][_page2].json,
+// follow the official shapes in evidence/bedrock.md:
 //
 //   - ListAgentRuntimes*, GetAgentRuntime_*: §2.1 / §2.2 examples (API ref
 //     Response Syntax, M:agentcore AgentRuntime / GetAgentRuntimeResponse).
-//   - ListGateways*, GetGateway_*: §2.3 (GatewaySummary, GetGateway output).
-//   - ListGatewayTargets_*: §2.4 (TargetSummary).
 //   - ListRegistries*, ListRegistryRecords_*: §2.5 (agent-registry-control
 //     RegistrySummary / RegistryRecordSummary; the record example).
 //   - ListAgents*, GetAgent_*, ListAgentActionGroups_*: §2.6 / §2.7.
-//   - GetModelInvocationLoggingConfiguration*: §2.8 (LoggingConfig).
-//   - FilterLogEvents*: §2.9 official response, each message an official
-//     "Log entry format" record with Converse / Anthropic Messages bodies.
-//   - ListMetrics*, GetMetricData*: §2.10 official GetMetricData response
-//     (JSON shape, converted to CBOR by cborFromJSON).
-//   - LookupEvents*: §2.11 example; CloudTrailEvent follows the official
-//     InvokeModel event.
 //   - AssumeRole.xml: §4 official AssumeRole sample response.
 //   - eu-west-1/*: the second region of the multi-region test.
 //
 // Fixtures carry retention markers (SECRET-PROMPT-MARKER, a fake key) in
-// descriptions, instructions, environment variables, tool inputs, log
-// bodies and URLs.
+// descriptions, instructions and environment variables.
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,8 +52,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/aws/smithy-go/encoding/cbor"
 )
 
 const (
@@ -94,7 +77,7 @@ type fakeErr struct {
 	status     int
 	code       string
 	retryAfter string
-	// raw, when set, is sent as a 200 body as-is (malformed responses).
+	// raw, when set, is sent as a 200 body as-is (malformed or custom responses).
 	raw string
 }
 
@@ -106,7 +89,7 @@ type fakeAWS struct {
 	reqs []capturedReq
 	// errs are served (in order, one per request) before the fixtures.
 	errs map[string][]fakeErr
-	// variant selects an alternative fixture: <Op>_<variant>.json.
+	// variant selects an alternative fixture: <Op>[_<id>]_<variant>.json.
 	variant map[string]string
 	// forbidden ops fail the test when called.
 	forbidden map[string]bool
@@ -151,40 +134,23 @@ func (f *fakeAWS) allOps() []string {
 var (
 	credRE    = regexp.MustCompile(`Credential=([^/]+)/(\d{8})/([^/]+)/([^/]+)/aws4_request`)
 	runtimeRE = regexp.MustCompile(`^/runtimes/([^/]+)/$`)
-	gwRE      = regexp.MustCompile(`^/gateways/([^/]+)/$`)
-	targetsRE = regexp.MustCompile(`^/gateways/([^/]+)/targets/$`)
 	recordsRE = regexp.MustCompile(`^/registries/([^/]+)/records-list$`)
 	agentRE   = regexp.MustCompile(`^/agents/([^/]+)/$`)
 	groupsRE  = regexp.MustCompile(`^/agents/([^/]+)/agentversions/([^/]+)/actiongroups/$`)
-	cborOpRE  = regexp.MustCompile(`^/service/GraniteServiceVersion20100801/operation/([A-Za-z]+)$`)
 )
 
 // opService is the SigV4 signing name each operation must be signed with
 // (evidence §2.0).
 var opService = map[string]string{
 	"ListAgentRuntimes": "bedrock-agentcore", "GetAgentRuntime": "bedrock-agentcore",
-	"ListGateways": "bedrock-agentcore", "GetGateway": "bedrock-agentcore", "ListGatewayTargets": "bedrock-agentcore",
 	"ListRegistries": "agent-registry", "ListRegistryRecords": "agent-registry",
 	"ListAgents": "bedrock", "GetAgent": "bedrock", "ListAgentActionGroups": "bedrock",
-	"GetModelInvocationLoggingConfiguration": "bedrock",
-	"FilterLogEvents":                        "logs",
-	"ListMetrics":                            "monitoring", "GetMetricData": "monitoring",
-	"LookupEvents": "cloudtrail",
-	"AssumeRole":   "sts",
+	"AssumeRole": "sts",
 }
 
 // route identifies the operation (and the resource ID in its path).
 func route(r *http.Request, body []byte) (op, id string) {
 	p := r.URL.Path
-	switch tgt := r.Header.Get("X-Amz-Target"); tgt {
-	case "CloudTrail_20131101.LookupEvents", "com.amazonaws.cloudtrail.v20131101.CloudTrail_20131101.LookupEvents":
-		return "LookupEvents", ""
-	case "Logs_20140328.FilterLogEvents":
-		return "FilterLogEvents", ""
-	}
-	if m := cborOpRE.FindStringSubmatch(p); m != nil {
-		return m[1], ""
-	}
 	switch {
 	case r.Method == http.MethodPost && p == "/" && strings.Contains(string(body), "Action=AssumeRole"):
 		return "AssumeRole", ""
@@ -192,12 +158,6 @@ func route(r *http.Request, body []byte) (op, id string) {
 		return "ListAgentRuntimes", ""
 	case r.Method == http.MethodGet && runtimeRE.MatchString(p):
 		return "GetAgentRuntime", runtimeRE.FindStringSubmatch(p)[1]
-	case r.Method == http.MethodGet && p == "/gateways/":
-		return "ListGateways", ""
-	case r.Method == http.MethodGet && targetsRE.MatchString(p):
-		return "ListGatewayTargets", targetsRE.FindStringSubmatch(p)[1]
-	case r.Method == http.MethodGet && gwRE.MatchString(p):
-		return "GetGateway", gwRE.FindStringSubmatch(p)[1]
 	case r.Method == http.MethodPost && p == "/registries-list":
 		return "ListRegistries", ""
 	case r.Method == http.MethodPost && recordsRE.MatchString(p):
@@ -208,40 +168,15 @@ func route(r *http.Request, body []byte) (op, id string) {
 		return "GetAgent", agentRE.FindStringSubmatch(p)[1]
 	case r.Method == http.MethodPost && groupsRE.MatchString(p):
 		return "ListAgentActionGroups", groupsRE.FindStringSubmatch(p)[1]
-	case r.Method == http.MethodGet && p == "/logging/modelinvocations":
-		return "GetModelInvocationLoggingConfiguration", ""
 	}
 	return "", ""
 }
 
-type protocol int
-
-const (
-	protoRestJSON protocol = iota
-	protoAWSJSON
-	protoCBOR
-	protoQuery
-)
-
-func protocolOf(op string) protocol {
-	switch op {
-	case "LookupEvents", "FilterLogEvents":
-		return protoAWSJSON
-	case "ListMetrics", "GetMetricData":
-		return protoCBOR
-	case "AssumeRole":
-		return protoQuery
-	}
-	return protoRestJSON
-}
-
 // emptyList is the response of a list operation without a fixture.
 var emptyList = map[string]string{
-	"ListAgentRuntimes": `{"agentRuntimes":[]}`, "ListGateways": `{"items":[]}`, "ListGatewayTargets": `{"items":[]}`,
-	"ListRegistries": `{"registries":[]}`, "ListRegistryRecords": `{"registryRecords":[]}`,
+	"ListAgentRuntimes": `{"agentRuntimes":[]}`,
+	"ListRegistries":    `{"registries":[]}`, "ListRegistryRecords": `{"registryRecords":[]}`,
 	"ListAgents": `{"agentSummaries":[]}`, "ListAgentActionGroups": `{"actionGroupSummaries":[]}`,
-	"GetModelInvocationLoggingConfiguration": `{}`, "FilterLogEvents": `{"events":[]}`,
-	"LookupEvents": `{"Events":[]}`, "ListMetrics": `{"Metrics":[]}`, "GetMetricData": `{"MetricDataResults":[]}`,
 }
 
 func (f *fakeAWS) serve(w http.ResponseWriter, r *http.Request) {
@@ -276,21 +211,20 @@ func (f *fakeAWS) serve(w http.ResponseWriter, r *http.Request) {
 	if want := opService[op]; service != want {
 		f.t.Errorf("%s signed for service %q, want %q", op, service, want)
 	}
-	proto := protocolOf(op)
+	query := op == "AssumeRole"
 	if injected != nil {
 		if injected.raw != "" {
-			writeBody(w, proto, []byte(injected.raw), false)
+			writeBody(w, []byte(injected.raw))
 			return
 		}
-		writeError(w, proto, *injected)
+		writeError(w, query, *injected)
 		return
 	}
-	if op == "AssumeRole" {
+	if query {
 		w.Header().Set("Content-Type", "text/xml")
 		_, _ = w.Write(mustRead(f.t, "AssumeRole.xml"))
 		return
 	}
-	page2 := hasNextToken(proto, r, body)
 	name := op
 	if id != "" {
 		name += "_" + id
@@ -298,19 +232,19 @@ func (f *fakeAWS) serve(w http.ResponseWriter, r *http.Request) {
 	if variant != "" {
 		name += "_" + variant
 	}
-	if page2 {
+	if hasNextToken(r, body) {
 		name += "_page2"
 	}
 	data := fixture(region, name+".json")
 	if data == nil {
-		if e, ok := emptyList[op]; ok {
-			data = []byte(e)
-		} else {
-			writeError(w, proto, fakeErr{status: http.StatusNotFound, code: "ResourceNotFoundException"})
+		e, ok := emptyList[op]
+		if !ok {
+			writeError(w, false, fakeErr{status: http.StatusNotFound, code: "ResourceNotFoundException"})
 			return
 		}
+		data = []byte(e)
 	}
-	writeBody(w, proto, data, true)
+	writeBody(w, data)
 }
 
 func fixture(region, name string) []byte {
@@ -334,124 +268,36 @@ func mustRead(t *testing.T, name string) []byte {
 	return b
 }
 
-func hasNextToken(proto protocol, r *http.Request, body []byte) bool {
+func hasNextToken(r *http.Request, body []byte) bool {
 	if r.URL.Query().Get("nextToken") != "" {
 		return true
 	}
-	switch proto {
-	case protoCBOR:
-		v, err := cbor.Decode(body)
-		if err != nil {
-			return false
-		}
-		m, _ := v.(cbor.Map)
-		_, ok := m["NextToken"]
-		return ok
-	case protoRestJSON, protoAWSJSON:
-		var m map[string]any
-		if json.Unmarshal(body, &m) != nil {
-			return false
-		}
-		return m["nextToken"] != nil || m["NextToken"] != nil
+	var m map[string]any
+	if json.Unmarshal(body, &m) != nil {
+		return false
 	}
-	return false
+	return m["nextToken"] != nil
 }
 
-func writeBody(w http.ResponseWriter, proto protocol, data []byte, convert bool) {
-	switch proto {
-	case protoAWSJSON:
-		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
-	case protoCBOR:
-		w.Header().Set("Content-Type", "application/cbor")
-		w.Header().Set("Smithy-Protocol", "rpc-v2-cbor")
-		if convert {
-			data = cborFromJSON(data)
-		}
-	default:
-		w.Header().Set("Content-Type", "application/json")
-	}
+func writeBody(w http.ResponseWriter, data []byte) {
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Amzn-Requestid", "11111111-2222-3333-4444-555555555555")
 	_, _ = w.Write(data)
 }
 
-func writeError(w http.ResponseWriter, proto protocol, e fakeErr) {
+func writeError(w http.ResponseWriter, query bool, e fakeErr) {
 	if e.retryAfter != "" {
 		w.Header().Set("Retry-After", e.retryAfter)
 	}
 	msg := "simulated " + e.code
-	switch proto {
-	case protoRestJSON:
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Amzn-Errortype", e.code)
-		w.WriteHeader(e.status)
-		_, _ = fmt.Fprintf(w, `{"message":%q}`, msg)
-	case protoAWSJSON:
-		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
-		w.WriteHeader(e.status)
-		_, _ = fmt.Fprintf(w, `{"__type":%q,"message":%q}`, e.code, msg)
-	case protoCBOR:
-		w.Header().Set("Content-Type", "application/cbor")
-		w.Header().Set("Smithy-Protocol", "rpc-v2-cbor")
-		w.Header().Set("X-Amzn-Query-Error", e.code+";Sender")
-		w.WriteHeader(e.status)
-		_, _ = w.Write(cbor.Encode(cbor.Map{"__type": cbor.String(e.code), "message": cbor.String(msg)}))
-	case protoQuery:
+	if query {
 		w.Header().Set("Content-Type", "text/xml")
 		w.WriteHeader(e.status)
 		_, _ = fmt.Fprintf(w, `<ErrorResponse><Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message></Error><RequestId>r1</RequestId></ErrorResponse>`, e.code, msg)
+		return
 	}
-}
-
-// cborFromJSON converts a JSON fixture to the CBOR the rpcv2Cbor protocol
-// sends: timestamps (members named Timestamps) as tag 1 epoch seconds,
-// doubles (members named Values) as float64.
-func cborFromJSON(data []byte) []byte {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var v any
-	if err := dec.Decode(&v); err != nil {
-		panic(err)
-	}
-	return cbor.Encode(toCBOR(v, ""))
-}
-
-func toCBOR(v any, key string) cbor.Value {
-	switch x := v.(type) {
-	case map[string]any:
-		m := cbor.Map{}
-		for k, e := range x {
-			m[k] = toCBOR(e, k)
-		}
-		return m
-	case []any:
-		l := cbor.List{}
-		for _, e := range x {
-			l = append(l, toCBOR(e, key))
-		}
-		return l
-	case string:
-		return cbor.String(x)
-	case bool:
-		return cbor.Bool(x)
-	case json.Number:
-		switch key {
-		case "Timestamps":
-			n, _ := x.Int64()
-			return &cbor.Tag{ID: 1, Value: cbor.Uint(uint64(n))}
-		case "Values":
-			fl, _ := x.Float64()
-			return cbor.Float64(fl)
-		}
-		if n, err := x.Int64(); err == nil {
-			if n < 0 {
-				return cbor.NegInt(uint64(-n - 1))
-			}
-			return cbor.Uint(uint64(n))
-		}
-		fl, _ := x.Float64()
-		return cbor.Float64(fl)
-	case nil:
-		return &cbor.Nil{}
-	}
-	panic(fmt.Sprintf("unsupported JSON value %T", v))
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Amzn-Errortype", e.code)
+	w.WriteHeader(e.status)
+	_, _ = fmt.Fprintf(w, `{"message":%q}`, msg)
 }

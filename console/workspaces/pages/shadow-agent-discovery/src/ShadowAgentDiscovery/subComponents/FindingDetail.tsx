@@ -27,134 +27,55 @@ import {
   ListingTable,
   Skeleton,
   Stack,
-  Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
-import { ArrowRight, SearchX } from "@wso2/oxygen-ui-icons-react";
-import {
-  generatePath,
-  Link as RouterLink,
-  useLocation,
-  useNavigate,
-  useParams,
-} from "react-router-dom";
-import {
-  PageLayout,
-  returnToState,
-  StateNotice,
-  useReturnTo,
-} from "@agent-management-platform/views";
+import { SearchX } from "@wso2/oxygen-ui-icons-react";
+import { generatePath, Link as RouterLink, useParams } from "react-router-dom";
+import { PageLayout, StateNotice, useReturnTo } from "@agent-management-platform/views";
 import { useShadowFinding, useUpdateShadowFinding } from "@agent-management-platform/api-client";
 import { absoluteRouteMap, type ShadowFindingDetail } from "@agent-management-platform/types";
-import {
-  kindLabel,
-  ownerLabel,
-  providerLabel,
-  ScoreBar,
-  shortDate,
-  StatusChip,
-  VerdictChip,
-} from "../shadowUi";
-import { RetirementCard } from "./RetirementCard";
-import { UsageCard } from "./UsageCard";
+import { kindLabel, ownerLabel, providerLabel, shortDate, StatusChip } from "../shadowUi";
 
-/** A related finding's relation, as a short label. */
-export function relationLabel(relation: string, provider: string): string {
-  switch (relation) {
-    case "agent_in_project":
-      return provider === "anthropic" ? "Agent in this workspace" : "Agent in this project";
-    case "candidate_key":
-      return "Candidate key";
-    case "used_by_agent":
-      return "Used by agent";
-    case "uses_deployment":
-      return "Uses deployment";
-    case "possible_duplicate":
-      return "Possible duplicate";
-    default:
-      return relation.replace(/_/g, " ");
-  }
+/** A related agent's relation, as a short label. */
+export function relationLabel(relation: string): string {
+  return relation === "possible_duplicate" ? "Possible duplicate" : relation.replace(/_/g, " ");
 }
 
-/**
- * What a project (or workspace) finding is: evidence read with a project or
- * workspace key that cannot be tied to one API key. It has no credential of
- * its own to retire.
- */
-export function ProjectFindingNote({ finding: f }: { finding: ShadowFindingDetail }) {
-  const unit = f.provider === "anthropic" ? "workspace" : "project";
-  const sources =
-    f.provider === "anthropic" ? "message batches" : "stored chat completions or batches";
-  const candidates = f.related.filter((r) => r.relation === "candidate_key").length;
-  return (
-    <Alert severity="info">
-      <Typography variant="body2" fontWeight={500} gutterBottom>
-        Evidence that is not tied to one API key
-      </Typography>
-      <Typography variant="body2" component="p">
-        Tool calls were found in this {unit}&apos;s {sources}, read with its {unit} key. These
-        records belong to the {unit}, not to a key.{" "}
-        {candidates > 0
-          ? `More than one key of the ${unit} was used in the scanned period: one of the ${candidates} candidate keys under Related findings made these calls.`
-          : `The keys of this ${unit} are not known. Add an Admin API key to the connection: the next scan then ties the evidence to a key when only one key was used.`}
-      </Typography>
-      <Typography variant="body2" component="p" sx={{ mt: 1 }}>
-        A {unit} has no credential of its own, so there is nothing to retire here. Retire the keys
-        from their own findings.
-      </Typography>
-    </Alert>
-  );
-}
-
+/** Labels of the attributes an agent listing reports (the service's allow-list). */
 const ATTRIBUTE_LABELS: Record<string, string> = {
   model: "Model",
-  models: "Models",
-  modelVersion: "Model version",
   framework: "Framework",
   agentKind: "Agent kind",
   agentVersion: "Version",
-  serverProtocol: "Server protocol",
-  image: "Container image",
-  repositoryUrl: "Source repository",
-  region: "Region",
-  location: "Location",
-  project: "Project",
-  workspace: "Workspace",
-  deployment: "Deployment",
-  roleArn: "Execution role",
-  serviceAccount: "Service account",
-  resourceId: "Resource ID",
-  accountKind: "Account kind",
-  sku: "SKU",
   orchestrationType: "Orchestration",
-  principalType: "Identity type",
-  protocolType: "Protocol",
-  authorizerType: "Authorizer",
-  recordType: "Record type",
+  serverProtocol: "Server protocol",
+  protocolType: "Protocols",
+  recordType: "Registry record type",
   tools: "Tools",
   toolCount: "Tool count",
   mcpServers: "MCP servers",
   skills: "Skills",
-  endpoint: "Endpoint",
+  image: "Container image",
+  repositoryUrl: "Source repository",
+  endpoint: "Project endpoint",
+  region: "Region",
+  location: "Location",
   accountId: "Cloud account",
-  capacity: "Capacity",
-  apiSources: "API sources",
-  products: "Products",
+  accountKind: "Account kind",
+  resourceId: "Resource ID",
+  roleArn: "Execution role",
+  serviceAccount: "Service account",
+  project: "Project",
+  workspace: "Workspace",
+  deployment: "Deployment",
   archived: "Archived",
   state: "State",
   status: "Status",
   labels: "Labels",
   otelAgentId: "Telemetry agent ID",
-  deepInspection: "Deep inspection",
-  invocationLogging: "Model invocation logging",
-  sessionCount: "Sessions",
-  lastSessionAt: "Last session",
   description: "Description",
   displayName: "Display name",
   runtimeReference: "Runtime reference",
-  agentEndpointURL: "Agent endpoint",
-  agentCardURL: "Agent card",
-  possibleDuplicates: "Possible duplicates",
 };
 
 function formatValue(v: unknown): string {
@@ -202,19 +123,22 @@ function EvidenceCard({ finding }: { finding: ShadowFindingDetail }) {
         <Typography variant="subtitle1" gutterBottom>
           Evidence
         </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          The platform listing that returned this agent.
+        </Typography>
         {finding.signals.length === 0 ? (
           <Typography variant="body2" color="text.secondary">
-            No signals in the scanned period.
+            No evidence recorded.
           </Typography>
         ) : (
           <Box sx={{ overflowX: "auto" }}>
             <ListingTable>
               <ListingTable.Head>
                 <ListingTable.Row>
-                  <ListingTable.Cell>Signal</ListingTable.Cell>
-                  <ListingTable.Cell>Weight</ListingTable.Cell>
+                  <ListingTable.Cell>Evidence</ListingTable.Cell>
                   <ListingTable.Cell>Exact condition</ListingTable.Cell>
                   <ListingTable.Cell>Observed</ListingTable.Cell>
+                  <ListingTable.Cell>Seen</ListingTable.Cell>
                 </ListingTable.Row>
               </ListingTable.Head>
               <ListingTable.Body>
@@ -233,23 +157,17 @@ function EvidenceCard({ finding }: { finding: ShadowFindingDetail }) {
                       </Typography>
                     </ListingTable.Cell>
                     <ListingTable.Cell>
-                      {s.counted === false && s.weight > 0 ? (
-                        <Tooltip title="Another signal of the same kind already counts">
-                          <Typography variant="body2" color="text.secondary">
-                            {s.weight} (not counted)
-                          </Typography>
-                        </Tooltip>
-                      ) : (
-                        <Typography variant="body2">{s.weight}</Typography>
-                      )}
-                    </ListingTable.Cell>
-                    <ListingTable.Cell>
                       <Typography variant="caption" color="text.secondary">
                         {s.condition}
                       </Typography>
                     </ListingTable.Cell>
                     <ListingTable.Cell>
                       <Typography variant="caption">{formatValue(s.observed)}</Typography>
+                    </ListingTable.Cell>
+                    <ListingTable.Cell>
+                      <Typography variant="caption" color="text.secondary">
+                        {shortDate(s.detectedAt)}
+                      </Typography>
                     </ListingTable.Cell>
                   </ListingTable.Row>
                 ))}
@@ -262,7 +180,10 @@ function EvidenceCard({ finding }: { finding: ShadowFindingDetail }) {
   );
 }
 
-/** One finding: its score and the evidence behind it, owner hint, usage and onboarding. */
+/**
+ * One unregistered agent: what its platform lists, the evidence, who found it
+ * and its review status.
+ */
 export function FindingDetail({
   orgName,
   canManage,
@@ -273,144 +194,100 @@ export function FindingDetail({
   listPath: string;
 }) {
   const { findingId } = useParams<{ findingId: string }>();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const returnTo = useReturnTo(`${listPath}?tab=scans`);
+  const returnTo = useReturnTo(`${listPath}?tab=agents`);
   const { data: f, isLoading, error } = useShadowFinding(orgName, findingId);
   const update = useUpdateShadowFinding(orgName, findingId);
-  const back = { backHref: returnTo, backLabel: "Back to findings" };
+  const back = { backHref: returnTo, backLabel: "Back" };
 
   if (isLoading) {
     return (
-      <PageLayout title="Finding" disableIcon {...back}>
+      <PageLayout title="Agent" disableIcon {...back}>
         <Skeleton variant="rounded" height={360} />
       </PageLayout>
     );
   }
   if (error || !f) {
     return (
-      <PageLayout title="Finding" disableIcon {...back}>
+      <PageLayout title="Agent" disableIcon {...back}>
         <StateNotice
           icon={SearchX}
           tone="error"
-          title="Couldn't load this finding"
-          description="It may have been deleted with its connection. Go back to the findings list."
+          title="Couldn't load this agent"
+          description="It may have been deleted with its platform. Go back to Unregistered Agents."
         />
       </PageLayout>
     );
   }
 
-  const canOnboard = canManage && !f.linkedAgent && f.kind !== "tool_infrastructure";
-  const onboardHref = generatePath(
-    absoluteRouteMap.children.org.children.shadowAgentDiscovery.children.finding.children.onboard
-      .path,
-    { orgId: orgName ?? "", findingId: f.id },
-  );
   const attributes = Object.entries(f.attributes ?? {});
   const owner = ownerLabel(f.ownerHint);
+  const foundBy = f.foundBy ?? [];
 
   return (
     <PageLayout
       title={f.displayName}
-      description={`${providerLabel(f.provider)} · ${kindLabel(f.kind, f.provider)} · ${f.connectionName}`}
+      description={`${providerLabel(f.provider)} · ${kindLabel(f.kind, f.provider)}`}
       disableIcon
       {...back}
-      actions={
-        canOnboard ? (
-          <Button
-            variant="contained"
-            endIcon={<ArrowRight size={16} />}
-            onClick={() => navigate(onboardHref, { state: returnToState(location) })}
-          >
-            Onboard as a governed agent
-          </Button>
-        ) : undefined
-      }
     >
       <Stack spacing={3}>
+        {!f.present && (
+          <Alert severity="warning">
+            The latest complete scan of {f.connectionName} no longer listed this agent: it was
+            deleted at the platform, or it is no longer in the connection&apos;s scope. It was last
+            seen {shortDate(f.lastSeenAt)}.
+          </Alert>
+        )}
         <Card variant="outlined">
           <CardContent>
             <Grid container spacing={2} alignItems="center">
-              <Grid size={{ xs: 12, md: 4 }}>
-                <Typography variant="caption" color="text.secondary">
-                  Confidence score
-                </Typography>
-                <ScoreBar score={f.score} />
-              </Grid>
-              <Grid size={{ xs: 6, md: 2 }}>
-                <Typography variant="caption" color="text.secondary" component="p">
-                  Verdict
-                </Typography>
-                <VerdictChip verdict={f.verdict} />
-              </Grid>
-              <Grid size={{ xs: 6, md: 2 }}>
+              <Grid size={{ xs: 6, md: 3 }}>
                 <Typography variant="caption" color="text.secondary" component="p">
                   Status
                 </Typography>
                 <StatusChip status={f.status} />
               </Grid>
-              <Grid size={{ xs: 12, md: 4 }}>
-                {f.linkedAgent ? (
-                  <Field
-                    label="Governed agent"
-                    value={
-                      <RouterLink
-                        to={generatePath(
-                          absoluteRouteMap.children.org.children.projects.children.agents.path,
-                          {
-                            orgId: orgName ?? "",
-                            projectId: f.linkedProject,
-                            agentId: f.linkedAgent,
-                          },
-                        )}
+              <Grid size={{ xs: 6, md: 3 }}>
+                <Field label="State at the platform" value={f.state} />
+              </Grid>
+              <Grid size={{ xs: 12, md: 6 }}>
+                {canManage && (
+                  <Stack direction="row" spacing={1} justifyContent={{ md: "flex-end" }}>
+                    {f.status !== "reviewed" && (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={update.isPending}
+                        onClick={() => update.mutate({ status: "reviewed" })}
                       >
-                        {f.linkedProject} / {f.linkedAgent}
-                      </RouterLink>
-                    }
-                  />
-                ) : (
-                  canManage &&
-                  !f.linkedAgent && (
-                    <Stack direction="row" spacing={1}>
-                      {f.status !== "reviewed" && f.status !== "dismissed" && (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          onClick={() => update.mutate({ status: "reviewed" })}
-                        >
-                          Mark reviewed
-                        </Button>
-                      )}
-                      {f.status === "dismissed" ? (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          onClick={() => update.mutate({ status: "new" })}
-                        >
-                          Reopen
-                        </Button>
-                      ) : (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          onClick={() => update.mutate({ status: "dismissed" })}
-                        >
-                          Dismiss
-                        </Button>
-                      )}
-                    </Stack>
-                  )
+                        Mark reviewed
+                      </Button>
+                    )}
+                    {f.status === "new" ? (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={update.isPending}
+                        onClick={() => update.mutate({ status: "dismissed" })}
+                      >
+                        Dismiss
+                      </Button>
+                    ) : (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled={update.isPending}
+                        onClick={() => update.mutate({ status: "new" })}
+                      >
+                        Reopen
+                      </Button>
+                    )}
+                  </Stack>
                 )}
               </Grid>
             </Grid>
           </CardContent>
         </Card>
-
-        {f.kind === "project" ? (
-          <ProjectFindingNote finding={f} />
-        ) : (
-          <RetirementCard orgName={orgName} finding={f} canManage={canManage} />
-        )}
 
         <EvidenceCard finding={f} />
 
@@ -419,125 +296,97 @@ export function FindingDetail({
             <Card variant="outlined" sx={{ height: "100%" }}>
               <CardContent>
                 <Typography variant="subtitle1" gutterBottom>
-                  Owner hint
+                  Details
                 </Typography>
                 <Stack spacing={1.5}>
-                  <Field label="Who" value={owner || "Unknown"} />
-                  {f.ownerHint?.name && f.ownerHint.name !== owner && (
-                    <Field label="Name" value={f.ownerHint.name} />
-                  )}
-                  {f.ownerHint?.username && f.ownerHint.username !== owner && (
-                    <Field label="Username / principal" value={f.ownerHint.username} />
-                  )}
-                  <Field label="Source" value={f.ownerHint?.source} />
-                  <Grid container spacing={1.5}>
+                  <Field
+                    label="Platform ID"
+                    value={<span style={{ fontFamily: "monospace" }}>{f.externalId}</span>}
+                  />
+                  {f.scope && <Field label="Scope" value={f.scope} />}
+                  {attributes.map(([k, v]) => (
+                    <Field key={k} label={ATTRIBUTE_LABELS[k] ?? k} value={formatValue(v)} />
+                  ))}
+                  <Typography variant="caption" color="text.secondary">
+                    Only what the platform&apos;s agent listing reports. Instructions, prompts, tool
+                    definitions and secrets are never stored.
+                  </Typography>
+                </Stack>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid size={{ xs: 12, md: 6 }}>
+            <Stack spacing={3} sx={{ height: "100%" }}>
+              <Card variant="outlined">
+                <CardContent>
+                  <Typography variant="subtitle1" gutterBottom>
+                    Found by
+                  </Typography>
+                  <Stack spacing={1}>
+                    {foundBy.map((src) => (
+                      <Stack key={src.findingId} direction="row" spacing={1} alignItems="center">
+                        <Typography variant="body2">{src.connectionName}</Typography>
+                        {!src.present && (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            color="warning"
+                            label="No longer listed"
+                          />
+                        )}
+                      </Stack>
+                    ))}
+                    {foundBy.length > 1 && (
+                      <Typography variant="caption" color="text.secondary">
+                        The same agent (same platform and platform ID) was found through{" "}
+                        {foundBy.length} connections; it is shown once.
+                      </Typography>
+                    )}
+                  </Stack>
+                  <Grid container spacing={1.5} sx={{ mt: 1 }}>
                     <Grid size={6}>
                       <Field
-                        label="Created at provider"
-                        value={shortDate(f.providerCreatedAt ?? f.ownerHint?.createdAt)}
+                        label="Created at the platform"
+                        value={shortDate(f.providerCreatedAt)}
                       />
                     </Grid>
                     <Grid size={6}>
                       <Field label="First seen by a scan" value={shortDate(f.firstSeenAt)} />
                     </Grid>
                     <Grid size={6}>
-                      <Field label="First used" value={shortDate(f.firstUsedAt)} />
-                    </Grid>
-                    <Grid size={6}>
-                      <Field label="Last used" value={shortDate(f.lastUsedAt)} />
+                      <Field label="Last seen by a scan" value={shortDate(f.lastSeenAt)} />
                     </Grid>
                   </Grid>
-                </Stack>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid size={{ xs: 12, md: 6 }}>
-            <Card variant="outlined" sx={{ height: "100%" }}>
-              <CardContent>
-                <Typography variant="subtitle1" gutterBottom>
-                  Details
-                </Typography>
-                <Stack spacing={1.5}>
-                  <Field
-                    label="Provider ID"
-                    value={<span style={{ fontFamily: "monospace" }}>{f.externalId}</span>}
-                  />
-                  {f.scope && <Field label="Scope" value={f.scope} />}
-                  {f.state && <Field label="State at the provider" value={f.state} />}
-                  {attributes.map(([k, v]) => (
-                    <Field key={k} label={ATTRIBUTE_LABELS[k] ?? k} value={formatValue(v)} />
-                  ))}
-                  <Typography variant="caption" color="text.secondary">
-                    Prompts, instructions, completions, tool payloads and secrets are never stored.
-                  </Typography>
-                </Stack>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+              {owner && (
+                <Card variant="outlined">
+                  <CardContent>
+                    <Typography variant="subtitle1" gutterBottom>
+                      Owner
+                    </Typography>
+                    <Stack spacing={1.5}>
+                      <Field label="Created by" value={owner} />
+                      {f.ownerHint?.name && f.ownerHint.name !== owner && (
+                        <Field label="Name" value={f.ownerHint.name} />
+                      )}
+                      {f.ownerHint?.username && f.ownerHint.username !== owner && (
+                        <Field label="Username / principal" value={f.ownerHint.username} />
+                      )}
+                      {f.ownerHint?.source && <Field label="Source" value={f.ownerHint.source} />}
+                    </Stack>
+                  </CardContent>
+                </Card>
+              )}
+            </Stack>
           </Grid>
         </Grid>
-
-        <UsageCard
-          usage={f.usage}
-          onboardedAt={f.onboardedAt}
-          through={f.lastSeenAt?.slice(0, 10)}
-        />
-
-        {f.keys.length > 0 && (
-          <Card variant="outlined">
-            <CardContent>
-              <Typography variant="subtitle1" gutterBottom>
-                API keys
-              </Typography>
-              <Box sx={{ overflowX: "auto" }}>
-                <ListingTable>
-                  <ListingTable.Head>
-                    <ListingTable.Row>
-                      <ListingTable.Cell>Key</ListingTable.Cell>
-                      <ListingTable.Cell>Status</ListingTable.Cell>
-                      <ListingTable.Cell>Owner</ListingTable.Cell>
-                      <ListingTable.Cell>Created</ListingTable.Cell>
-                      <ListingTable.Cell>Last used</ListingTable.Cell>
-                    </ListingTable.Row>
-                  </ListingTable.Head>
-                  <ListingTable.Body>
-                    {f.keys.map((k) => (
-                      <ListingTable.Row key={k.keyId}>
-                        <ListingTable.Cell>
-                          <Typography variant="body2" fontWeight={500}>
-                            {k.name || k.keyId}
-                          </Typography>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{ fontFamily: "monospace" }}
-                          >
-                            {k.redactedHint || k.keyId}
-                          </Typography>
-                        </ListingTable.Cell>
-                        <ListingTable.Cell>
-                          {k.present ? (
-                            <Chip size="small" variant="outlined" label={k.status || "listed"} />
-                          ) : (
-                            <Chip size="small" color="success" label="No longer listed" />
-                          )}
-                        </ListingTable.Cell>
-                        <ListingTable.Cell>{ownerLabel(k.ownerHint) || "—"}</ListingTable.Cell>
-                        <ListingTable.Cell>{shortDate(k.createdAt)}</ListingTable.Cell>
-                        <ListingTable.Cell>{shortDate(k.lastUsedAt)}</ListingTable.Cell>
-                      </ListingTable.Row>
-                    ))}
-                  </ListingTable.Body>
-                </ListingTable>
-              </Box>
-            </CardContent>
-          </Card>
-        )}
 
         {f.related.length > 0 && (
           <Card variant="outlined">
             <CardContent>
               <Typography variant="subtitle1" gutterBottom>
-                Related findings
+                Possible duplicates
               </Typography>
               <Stack spacing={1}>
                 {f.related.map((r) => (
@@ -550,8 +399,8 @@ export function FindingDetail({
                     <Chip
                       size="small"
                       variant="outlined"
-                      color={r.relation === "possible_duplicate" ? "warning" : "default"}
-                      label={relationLabel(r.relation, f.provider)}
+                      color="warning"
+                      label={relationLabel(r.relation)}
                     />
                     <RouterLink
                       to={generatePath(

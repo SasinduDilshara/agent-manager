@@ -23,12 +23,13 @@ import type {
   ShadowConnectionRequest,
   ShadowConnectionResponse,
   ShadowConnectionTest,
+  ShadowFindingClearResponse,
   ShadowFindingDetail,
   ShadowFindingListQuery,
   ShadowFindingListResponse,
   ShadowFindingUpdateRequest,
-  ShadowOnboardingRequest,
   ShadowProviderListResponse,
+  ShadowScanClearResponse,
   ShadowScanListResponse,
   ShadowScanRequest,
   ShadowScanResponse,
@@ -164,6 +165,16 @@ export async function createShadowScan(
   return res.json();
 }
 
+/** Deletes the finished scans; a queued or running scan and all findings are kept. */
+export async function clearShadowScans(
+  orgName: string | undefined,
+  getToken?: () => Promise<string>,
+): Promise<ShadowScanClearResponse> {
+  const token = await tokenOf(getToken);
+  const res = await httpDELETE(`${shadowBase(orgName)}/scans`, { token });
+  return res.json();
+}
+
 export async function listShadowFindings(
   orgName: string | undefined,
   query: ShadowFindingListQuery,
@@ -190,6 +201,26 @@ export async function getShadowFinding(
   return res.json();
 }
 
+/** Deletes an agent, on every connection that found it. */
+export async function deleteShadowFinding(
+  orgName: string | undefined,
+  findingId: string,
+  getToken?: () => Promise<string>,
+): Promise<void> {
+  const token = await tokenOf(getToken);
+  await httpDELETE(`${shadowBase(orgName)}/findings/${encodeURIComponent(findingId)}`, { token });
+}
+
+/** Deletes every agent of the organization; platforms and scans are kept. */
+export async function deleteShadowFindings(
+  orgName: string | undefined,
+  getToken?: () => Promise<string>,
+): Promise<ShadowFindingClearResponse> {
+  const token = await tokenOf(getToken);
+  const res = await httpDELETE(`${shadowBase(orgName)}/findings`, { token });
+  return res.json();
+}
+
 export async function updateShadowFinding(
   orgName: string | undefined,
   findingId: string,
@@ -200,35 +231,6 @@ export async function updateShadowFinding(
   const res = await httpPATCH(
     `${shadowBase(orgName)}/findings/${encodeURIComponent(findingId)}`,
     body,
-    { token },
-  );
-  return res.json();
-}
-
-export async function onboardShadowFinding(
-  orgName: string | undefined,
-  findingId: string,
-  body: ShadowOnboardingRequest,
-  getToken?: () => Promise<string>,
-): Promise<ShadowFindingDetail> {
-  const token = await tokenOf(getToken);
-  const res = await httpPOST(
-    `${shadowBase(orgName)}/findings/${encodeURIComponent(findingId)}/onboarding`,
-    body,
-    { token },
-  );
-  return res.json();
-}
-
-export async function confirmShadowRetirement(
-  orgName: string | undefined,
-  findingId: string,
-  getToken?: () => Promise<string>,
-): Promise<ShadowFindingDetail> {
-  const token = await tokenOf(getToken);
-  const res = await httpPOST(
-    `${shadowBase(orgName)}/findings/${encodeURIComponent(findingId)}/retirement/confirm`,
-    {},
     { token },
   );
   return res.json();

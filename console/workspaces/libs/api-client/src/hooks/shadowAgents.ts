@@ -18,10 +18,12 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  confirmShadowRetirement,
+  clearShadowScans,
   createShadowConnection,
   createShadowScan,
   deleteShadowConnection,
+  deleteShadowFinding,
+  deleteShadowFindings,
   getShadowConnection,
   getShadowFinding,
   getShadowScan,
@@ -30,7 +32,6 @@ import {
   listShadowFindings,
   listShadowProviders,
   listShadowScans,
-  onboardShadowFinding,
   testShadowConnection,
   updateShadowConnection,
   updateShadowFinding,
@@ -45,8 +46,9 @@ import type {
   ShadowFindingListQuery,
   ShadowFindingListResponse,
   ShadowFindingUpdateRequest,
-  ShadowOnboardingRequest,
   ShadowProviderListResponse,
+  ShadowFindingClearResponse,
+  ShadowScanClearResponse,
   ShadowScanListResponse,
   ShadowScanRequest,
   ShadowScanResponse,
@@ -63,7 +65,7 @@ export function isShadowScanActive(status: ShadowScanStatus | undefined): boolea
   return status === "queued" || status === "running";
 }
 
-/** Hook to read the provider catalog: forms, permissions, signals and scoring. */
+/** Hook to read the platform catalog: forms, permissions and evidence definitions. */
 export function useShadowProviders(orgName: string | undefined) {
   const { getToken } = useAuthHooks();
   return useApiQuery<ShadowProviderListResponse>({
@@ -155,7 +157,7 @@ export function useCreateShadowConnection(orgName: string | undefined) {
   const { getToken } = useAuthHooks();
   const invalidate = useInvalidateShadow();
   return useApiMutation<ShadowConnectionResponse, unknown, ShadowConnectionRequest>({
-    action: { verb: "create", target: "connection" },
+    action: { verb: "create", target: "platform" },
     mutationFn: (body) => createShadowConnection(orgName, body, getToken),
     onSuccess: () => invalidate(),
   });
@@ -168,7 +170,7 @@ export function useUpdateShadowConnection(
   const { getToken } = useAuthHooks();
   const invalidate = useInvalidateShadow();
   return useApiMutation<ShadowConnectionResponse, unknown, ShadowConnectionRequest>({
-    action: { verb: "update", target: "connection" },
+    action: { verb: "update", target: "platform" },
     mutationFn: (body) => updateShadowConnection(orgName, connectionId ?? "", body, getToken),
     onSuccess: () => invalidate(),
   });
@@ -179,7 +181,7 @@ export function useDeleteShadowConnection(orgName: string | undefined) {
   const queryClient = useQueryClient();
   const invalidate = useInvalidateShadow();
   return useApiMutation<void, unknown, string>({
-    action: { verb: "delete", target: "connection" },
+    action: { verb: "delete", target: "platform" },
     mutationFn: (connectionId) => deleteShadowConnection(orgName, connectionId, getToken),
     onSuccess: (_data, connectionId) => {
       // Drop the row at once: the refetch below can take a moment, and a row
@@ -214,38 +216,45 @@ export function useStartShadowScan(orgName: string | undefined) {
   });
 }
 
+/** Deletes the finished scans. Findings are not changed. */
+export function useClearShadowScans(orgName: string | undefined) {
+  const { getToken } = useAuthHooks();
+  const invalidate = useInvalidateShadow();
+  return useApiMutation<ShadowScanClearResponse, unknown, void>({
+    successMessage: (r) => (r.deleted === 1 ? "1 scan cleared" : `${r.deleted} scans cleared`),
+    mutationFn: () => clearShadowScans(orgName, getToken),
+    onSuccess: () => invalidate(),
+  });
+}
+
 export function useUpdateShadowFinding(orgName: string | undefined, findingId: string | undefined) {
   const { getToken } = useAuthHooks();
   const invalidate = useInvalidateShadow();
   return useApiMutation<ShadowFindingDetail, unknown, ShadowFindingUpdateRequest>({
-    action: { verb: "update", target: "finding" },
+    action: { verb: "update", target: "agent" },
     mutationFn: (body) => updateShadowFinding(orgName, findingId ?? "", body, getToken),
     onSuccess: () => invalidate(),
   });
 }
 
-export function useOnboardShadowFinding(
-  orgName: string | undefined,
-  findingId: string | undefined,
-) {
+/** Deletes an agent, on every connection that found it. */
+export function useDeleteShadowFinding(orgName: string | undefined) {
   const { getToken } = useAuthHooks();
   const invalidate = useInvalidateShadow();
-  return useApiMutation<ShadowFindingDetail, unknown, ShadowOnboardingRequest>({
-    successMessage: "Finding linked to its agent",
-    mutationFn: (body) => onboardShadowFinding(orgName, findingId ?? "", body, getToken),
+  return useApiMutation<void, unknown, string>({
+    action: { verb: "delete", target: "agent" },
+    mutationFn: (findingId) => deleteShadowFinding(orgName, findingId, getToken),
     onSuccess: () => invalidate(),
   });
 }
 
-export function useConfirmShadowRetirement(
-  orgName: string | undefined,
-  findingId: string | undefined,
-) {
+/** Deletes every agent of the organization. Platforms and scans are kept. */
+export function useDeleteShadowFindings(orgName: string | undefined) {
   const { getToken } = useAuthHooks();
   const invalidate = useInvalidateShadow();
-  return useApiMutation<ShadowFindingDetail, unknown, void>({
-    successMessage: "Revocation recorded; the next scan verifies it",
-    mutationFn: () => confirmShadowRetirement(orgName, findingId ?? "", getToken),
+  return useApiMutation<ShadowFindingClearResponse, unknown, void>({
+    successMessage: (r) => (r.deleted === 1 ? "1 agent deleted" : `${r.deleted} agents deleted`),
+    mutationFn: () => deleteShadowFindings(orgName, getToken),
     onSuccess: () => invalidate(),
   });
 }

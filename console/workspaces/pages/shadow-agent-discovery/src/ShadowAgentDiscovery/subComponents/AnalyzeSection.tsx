@@ -59,9 +59,9 @@ function CapabilityRow({ status }: { status: CapabilityStatus }) {
 }
 
 /**
- * "What can Agent Manager analyze?": how many capabilities the form's
- * credentials and options unlock, and a dialog that lists each one with what
- * it still needs.
+ * "What does Agent Manager list?" (for a source repository host, "What can
+ * Agent Manager analyze?"): how many capabilities the form's credentials and
+ * options unlock, and a dialog that lists each one with what it still needs.
  */
 export function AnalyzeSection({
   providerName,
@@ -77,6 +77,7 @@ export function AnalyzeSection({
   if (statuses.length === 0) return null;
   const available = statuses.filter((s) => s.available);
   const unavailable = statuses.filter((s) => !s.available);
+  const heading = preview ? "What can Agent Manager analyze?" : "What does Agent Manager list?";
   return (
     <Box sx={{ border: 1, borderColor: "divider", borderRadius: 1, p: 2 }}>
       <Stack
@@ -87,7 +88,7 @@ export function AnalyzeSection({
       >
         <Box>
           <Stack direction="row" spacing={1} alignItems="center">
-            <Typography variant="subtitle2">What can Agent Manager analyze?</Typography>
+            <Typography variant="subtitle2">{heading}</Typography>
             {preview && <Chip size="small" label="Coming soon" />}
           </Stack>
           <Typography variant="body2" color="text.secondary">
@@ -97,16 +98,21 @@ export function AnalyzeSection({
           </Typography>
         </Box>
         <Button variant="outlined" size="small" onClick={() => setOpen(true)}>
-          See what it can analyze
+          {preview ? "See what it can analyze" : "See what it lists"}
         </Button>
       </Stack>
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>What Agent Manager can analyze</DialogTitle>
+        <DialogTitle>
+          {preview ? "What Agent Manager can analyze" : "What Agent Manager lists"}
+        </DialogTitle>
         <DialogContent>
           <Stack spacing={2.5}>
             <Typography variant="body2" color="text.secondary">
               {providerName}, with the credentials and options in this form. Every read is
-              read-only; prompts, completions and tool payloads are never stored.
+              read-only;{" "}
+              {preview
+                ? "prompts, completions and tool payloads are never stored."
+                : "only the platform's agent listings are called, and instructions, prompts and secrets are never stored."}
             </Typography>
             {preview && (
               <Typography variant="body2" color="text.secondary">

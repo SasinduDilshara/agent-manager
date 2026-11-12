@@ -43,9 +43,8 @@ import (
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
 )
 
-// Fixtures (testdata/). Google publishes verbatim example responses only
-// for Cloud Monitoring; the rest follow the schemas and constructed
-// examples recorded in evidence/google.md:
+// Fixtures (testdata/). They follow the schemas and constructed examples
+// recorded in evidence/google.md:
 //
 //   - The service account key file is built in code (testKeyFile), in the
 //     official key file format (docs.cloud.google.com/iam/docs/keys-create-delete,
@@ -58,20 +57,11 @@ import (
 //     the example constructed from the Discovery v1 schema (evidence §2.1).
 //   - agents_*.json: v1 ListAgentsResponse, the constructed example with the
 //     documented agentId URN, principal and attribute formats (§2.2).
-//   - mcp_global_*.json: v1 ListMcpServersResponse, constructed example
-//     (§2.4).
-//   - timeseries_*.json: ListTimeSeriesResponse, the official verbatim
-//     example of the Agent Runtime monitoring page (§2.3) with daily
-//     aligned points; page 2 uses the resource_container label of the
-//     monitored resource descriptor.
-//   - logs_*.json: ListLogEntriesResponse with AuditLog payloads, the
-//     example constructed from the LogEntry/AuditLog schemas (§2.5); page 2
-//     is the documented "empty entries with a nextPageToken" case.
 //   - error_*.json: the AIP-193 error envelope (§2.7).
 //
 // Marker strings (SECRET-PROMPT-MARKER, sk-test-SECRETSECRETSECRET) sit in
-// env values, descriptions, Agent Card content, tool descriptions, URLs and
-// audit log request bodies; no result or log line may contain them.
+// env values, descriptions, Agent Card content, skill descriptions and
+// URLs; no result or log line may contain them.
 
 const (
 	testProject       = "my-agents-project"
@@ -85,8 +75,7 @@ const (
 )
 
 var retentionMarkers = []string{
-	"SECRET-PROMPT-MARKER", "sk-test-SECRETSECRETSECRET", fakeAccessToken, "PRIVATE KEY",
-	"x-access-token", "203.0.113.5", "systemPrompt",
+	"SECRET-PROMPT-MARKER", "sk-test-SECRETSECRETSECRET", fakeAccessToken, "PRIVATE KEY", "systemPrompt",
 }
 
 var (
@@ -123,8 +112,10 @@ type recordedRequest struct {
 	Body   []byte
 }
 
-// fakeGoogle is one TLS server playing the OAuth token endpoint and every
-// Google API the connector calls. Unknown routes fail the test.
+// fakeGoogle is one TLS server playing the OAuth token endpoint and the two
+// Google APIs the connector calls (Agent Runtime and Agent Registry agents).
+// Any other route, such as Cloud Monitoring, Cloud Logging or the registry's
+// MCP servers, fails the test.
 type fakeGoogle struct {
 	t   *testing.T
 	srv *httptest.Server
@@ -153,12 +144,6 @@ func routeOf(r *http.Request) string {
 		return "engines"
 	case strings.HasSuffix(p, "/agents"):
 		return "agents"
-	case strings.HasSuffix(p, "/mcpServers"):
-		return "mcp"
-	case strings.HasSuffix(p, "/timeSeries"):
-		return "timeseries"
-	case strings.HasSuffix(p, "/v2/entries:list"):
-		return "logs"
 	default:
 		return ""
 	}
@@ -239,32 +224,6 @@ func (f *fakeGoogle) defaultHandler(route string) http.HandlerFunc {
 				serveFixture(w, "agents_global.json")
 			default:
 				serveJSON(w, `{}`)
-			}
-		case "mcp":
-			switch {
-			case loc == "global" && token == "":
-				serveFixture(w, "mcp_global_page1.json")
-			case loc == "global" && token == "mcp-page-2":
-				serveFixture(w, "mcp_global_page2.json")
-			default:
-				serveJSON(w, `{}`)
-			}
-		case "timeseries":
-			if token == "ts-page-2" {
-				serveFixture(w, "timeseries_page2.json")
-			} else {
-				serveFixture(w, "timeseries_page1.json")
-			}
-		case "logs":
-			var req listLogEntriesRequest
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			switch req.PageToken {
-			case "":
-				serveFixture(w, "logs_page1.json")
-			case "logs-page-2":
-				serveFixture(w, "logs_page2_empty.json")
-			default:
-				serveFixture(w, "logs_page3.json")
 			}
 		}
 	}
@@ -388,8 +347,6 @@ func (f *fakeGoogle) conn(t *testing.T) sa.Connection {
 				sa.EPGoogleAIPlatform:    f.srv.URL + "/regional/{location}",
 				sa.EPGoogleAIPlatformRep: f.srv.URL + "/multiregion/{location}",
 				sa.EPGoogleRegistry:      f.srv.URL,
-				sa.EPGoogleMonitoring:    f.srv.URL,
-				sa.EPGoogleLogging:       f.srv.URL,
 			},
 			ProjectIDs:                  []string{testProject},
 			Locations:                   []string{"us-central1"},
@@ -421,11 +378,6 @@ func newTestConnector(f *fakeGoogle) *testConnector {
 		return ctx.Err()
 	}
 	return tc
-}
-
-var testWindow = sa.Window{
-	Start: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
-	End:   time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
 }
 
 func callResult(t *testing.T, res *sa.Result, call string) models.ShadowScanCallResult {

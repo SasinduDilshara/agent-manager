@@ -78,8 +78,8 @@ func (c *Calls) Record(call string, items int, err error) {
 	}
 }
 
-// Skip records a call that was not made, and why (e.g. "deep inspection is
-// off", "no project key").
+// Skip records a call that was not made, and why (e.g. "not selected in
+// this connection", "no project key").
 func (c *Calls) Skip(call, reason string) {
 	if _, ok := c.index[call]; ok {
 		return

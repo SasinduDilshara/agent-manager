@@ -55,10 +55,10 @@ func (s *scan) scanRegistry(ctx context.Context, rc *regionClients) {
 	}
 }
 
-// registryRecords lists every record of a registry (no filters: every record
-// type and status is evidence). The summary carries all that is needed
-// (recordType, names, provenance), so GetRegistryRecord, whose descriptors
-// and customMetadata are @sensitive, is not called.
+// registryRecords lists every record of a registry (no filters; only AGENT
+// records are kept). The summary carries all that is needed (recordType,
+// names, provenance), so GetRegistryRecord, whose descriptors and
+// customMetadata are @sensitive, is not called.
 func (s *scan) registryRecords(ctx context.Context, rc *regionClients, registryID string) {
 	p := reg.NewListRegistryRecordsPaginator(rc.registry, &reg.ListRegistryRecordsInput{
 		RegistryId: aws.String(registryID), Filters: nil, MaxResults: aws.Int32(pageSize), NextToken: nil,
@@ -76,28 +76,30 @@ func (s *scan) registryRecords(ctx context.Context, rc *regionClients, registryI
 	s.calls.Record(callListRecords, n, err)
 }
 
+// registryRecord turns an AGENT record into a finding, or merges it into the
+// AgentCore runtime its provenance names. Records of other types (MCP
+// servers, gateways) are not agents and are left out, as is a record about
+// a runtime that hosts an MCP server.
 func (s *scan) registryRecord(region string, r regtypes.RegistryRecordSummary) {
 	arn := str(r.RecordArn)
-	if arn == "" {
+	if arn == "" || r.RecordType != regtypes.RecordTypeAgent {
 		return
 	}
-	code := sa.SigBedrockRegistryTool
-	kind := models.ShadowKindToolInfra
-	if r.RecordType == regtypes.RecordTypeAgent {
-		code = sa.SigBedrockRegistryAgent
-		kind = models.ShadowKindPlatformAgent
-	}
-	sig := sa.Signal{Code: code, Source: callListRecords, Observed: map[string]any{"recordType": string(r.RecordType)}}
+	sig := sa.Signal{Code: sa.SigBedrockRegistryAgent, Source: callListRecords, Observed: map[string]any{"recordType": string(r.RecordType)}}
 
-	// A record detected from (or describing) an AgentCore runtime or gateway
-	// is the same workload: its evidence goes to that finding.
-	if f := s.provenanceTarget(region, r.ProvenanceSummaryList); f != nil {
+	// A record detected from (or describing) an AgentCore runtime is the
+	// same agent: its evidence goes to that runtime.
+	f, mcp := s.provenanceTarget(region, r.ProvenanceSummaryList)
+	if mcp {
+		return
+	}
+	if f != nil {
 		f.AddSignal(sig)
 		f.Attributes["recordType"] = string(r.RecordType)
 		return
 	}
 
-	f := s.fs.Get(kind, arn)
+	f = s.fs.Get(models.ShadowKindPlatformAgent, arn)
 	name := str(r.DisplayName)
 	if name == "" {
 		name = str(r.Name)
@@ -118,33 +120,29 @@ func (s *scan) registryRecord(region string, r regtypes.RegistryRecordSummary) {
 	f.AddSignal(sig)
 }
 
-// provenanceTarget returns the runtime or gateway finding a record's
-// provenance names, if this scan found it.
-func (s *scan) provenanceTarget(region string, prov []regtypes.ProvenanceSummary) *sa.Finding {
+// provenanceTarget returns the runtime finding a record's provenance names,
+// if this scan found it; mcp is true when it names a runtime that hosts an
+// MCP server.
+func (s *scan) provenanceTarget(region string, prov []regtypes.ProvenanceSummary) (f *sa.Finding, mcp bool) {
 	for _, p := range prov {
 		src := str(p.SourceId)
 		if src == "" {
 			continue
 		}
-		switch {
-		case p.SourceType == regtypes.SourceTypeAwsBedrockAgentcoreRuntime || strings.Contains(src, ":runtime/"):
-			if f := s.runtimeByARN[src]; f != nil {
-				return f
-			}
+		if p.SourceType != regtypes.SourceTypeAwsBedrockAgentcoreRuntime && !strings.Contains(src, ":runtime/") {
+			continue
+		}
+		f := s.runtimeByARN[src]
+		if f == nil {
 			if id := arnResourceID(src, "runtime/"); id != "" {
-				if f := s.runtimeByID[arnRegion(src, region)+"|"+id]; f != nil {
-					return f
-				}
-			}
-		case p.SourceType == regtypes.SourceTypeAwsBedrockAgentcoreGateway || strings.Contains(src, ":gateway/"):
-			if id := arnResourceID(src, "gateway/"); id != "" {
-				if f := s.gatewayByID[arnRegion(src, region)+"|"+id]; f != nil {
-					return f
-				}
+				f = s.runtimeByID[arnRegion(src, region)+"|"+id]
 			}
 		}
+		if f != nil {
+			return f, s.mcpRuntimes[f.ExternalID]
+		}
 	}
-	return nil
+	return nil, false
 }
 
 // arnResourceID returns the ID after prefix in an ARN's resource part,

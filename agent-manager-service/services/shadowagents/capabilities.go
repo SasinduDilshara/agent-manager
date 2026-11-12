@@ -18,14 +18,14 @@ package shadowagents
 
 import "github.com/wso2/agent-manager/agent-manager-service/models"
 
-// CapabilitySpec is one thing a scan can analyze, and what the connection
-// needs for it. The console shows it in "What can Agent Manager analyze?",
-// evaluated against the connection form.
+// CapabilitySpec is one thing a scan lists, and what the connection needs
+// for it. The console shows it next to the connection form, evaluated
+// against the form.
 type CapabilitySpec struct {
 	Key         string
 	Title       string
 	Description string
-	// Signals are the signal codes the capability can produce.
+	// Signals are the evidence codes the capability can produce.
 	Signals []string
 	// Needs are field or option keys that must all be present: a secret or
 	// text field with a value (or a stored secret), a key map with at least
@@ -43,122 +43,75 @@ type CredentialChoice struct {
 
 // Field and option keys used by capabilities and credential choices.
 const (
-	FieldAPIKey     = "apiKey"
 	FieldScopedKeys = "scopedKeys"
 )
 
-// providerCapabilities is what each provider's scan can analyze. It follows
-// the connectors: a capability lists the signals its calls produce and the
-// fields those calls need (evidence: evidence/*.md and the official docs).
+// providerCapabilities is what each platform's scan lists. It follows the
+// connectors: a capability names the evidence its calls produce and the
+// fields those calls need.
 var providerCapabilities = map[string][]CapabilitySpec{
 	models.ShadowProviderOpenAI: {
 		{
-			Key: "openai.inventory", Title: "Projects, API keys, owners and creators",
-			Description: "Every project and its API keys, with the owner, status and last use of each key, and who created " +
-				"it (audit logs). Only the Admin API key can list these.",
-			Needs: []string{FieldAPIKey},
-		},
-		{
-			Key: "openai.usage", Title: "Usage and cost per API key",
-			Description: "Daily requests, tokens and cost per key and model, and when each key was first and last used. " +
-				"This is how workloads that call OpenAI without an agent object are found.",
-			Signals: []string{SigOpenAIPlainUsage},
-			Needs:   []string{FieldAPIKey},
-		},
-		{
-			Key: "openai.agentsUsage", Title: "Agents API usage per key",
-			Description: "Usage that came through the Agents API (api_source agents_api), for each key.",
-			Signals:     []string{SigOpenAIAgentsAPIUsage},
-			Needs:       []string{FieldAPIKey},
-		},
-		{
-			Key: "openai.hostedTools", Title: "Hosted tools: web search, file search and code interpreter",
-			Description: "How often each key used OpenAI's hosted tools, a sign of an agent.",
-			Signals:     []string{SigOpenAIHostedSearch, SigOpenAICodeInterpreter, SigOpenAICodeInterpreterPrj},
-			Needs:       []string{FieldAPIKey},
-		},
-		{
-			Key: "openai.agents", Title: "Agent objects and their sessions",
-			Description: "The agents in each project you add a project key for, with their tools and MCP servers, and " +
-				"when they last ran. The Admin key cannot read agents, and cannot read a project key's secret either.",
+			Key: "openai.agents", Title: "Agents",
+			Description: "The agents in each project you add a project key for (GET /v1/agents), with their model, " +
+				"tools and MCP servers. Only a project key can list a project's agents.",
 			Signals: []string{SigOpenAIAgentObject},
 			Needs:   []string{FieldScopedKeys},
-		},
-		{
-			Key: "openai.toolCalls", Title: "Tool calls in stored chat completions and batches",
-			Description: "Read in memory with each project key. Tied to an API key when the Admin key shows that exactly " +
-				"one key of the project had usage; otherwise shown on the project's own finding.",
-			Signals: []string{SigOpenAIToolCallCompletion, SigOpenAIToolCallBatch, SigOpenAIToolResultBatch},
-			Needs:   []string{FieldScopedKeys, OptDeepInspection},
-		},
-		{
-			Key: "openai.retirement", Title: "Verify that a retired key is gone",
-			Description: "After you revoke a direct key, the next scan checks that the project's key list no longer returns it.",
-			Needs:       []string{FieldAPIKey},
 		},
 	},
 	models.ShadowProviderAnthropic: {
 		{
-			Key: "anthropic.inventory", Title: "Workspaces, API keys and creators",
-			Description: "Every workspace and API key, with its status and the user or service account that created it. " +
-				"Only an Admin credential can list these.",
-			Needs: []string{FieldAPIKey},
-		},
-		{
-			Key: "anthropic.usage", Title: "Usage and cost per API key and model",
-			Description: "Daily requests, tokens and cost per key, model and product, and when each key was first and last " +
-				"used. This is how workloads that call the Messages API without a Managed Agent are found.",
-			Signals: []string{SigAnthropicPlainUsage},
-			Needs:   []string{FieldAPIKey},
-		},
-		{
-			Key: "anthropic.agentUsage", Title: "Managed Agent usage",
-			Description: "Usage per Managed Agent, from the usage analytics.",
-			Signals:     []string{SigAnthropicManagedAgentUsage},
-			Needs:       []string{FieldAPIKey},
-		},
-		{
-			Key: "anthropic.serverTools", Title: "Server tools: web search and code execution",
-			Description: "How often each key used Anthropic's server tools, a sign of an agent.",
-			Signals:     []string{SigAnthropicServerWebSearch, SigAnthropicServerCodeExec},
-			Needs:       []string{FieldAPIKey},
-		},
-		{
-			Key: "anthropic.agents", Title: "Managed Agents and their sessions",
-			Description: "The Managed Agents in each workspace you add a workspace key for, with their tools and MCP " +
-				"servers, and when they last ran. These are workspace endpoints.",
+			Key: "anthropic.agents", Title: "Managed Agents",
+			Description: "The Managed Agents in each workspace you add a workspace key for (GET /v1/agents), archived " +
+				"ones included, with their model, tools, MCP servers and skills.",
 			Signals: []string{SigAnthropicManagedAgent},
 			Needs:   []string{FieldScopedKeys},
 		},
+	},
+	models.ShadowProviderBedrock: {
 		{
-			Key: "anthropic.sessionTools", Title: "Tool use inside sessions",
-			Description: "Read in memory from each session's events, with the workspace key.",
-			Signals:     []string{SigAnthropicSessionToolUse},
-			Needs:       []string{FieldScopedKeys, OptDeepInspection},
+			Key: "bedrock.agentcore", Title: "AgentCore runtimes",
+			Description: "Agent runtimes in each region, with status, version, protocol, execution role and artifact. " +
+				"A runtime that hosts an MCP server is not an agent and is left out.",
+			Signals: []string{SigBedrockAgentCoreRuntime},
+			Needs:   []string{OptBedrockAgentCore},
 		},
 		{
-			Key: "anthropic.batches", Title: "Tool calls in message batches",
-			Description: "Read in memory with each workspace key. Tied to an API key when the Admin key shows that exactly " +
-				"one key of the workspace had usage; otherwise shown on the workspace's own finding.",
-			Signals: []string{SigAnthropicToolCallBatch},
-			Needs:   []string{FieldScopedKeys, OptDeepInspection},
+			Key: "bedrock.registry", Title: "AWS Agent Registry agent records",
+			Description: "Agent records in each registry; a record for a runtime this scan found is merged into that runtime.",
+			Signals:     []string{SigBedrockRegistryAgent},
+			Needs:       []string{OptBedrockRegistry},
 		},
 		{
-			Key: "anthropic.retirement", Title: "Verify that a retired key is gone",
-			Description: "After you revoke a direct key, the next scan checks that the key is inactive, archived or expired.",
-			Needs:       []string{FieldAPIKey},
+			Key: "bedrock.classic", Title: "Classic Bedrock agents",
+			Description: "Bedrock agents with their model, orchestration, service role and action groups.",
+			Signals:     []string{SigBedrockClassicAgent},
+			Needs:       []string{OptBedrockClassicAgents},
+		},
+	},
+	models.ShadowProviderGoogle: {
+		{
+			Key: "google.engines", Title: "Agent Runtime engines",
+			Description: "Reasoning engines in each project and location, with their framework, identity and source.",
+			Signals:     []string{SigGoogleAgentEngine},
+		},
+		{
+			Key: "google.registry", Title: "Agent Registry agents",
+			Description: "Registered agents; an agent that runs on an engine this scan found is merged into that engine.",
+			Signals:     []string{SigGoogleRegistryAgent},
+			Needs:       []string{OptGoogleRegistry},
+		},
+		{
+			Key: "google.globalMulti", Title: "Global registry and us/eu multi-regions",
+			Description: "Also lists the global Agent Registry location and the us and eu multi-region Agent Runtime endpoints.",
+			Needs:       []string{OptGlobalMulti},
 		},
 	},
 	models.ShadowProviderFoundry: {
 		{
-			Key: "foundry.agents", Title: "Foundry projects and agents",
-			Description: "Prompt, hosted, workflow and external agents in every Foundry project, with their tools and MCP servers.",
-			Signals:     []string{SigFoundryAgentObject, SigFoundryUsesTools},
-		},
-		{
-			Key: "foundry.usage", Title: "Usage of each agent's model deployment",
-			Description: "Requests on the deployment an agent's model names, from Azure Monitor.",
-			Signals:     []string{SigFoundryPlainUsage},
+			Key: "foundry.agents", Title: "Foundry agents",
+			Description: "Prompt, hosted, workflow and external agents in every Foundry project, with their model, tools and MCP servers.",
+			Signals:     []string{SigFoundryAgentObject},
 		},
 		{
 			Key: "foundry.classic", Title: "Classic agents",
@@ -167,14 +120,8 @@ var providerCapabilities = map[string][]CapabilitySpec{
 			Needs:       []string{OptClassicAgents},
 		},
 		{
-			Key: "foundry.toolCalls", Title: "Tool calls in stored responses",
-			Description: "Read in memory from the project's stored responses.",
-			Signals:     []string{SigFoundryToolCallResp},
-			Needs:       []string{OptDeepInspection},
-		},
-		{
 			Key: "foundry.duplicates", Title: "Possible duplicates of external agents",
-			Description: "An external agent with the same name as a finding from another connection is flagged as a possible duplicate.",
+			Description: "An external agent with the same name as an agent from another platform is flagged as a possible duplicate.",
 			Signals:     []string{SigFoundryPossibleDupOf},
 		},
 		{
@@ -183,99 +130,13 @@ var providerCapabilities = map[string][]CapabilitySpec{
 			Needs:       []string{OptAllSubscriptions},
 		},
 	},
-	models.ShadowProviderBedrock: {
-		{
-			Key: "bedrock.agentcore", Title: "AgentCore runtimes and gateways",
-			Description: "Agent runtimes in each region (MCP-server runtimes are shown as tool infrastructure), and MCP gateways.",
-			Signals:     []string{SigBedrockAgentCoreRuntime, SigBedrockRuntimeNotReady, SigBedrockRuntimeMCPServer, SigBedrockMCPGateway},
-			Needs:       []string{OptBedrockAgentCore},
-		},
-		{
-			Key: "bedrock.registry", Title: "AWS Agent Registry",
-			Description: "Agent and tool records in the registries; a record for a known runtime is merged into it.",
-			Signals:     []string{SigBedrockRegistryAgent, SigBedrockRegistryTool},
-			Needs:       []string{OptBedrockRegistry},
-		},
-		{
-			Key: "bedrock.classic", Title: "Classic Bedrock agents",
-			Description: "Bedrock agents and their action groups.",
-			Signals:     []string{SigBedrockClassicAgent},
-			Needs:       []string{OptBedrockClassicAgents},
-		},
-		{
-			Key: "bedrock.runtimeUse", Title: "Runtime activity",
-			Description: "Sessions per AgentCore runtime, from CloudWatch metrics.",
-			Signals:     []string{SigBedrockRuntimeInUse},
-			Needs:       []string{OptBedrockAgentCore, OptBedrockMetrics},
-		},
-		{
-			Key: "bedrock.modelCalls", Title: "Direct model calls per identity",
-			Description: "InvokeModel and Converse calls per IAM user or role, from CloudTrail (last 90 days). This is how " +
-				"workloads that call Bedrock without an agent are found.",
-			Signals: []string{SigBedrockPlainModelUsage},
-			Needs:   []string{OptBedrockCloudTrail},
-		},
-		{
-			Key: "bedrock.loggingStatus", Title: "Model invocation logging status",
-			Description: "Whether model invocation logging is turned on in each region.",
-			Signals:     []string{SigBedrockInvocationLogsOff},
-			Needs:       []string{OptBedrockInvocationLogs},
-		},
-		{
-			Key: "bedrock.invocationLogs", Title: "Tool calls in model invocation logs",
-			Description: "Read in memory from the invocation log group. Only when model invocation logging is turned on in the account.",
-			Signals:     []string{SigBedrockToolCallLog, SigBedrockToolResultLog},
-			Needs:       []string{OptBedrockInvocationLogs, OptDeepInspection},
-		},
-	},
-	models.ShadowProviderGoogle: {
-		{
-			Key: "google.engines", Title: "Agent Runtime engines",
-			Description: "Reasoning engines in each project and location, with their framework and source.",
-			Signals:     []string{SigGoogleAgentEngine},
-		},
-		{
-			Key: "google.registry", Title: "Agent Registry agents and MCP servers",
-			Description: "Registered agents (MCP servers are shown as tool infrastructure); an agent that runs on an engine is merged into it.",
-			Signals:     []string{SigGoogleRegistryAgent, SigGoogleRegistryMCP},
-			Needs:       []string{OptGoogleRegistry},
-		},
-		{
-			Key: "google.engineUse", Title: "Engine activity",
-			Description: "Requests per engine, from Cloud Monitoring (kept six weeks).",
-			Signals:     []string{SigGoogleEngineInUse},
-			Needs:       []string{OptGoogleMonitoring},
-		},
-		{
-			Key: "google.creators", Title: "Who created or updated each engine",
-			Description: "From the Admin Activity audit logs.",
-			Signals:     []string{SigGoogleEngineCreatedBy},
-			Needs:       []string{OptGoogleAuditLogs},
-		},
-		{
-			Key: "google.globalMulti", Title: "Global registry and us/eu multi-regions",
-			Description: "Also scans the global Agent Registry location and the us and eu multi-region Agent Runtime endpoints.",
-			Needs:       []string{OptGlobalMulti},
-		},
-	},
 }
 
-// providerCredentialChoices are the providers whose required credential is
+// providerCredentialChoices are the platforms whose required credential is
 // one of several fields.
 var providerCredentialChoices = map[string]CredentialChoice{
-	models.ShadowProviderOpenAI: {
-		Fields:  []string{FieldAPIKey, FieldScopedKeys},
-		Message: "Add an Admin API key (recommended) or at least one project key.",
-	},
-	models.ShadowProviderAnthropic: {
-		Fields:  []string{FieldAPIKey, FieldScopedKeys},
-		Message: "Add an Admin API key (recommended) or at least one workspace key.",
-	},
 	models.ShadowProviderBedrock: {
-		Fields: []string{
-			OptBedrockAgentCore, OptBedrockRegistry, OptBedrockClassicAgents,
-			OptBedrockMetrics, OptBedrockCloudTrail, OptBedrockInvocationLogs,
-		},
+		Fields:  []string{OptBedrockAgentCore, OptBedrockRegistry, OptBedrockClassicAgents},
 		Message: "Select at least one Bedrock service to scan.",
 	},
 }
@@ -328,12 +189,12 @@ func init() {
 	providerCapabilities[models.ShadowProviderAzureDevOps] = sourceCapabilities("azureDevOps")
 }
 
-// Capabilities returns what a provider's scan can analyze.
+// Capabilities returns what a platform's scan lists.
 func Capabilities(provider string) []CapabilitySpec {
 	return providerCapabilities[provider]
 }
 
-// CredentialChoiceOf returns the provider's credential choice, if it has one.
+// CredentialChoiceOf returns the platform's credential choice, if it has one.
 func CredentialChoiceOf(provider string) (CredentialChoice, bool) {
 	c, ok := providerCredentialChoices[provider]
 	return c, ok

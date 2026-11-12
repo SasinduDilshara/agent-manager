@@ -225,15 +225,9 @@ export const rootRouteMap: AppRoute = {
                     index: true,
                     children: {
                         finding: {
-                            path: 'findings/:findingId',
+                            path: 'agents/:findingId',
                             index: true,
-                            children: {
-                                onboard: {
-                                    path: 'onboard',
-                                    index: true,
-                                    children: {},
-                                },
-                            },
+                            children: {},
                         },
                         scan: {
                             path: 'scans/:scanId',
@@ -241,12 +235,12 @@ export const rootRouteMap: AppRoute = {
                             children: {},
                         },
                         newConnection: {
-                            path: 'connections/new',
+                            path: 'platforms/new',
                             index: true,
                             children: {},
                         },
                         editConnection: {
-                            path: 'connections/:connectionId/edit',
+                            path: 'platforms/:connectionId/edit',
                             index: true,
                             children: {},
                         },

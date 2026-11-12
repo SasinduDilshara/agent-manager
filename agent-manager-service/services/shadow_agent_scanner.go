@@ -41,8 +41,7 @@ const (
 	shadowScanRenewEvery  = time.Minute
 	shadowScanBatch       = 2
 	shadowScanMaxAttempts = 3
-	// shadowConnectionTimeout bounds one connection's scan; CloudTrail and
-	// Cloud Logging are rate limited to a few requests a second.
+	// shadowConnectionTimeout bounds one connection's scan.
 	shadowConnectionTimeout = 30 * time.Minute
 	shadowConnectionWorkers = 4
 )
@@ -158,7 +157,7 @@ func (s *shadowAgentScanner) runScan(ctx context.Context, scan *models.ShadowSca
 		}
 		return
 	}
-	log.Info("Shadow agent scan started", "connections", len(scan.ConnectionIDs), "lookbackDays", scan.LookbackDays)
+	log.Info("Shadow agent scan started", "connections", len(scan.ConnectionIDs))
 
 	leaseCtx, stopLease := context.WithCancel(ctx)
 	go s.keepLease(leaseCtx, scan.ID, log)
@@ -168,7 +167,6 @@ func (s *shadowAgentScanner) runScan(ctx context.Context, scan *models.ShadowSca
 	if scan.StartedAt != nil {
 		startedAt = *scan.StartedAt
 	}
-	window := sa.NewWindow(startedAt, scan.LookbackDays)
 
 	results := make([]models.ShadowScanConnectionResult, len(scan.ConnectionIDs))
 	sem := make(chan struct{}, shadowConnectionWorkers)
@@ -179,7 +177,7 @@ func (s *shadowAgentScanner) runScan(ctx context.Context, scan *models.ShadowSca
 		go func(i int, idStr string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[i] = s.scanConnection(ctx, record, scan, idStr, window, startedAt, log)
+			results[i] = s.scanConnection(ctx, record, scan, idStr, startedAt, log)
 		}(i, idStr)
 	}
 	wg.Wait()
@@ -197,7 +195,7 @@ func (s *shadowAgentScanner) runScan(ctx context.Context, scan *models.ShadowSca
 		}
 	}
 	if err := s.correlate(record, scan.OUID); err != nil {
-		log.Error("Failed to correlate findings across connections", "error", err)
+		log.Error("Failed to correlate agents across connections", "error", err)
 	}
 	finished := s.now().UTC()
 	scan.FinishedAt = &finished
@@ -215,10 +213,7 @@ func (s *shadowAgentScanner) runScan(ctx context.Context, scan *models.ShadowSca
 		log.Error("Failed to record the scan outcome", "error", err)
 		return
 	}
-	if err := s.updateRetirements(record, scan.OUID); err != nil {
-		log.Error("Failed to update credential retirement states", "error", err)
-	}
-	log.Info("Shadow agent scan finished", "status", scan.Status, "findings", total)
+	log.Info("Shadow agent scan finished", "status", scan.Status, "agents", total)
 }
 
 func (s *shadowAgentScanner) keepLease(ctx context.Context, id uuid.UUID, log *slog.Logger) {
@@ -239,7 +234,7 @@ func (s *shadowAgentScanner) keepLease(ctx context.Context, id uuid.UUID, log *s
 // scanConnection runs one connection and writes what it found. A failure
 // here fails only this connection's part of the scan.
 func (s *shadowAgentScanner) scanConnection(
-	ctx, record context.Context, scan *models.ShadowScan, idStr string, w sa.Window, startedAt time.Time, log *slog.Logger,
+	ctx, record context.Context, scan *models.ShadowScan, idStr string, startedAt time.Time, log *slog.Logger,
 ) models.ShadowScanConnectionResult {
 	res := models.ShadowScanConnectionResult{ConnectionID: idStr, Outcome: shadowConnectionFailed, Calls: []models.ShadowScanCallResult{}}
 	id, err := uuid.Parse(idStr)
@@ -260,7 +255,7 @@ func (s *shadowAgentScanner) scanConnection(
 	res.ConnectionName, res.Provider = c.Name, c.Provider
 	connector, ok := s.connectors[c.Provider]
 	if !ok {
-		res.Message = "no connector for this provider"
+		res.Message = "no connector for this platform"
 		return res
 	}
 	conn, err := shadowRuntimeConnection(c, s.encryptionKey)
@@ -271,30 +266,34 @@ func (s *shadowAgentScanner) scanConnection(
 	}
 	cctx, cancel := context.WithTimeout(ctx, shadowConnectionTimeout)
 	defer cancel()
-	out := runConnector(cctx, connector, conn, w, log)
+	out := runConnector(cctx, connector, conn, log)
 	res.Calls = sanitizeCalls(out.Calls)
-	in := toShadowApply(scan, c, out, w, startedAt, s.now().UTC(), log)
-	n, err := s.repo.ApplyConnectionResult(record, in, sa.Score)
+	res.Outcome, res.Message = connectionOutcome(res.Calls)
+	// A listing is complete only when every call succeeded (or was skipped
+	// on purpose) and the scan was not cut short.
+	complete := res.Outcome == shadowConnectionOK && cctx.Err() == nil
+	in := toShadowApply(scan, c, out, startedAt, s.now().UTC(), complete, log)
+	n, err := s.repo.ApplyConnectionResult(record, in)
 	if err != nil {
+		res.Outcome = shadowConnectionFailed
 		res.Message = "failed to save what the scan found"
 		log.Error("Failed to save a connection's scan result", "connectionId", id, "error", err)
 		return res
 	}
 	res.FindingsCount = n
-	res.Outcome, res.Message = connectionOutcome(res.Calls)
 	return res
 }
 
 // runConnector runs a connector, turning a panic into a failed result so one
 // provider cannot take the worker down.
-func runConnector(ctx context.Context, c sa.Connector, conn sa.Connection, w sa.Window, log *slog.Logger) (out *sa.Result) {
+func runConnector(ctx context.Context, c sa.Connector, conn sa.Connection, log *slog.Logger) (out *sa.Result) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error("Shadow agent connector panicked", "provider", conn.Provider, "connectionId", conn.ID)
 			out = &sa.Result{Calls: []models.ShadowScanCallResult{{Call: "scan", Outcome: models.ShadowCallFailed, Message: "internal error in the connector"}}}
 		}
 	}()
-	out = c.Scan(ctx, conn, w)
+	out = c.Scan(ctx, conn)
 	if out == nil {
 		out = &sa.Result{}
 	}
@@ -356,14 +355,13 @@ func connectionOutcome(calls []models.ShadowScanCallResult) (string, string) {
 
 // toShadowApply converts a connector result into what the repository
 // stores, applying the retention rules once more: attributes through the
-// allow-list, owner hints minimised, names and hints scrubbed, signals
-// re-weighted from the catalog (a connector cannot change a weight).
+// allow-list, owner hints minimised, names scrubbed, and only evidence codes
+// from the catalog.
 func toShadowApply(
-	scan *models.ShadowScan, c *models.ShadowConnection, out *sa.Result, w sa.Window, startedAt, now time.Time, log *slog.Logger,
+	scan *models.ShadowScan, c *models.ShadowConnection, out *sa.Result, startedAt, now time.Time, complete bool, log *slog.Logger,
 ) repositories.ShadowConnectionApply {
 	in := repositories.ShadowConnectionApply{
-		OUID: scan.OUID, ConnectionID: c.ID, ScanID: scan.ID, ScanStartedAt: startedAt, WindowStart: w.Start,
-		KeysListed: out.KeysListed, KeyScopesListed: out.KeyScopesListed,
+		OUID: scan.OUID, ConnectionID: c.ID, ScanID: scan.ID, ScanStartedAt: startedAt, Complete: complete,
 	}
 	for _, f := range out.Findings {
 		if f == nil || strings.TrimSpace(f.ExternalID) == "" || !validShadowKind(f.Kind) {
@@ -380,63 +378,33 @@ func toShadowApply(
 				OwnerHint:         sa.MinimiseOwnerHint(f.OwnerHint),
 				Attributes:        sa.SanitizeAttributes(f.Attributes),
 				ProviderCreatedAt: f.ProviderCreatedAt,
-				FirstUsedAt:       f.FirstUsedAt,
-				LastUsedAt:        f.LastUsedAt,
 			},
-			KeyIDs: f.KeyIDs,
 		}
 		for _, sig := range f.Signals {
 			d, ok := sa.Def(sig.Code)
 			if !ok {
-				log.Warn("Dropping an unknown signal code", "provider", c.Provider, "code", sig.Code)
+				log.Warn("Dropping an unknown evidence code", "provider", c.Provider, "code", sig.Code)
 				continue
 			}
 			fi.Signals = append(fi.Signals, models.ShadowFindingSignal{
-				Code: d.Code, Tier: d.Tier, Weight: d.Weight, Condition: d.Condition,
+				Code:       d.Code,
 				Source:     sa.Truncate(firstNonEmpty(sig.Source, "scan"), 200),
 				Observed:   sanitizeObserved(sig.Observed),
 				DetectedAt: now,
 			})
 		}
-		for _, u := range f.Usage {
-			fi.Usage = append(fi.Usage, models.ShadowUsageDaily{
-				Day: sa.DayOf(u.Day), KeyID: sa.Truncate(u.KeyID, 256), Model: sa.Truncate(u.Model, 256),
-				Requests: u.Requests, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
-				CostAmount: finiteOrNil(u.CostAmount), Currency: sa.Truncate(u.Currency, 16),
-			})
-		}
-		for _, rel := range f.Related {
-			fi.Related = append(fi.Related, repositories.ShadowRelationInput{
-				Kind: rel.Kind, ExternalID: rel.ExternalID, Relation: sa.Truncate(rel.Relation, 64), Reason: sa.Truncate(rel.Reason, 200),
-			})
-		}
-		in.Findings = append(in.Findings, fi)
-	}
-	for _, k := range out.Keys {
-		if strings.TrimSpace(k.KeyID) == "" {
+		if len(fi.Signals) == 0 {
+			// Every finding is an agent a listing returned; one without that
+			// evidence is not stored.
 			continue
 		}
-		in.Keys = append(in.Keys, models.ShadowAPIKey{
-			KeyID: sa.Truncate(k.KeyID, 256), Name: sa.SanitizeName(k.Name),
-			// A hint is a redacted form; scrubbing removes anything that looks
-			// like a whole key, in case a provider ever returns one.
-			RedactedHint: sa.Truncate(sa.ScrubText(k.RedactedHint), 64),
-			Status:       sa.Truncate(k.Status, 32), Scope: sa.Truncate(k.Scope, 256),
-			OwnerHint: sa.MinimiseOwnerHint(k.OwnerHint), ProviderCreatedAt: k.CreatedAt, LastUsedAt: k.LastUsedAt,
-		})
+		in.Findings = append(in.Findings, fi)
 	}
 	return in
 }
 
 func validShadowKind(kind string) bool {
-	switch kind {
-	case models.ShadowKindPlatformAgent, models.ShadowKindRuntime, models.ShadowKindAPIKey,
-		models.ShadowKindPrincipal, models.ShadowKindToolInfra,
-		models.ShadowKindProject:
-		return true
-	default:
-		return false
-	}
+	return kind == models.ShadowKindPlatformAgent || kind == models.ShadowKindRuntime
 }
 
 // sanitizeObserved keeps counts, flags and short labels only.
@@ -477,8 +445,8 @@ func finiteOrNil(f *float64) *float64 {
 
 // ---- correlation across connections ----
 
-// correlate links findings of different connections about the same
-// workload: a Foundry external agent and a same-named agent found elsewhere
+// correlate links agents of different connections that may be the same
+// agent: a Foundry external agent and a same-named agent found elsewhere
 // (Foundry stores no endpoint for external agents, so a name match is only a
 // "possible duplicate", never merged).
 func (s *shadowAgentScanner) correlate(ctx context.Context, ouID string) error {
@@ -487,11 +455,11 @@ func (s *shadowAgentScanner) correlate(ctx context.Context, ouID string) error {
 		return fmt.Errorf("listing findings: %w", err)
 	}
 	relations, signals := CorrelateShadowFindings(findings, s.now().UTC())
-	return s.repo.ApplyCorrelation(ctx, ouID, relations, signals, sa.Score)
+	return s.repo.ApplyCorrelation(ctx, ouID, relations, signals)
 }
 
 // CorrelateShadowFindings computes cross-connection relations and the
-// signals they raise.
+// evidence they raise.
 func CorrelateShadowFindings(
 	findings []models.ShadowFinding, now time.Time,
 ) (map[uuid.UUID][]models.ShadowFindingRelation, map[uuid.UUID][]models.ShadowFindingSignal) {
@@ -505,8 +473,7 @@ func CorrelateShadowFindings(
 			}
 		}
 		signals[id] = append(signals[id], models.ShadowFindingSignal{
-			Code: d.Code, Tier: d.Tier, Weight: d.Weight, Condition: d.Condition,
-			Source: repositories.ShadowCorrelationSource, Observed: observed, DetectedAt: now,
+			Code: d.Code, Source: repositories.ShadowCorrelationSource, Observed: observed, DetectedAt: now,
 		})
 	}
 
@@ -515,9 +482,6 @@ func CorrelateShadowFindings(
 	for i := range findings {
 		f := &findings[i]
 		if f.Provider == models.ShadowProviderFoundry {
-			continue
-		}
-		if f.Kind != models.ShadowKindPlatformAgent && f.Kind != models.ShadowKindRuntime {
 			continue
 		}
 		if n := normalizeShadowName(f.DisplayName); n != "" {
@@ -559,51 +523,11 @@ func normalizeShadowName(s string) string {
 	return b.String()
 }
 
-// ---- retirement ----
-
-// updateRetirements moves onboarded findings through retirement after a
-// scan: monitoring ⇄ ready_to_retire from the zero-usage days, and
-// pending_verification → retired once the provider confirms it.
-func (s *shadowAgentScanner) updateRetirements(ctx context.Context, ouID string) error {
-	onboarded, err := s.repo.ListOnboardedFindings(ctx, ouID)
-	if err != nil {
-		return fmt.Errorf("listing onboarded findings: %w", err)
-	}
-	if len(onboarded) == 0 {
-		return nil
-	}
-	latest, err := s.repo.LatestScan(ctx, ouID)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return fmt.Errorf("reading the latest scan: %w", err)
-	}
-	for i := range onboarded {
-		f := &onboarded[i]
-		if f.RetirementState == models.ShadowRetirementRetired || f.Kind == models.ShadowKindProject {
-			continue
-		}
-		usage, err := s.repo.ListUsage(ctx, ouID, f.ID)
-		if err != nil {
-			return fmt.Errorf("reading usage: %w", err)
-		}
-		keys, err := s.repo.ListFindingKeys(ctx, ouID, f.ID)
-		if err != nil {
-			return fmt.Errorf("reading keys: %w", err)
-		}
-		view := EvaluateShadowRetirement(f, usage, keys, dataThrough(f, latest, false), dataThrough(f, latest, true))
-		switch {
-		case f.RetirementState == models.ShadowRetirementPendingVerify:
-			verified, _ := verifyShadowRetirement(f, usage, keys, dataThrough(f, latest, true))
-			if verified {
-				now := s.now().UTC()
-				if err := s.repo.SetRetirement(ctx, ouID, f.ID, models.ShadowRetirementRetired, "", nil, &now); err != nil {
-					return fmt.Errorf("recording a verified retirement: %w", err)
-				}
-			}
-		case view.State != f.RetirementState:
-			if err := s.repo.SetRetirement(ctx, ouID, f.ID, view.State, "", nil, nil); err != nil {
-				return fmt.Errorf("recording the retirement state: %w", err)
-			}
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
 		}
 	}
-	return nil
+	return ""
 }

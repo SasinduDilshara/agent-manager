@@ -23,8 +23,8 @@ import (
 )
 
 // registerShadowAgentRoutes registers Shadow Agent Discovery. It is an org
-// admin feature: connections hold provider admin credentials and findings
-// show the org's provider usage and owner hints.
+// admin feature: connections hold platform credentials, and the agents they
+// find are the org's unregistered agents.
 func registerShadowAgentRoutes(rr *middleware.RouteRegistrar, controller controllers.ShadowAgentController) {
 	base := "/orgs/{orgName}/shadow-agents"
 	rr.HandleFuncWithValidationAndAuthz(route("GET", base+"/providers"), rbac.ShadowAgentRead, controller.ListProviders)
@@ -39,11 +39,12 @@ func registerShadowAgentRoutes(rr *middleware.RouteRegistrar, controller control
 
 	rr.HandleFuncWithValidationAndAuthz(route("GET", base+"/scans"), rbac.ShadowAgentRead, controller.ListScans)
 	rr.HandleFuncWithValidationAndAuthz(route("POST", base+"/scans"), rbac.ShadowAgentManage, controller.CreateScan)
+	rr.HandleFuncWithValidationAndAuthz(route("DELETE", base+"/scans"), rbac.ShadowAgentManage, controller.ClearScans)
 	rr.HandleFuncWithValidationAndAuthz(route("GET", base+"/scans/{scanId}"), rbac.ShadowAgentRead, controller.GetScan)
 
 	rr.HandleFuncWithValidationAndAuthz(route("GET", base+"/findings"), rbac.ShadowAgentRead, controller.ListFindings)
+	rr.HandleFuncWithValidationAndAuthz(route("DELETE", base+"/findings"), rbac.ShadowAgentManage, controller.DeleteFindings)
 	rr.HandleFuncWithValidationAndAuthz(route("GET", base+"/findings/{findingId}"), rbac.ShadowAgentRead, controller.GetFinding)
 	rr.HandleFuncWithValidationAndAuthz(route("PATCH", base+"/findings/{findingId}"), rbac.ShadowAgentManage, controller.UpdateFinding)
-	rr.HandleFuncWithValidationAndAuthz(route("POST", base+"/findings/{findingId}/onboarding"), rbac.ShadowAgentManage, controller.OnboardFinding)
-	rr.HandleFuncWithValidationAndAuthz(route("POST", base+"/findings/{findingId}/retirement/confirm"), rbac.ShadowAgentManage, controller.ConfirmRetirement)
+	rr.HandleFuncWithValidationAndAuthz(route("DELETE", base+"/findings/{findingId}"), rbac.ShadowAgentManage, controller.DeleteFinding)
 }

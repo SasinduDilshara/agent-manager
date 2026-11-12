@@ -253,6 +253,8 @@ export function validateDraft(
       else if (id && !r.key.trim() && !existing?.secretHints?.[`${f.key}.${id}`])
         errors[f.key] = `Enter the key for ${id}`;
     }
+    if (f.required && !errors[f.key] && !hasValue(spec, draft, existing, f.key))
+      errors[f.key] = `${f.label} needs at least one ID and key`;
   }
   const choice = credentialChoiceError(spec, draft, existing);
   if (choice) errors.credentialChoice = choice;
@@ -536,8 +538,8 @@ function FieldInput({
   }
   const isSecret = field.kind === "secret";
   const multiline = field.key === "serviceAccountJson";
-  // A stored optional secret can be removed (for example the Admin API key,
-  // to scan with project keys only).
+  // A stored optional secret can be removed (for example the AWS session
+  // token).
   const canRemove = isSecret && !!storedHint && !field.required;
   const removed = draft.removed.includes(field.key);
   const setRemoved = (on: boolean) =>
@@ -695,7 +697,7 @@ export function ConnectionEditor({
 }) {
   const { connectionId } = useParams<{ connectionId?: string }>();
   const navigate = useNavigate();
-  const returnTo = useReturnTo(`${listPath}?tab=connections`);
+  const returnTo = useReturnTo(`${listPath}?tab=platforms`);
   const providers = useShadowProviders(orgName);
   const existing = useShadowConnection(orgName, connectionId);
   const create = useCreateShadowConnection(orgName);
@@ -769,13 +771,13 @@ export function ConnectionEditor({
     const onError = (e: unknown) =>
       setServerError(
         (e as { message?: string })?.message ??
-          "The connection could not be saved. Check the values and try again.",
+          "The platform could not be saved. Check the values and try again.",
       );
     if (isEdit) update.mutate(body, { onSuccess, onError });
     else create.mutate(body, { onSuccess, onError });
   };
 
-  const title = isEdit ? `Edit ${existing.data?.name ?? "connection"}` : "Connect a provider";
+  const title = isEdit ? `Edit ${existing.data?.name ?? "platform"}` : "Add a platform";
   const back = { backHref: returnTo, backLabel: "Back to Shadow Agent Discovery" };
 
   if (providers.isLoading || (isEdit && existing.isLoading) || !draft) {
@@ -790,10 +792,10 @@ export function ConnectionEditor({
     <PageLayout title={title} disableIcon {...back}>
       {!spec ? (
         <Stack spacing={2}>
-          <Typography variant="body1">Choose the provider to connect.</Typography>
+          <Typography variant="body1">Choose the platform to add.</Typography>
           {[
             {
-              title: "Model providers and cloud agent platforms",
+              title: "AI agent platforms",
               list: (providers.data?.providers ?? []).filter((p) => !p.sourceHost),
             },
             {
@@ -843,7 +845,7 @@ export function ConnectionEditor({
                     variant="text"
                     onClick={() => setDraft({ ...draft, provider: "" })}
                   >
-                    Change provider
+                    Change platform
                   </Button>
                 )}
               </Stack>
@@ -856,12 +858,11 @@ export function ConnectionEditor({
                 <Alert severity="info">
                   Source code analysis is not available yet. Test connection checks the{" "}
                   {draft.values.useEntra === true ? "service principal" : "token"} now, with
-                  read-only calls; scans list this connection as skipped until the analysis is
-                  added.
+                  read-only calls; scans list this platform as skipped until the analysis is added.
                 </Alert>
               )}
               <TextInput
-                label="Connection name"
+                label="Name"
                 placeholder="e.g. OpenAI production"
                 value={draft.name}
                 maxLength={INPUT_LIMITS.NAME}
@@ -981,7 +982,7 @@ export function ConnectionEditor({
                 <Box>
                   <Typography variant="subtitle1">Endpoints</Typography>
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                    The official endpoints are filled in. Change one only to reach the provider
+                    The official endpoints are filled in. Change one only to reach the platform
                     through a host you trust: the credential is sent to it. Placeholders such as{" "}
                     {"{region}"} are filled in for each region or location you scan.
                   </Typography>
@@ -1016,7 +1017,7 @@ export function ConnectionEditor({
                   onClick={save}
                   disabled={create.isPending || update.isPending}
                 >
-                  {isEdit ? "Save" : "Connect provider"}
+                  {isEdit ? "Save" : "Add platform"}
                 </Button>
                 <Button
                   variant="outlined"
@@ -1036,7 +1037,7 @@ export function ConnectionEditor({
   );
 }
 
-/** Builds the edit route of a connection. */
+/** Builds the edit route of a platform connection. */
 export function editConnectionPath(orgId: string, connectionId: string): string {
   return generatePath(
     absoluteRouteMap.children.org.children.shadowAgentDiscovery.children.editConnection.path,

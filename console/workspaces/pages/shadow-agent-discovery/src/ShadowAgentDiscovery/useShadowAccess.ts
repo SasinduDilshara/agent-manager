@@ -22,9 +22,9 @@ import { useTokenScopes } from "@agent-management-platform/api-client";
 export interface ShadowAccess {
   /** Whether the scope sets are known yet. */
   resolved: boolean;
-  /** May see connections (without secrets), scans and findings. */
+  /** May see platforms (without secrets), scans and unregistered agents. */
   canRead: boolean;
-  /** May connect providers, run scans, review and onboard findings. */
+  /** May add platforms, run scans and review agents. */
   canManage: boolean;
 }
 

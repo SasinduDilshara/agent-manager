@@ -60,24 +60,6 @@ type registryAgent struct {
 	Attributes map[string]json.RawMessage `json:"attributes"`
 }
 
-// listMCPServersResponse is the v1 ListMcpServersResponse.
-type listMCPServersResponse struct {
-	MCPServers    []mcpServer `json:"mcpServers"`
-	NextPageToken string      `json:"nextPageToken"`
-}
-
-// mcpServer holds the fields of the v1 McpServer the connector keeps; tools
-// (descriptions, annotations) are not declared.
-type mcpServer struct {
-	Name        string `json:"name"`
-	MCPServerID string `json:"mcpServerId"`
-	DisplayName string `json:"displayName"`
-	CreateTime  string `json:"createTime"`
-	Interfaces  []struct {
-		URL string `json:"url"`
-	} `json:"interfaces"`
-}
-
 // attrString reads one string field of a Struct attribute, leniently: a
 // missing key or another shape gives "".
 func attrString(attrs map[string]json.RawMessage, key, field string) string {
@@ -242,68 +224,4 @@ func setIfAbsent(attrs map[string]any, key, value string) {
 	if _, ok := attrs[key]; !ok {
 		attrs[key] = value
 	}
-}
-
-// listMCPServers lists the Agent Registry MCP servers of one project and
-// location. Google remote MCP servers exist only in the global location.
-func (s *scanner) listMCPServers(ctx context.Context, project, location string) {
-	if !s.proceed(ctx, callMCPServers) {
-		return
-	}
-	u, err := registryURL(s.conn, project, location, "mcpServers")
-	if err != nil {
-		s.record(callMCPServers, 0, &sa.CallError{Outcome: models.ShadowCallFailed, Message: err.Error()})
-		return
-	}
-	s.paginate(ctx, callMCPServers, maxRegistryPages, func(token string) (string, int, error) {
-		q := url.Values{"pageSize": {strconv.Itoa(registryPageSize)}}
-		if token != "" {
-			q.Set("pageToken", token)
-		}
-		var resp listMCPServersResponse
-		if err := s.api.GetJSON(ctx, u, q, &resp); err != nil {
-			return "", 0, err
-		}
-		for i := range resp.MCPServers {
-			s.addMCPServer(project, location, &resp.MCPServers[i])
-		}
-		return resp.NextPageToken, len(resp.MCPServers), nil
-	})
-}
-
-// addMCPServer records an MCP server as tool infrastructure: its label and
-// the origin of its URL only.
-func (s *scanner) addMCPServer(project, location string, m *mcpServer) {
-	if m.Name != "" {
-		if seg := projectSegRE.FindStringSubmatch(m.Name); seg != nil {
-			s.addAlias(project, seg[1])
-		}
-	}
-	id := m.MCPServerID
-	if id == "" {
-		id = m.Name
-	}
-	if id == "" {
-		return
-	}
-	label := sa.SanitizeName(m.DisplayName)
-	if label == "" {
-		label = lastSegment(m.Name)
-	}
-	origin := ""
-	for _, i := range m.Interfaces {
-		if origin = sa.Origin(i.URL); origin != "" {
-			break
-		}
-	}
-	f := s.findings.Get(models.ShadowKindToolInfra, id)
-	f.DisplayName = label
-	f.Scope = scopeOf(project, location)
-	f.Attributes["project"] = project
-	f.Attributes["location"] = location
-	f.Attributes["mcpServers"] = []sa.MCPServerRef{{Label: label, Origin: origin}}
-	if f.ProviderCreatedAt == nil {
-		f.ProviderCreatedAt = parseTime(m.CreateTime)
-	}
-	f.AddSignal(sa.Signal{Code: sa.SigGoogleRegistryMCP, Source: callMCPServers, Observed: map[string]any{}})
 }

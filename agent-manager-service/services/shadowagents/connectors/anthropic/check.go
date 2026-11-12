@@ -21,104 +21,42 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
 )
 
-// Test implements sa.Connector: one cheap read (limit=1) per capability.
-// The connection is OK when the Admin API key can list API keys or, without
-// an Admin key, when every workspace key can list its Managed Agents.
+// Test implements sa.Connector: it lists one Managed Agent with each
+// workspace key. The connection is OK when every workspace key can list its
+// Managed Agents.
 func (c *Connector) Test(ctx context.Context, conn sa.Connection) models.ShadowConnectionTestInfo {
-	s := c.newScan(conn, sa.Window{})
+	s := c.newScan(conn)
 	var checks []models.ShadowConnectionCheck
-	ok := false
-
 	p, err := s.firstPartyPlatform()
-	switch {
-	case err != nil:
-		checks = append(checks, failedCheck("Admin API key: list API keys", err, nil))
-	case strings.TrimSpace(conn.Secret.APIKey) == "":
-		for _, name := range []string{"Admin API key: list API keys", "Usage analytics", "Cost analytics"} {
-			checks = append(checks, models.ShadowConnectionCheck{
-				Name: name, Outcome: models.ShadowCallSkipped, Message: reasonNeedsAdminKey,
-			})
+	if err != nil {
+		checks = append(checks, failedCheck("Managed Agents", err, signalNames(sa.SigAnthropicManagedAgent)))
+		return models.ShadowConnectionTestInfo{OK: false, Checks: checks}
+	}
+	ok := true
+	wsChecks := 0
+	for _, ws := range sortedKeys(conn.Secret.ScopedKeys) {
+		api, has := p.wsAPI(ws)
+		if !has {
+			continue
 		}
-	default:
-		keys := s.probe(ctx, p.orgAPI, "Admin API key: list API keys", p.orgURL("/v1/organizations/api_keys"),
-			url.Values{"limit": {"1"}}, nil, []string{"API key inventory", "Owner hints"})
-		checks = append(checks, keys)
-		ok = keys.Outcome == models.ShadowCallOK
-		if keys.Outcome == models.ShadowCallAuthFailed {
-			break
-		}
-		checks = append(checks, s.analyticsProbes(ctx, p)...)
+		wsChecks++
+		ch := s.probe(ctx, api, "Workspace "+ws+": Managed Agents", p.wsURL(ws, "/v1/agents"), url.Values{"limit": {"1"}},
+			p.wsHeaders(ws, betaManagedAgents), signalNames(sa.SigAnthropicManagedAgent))
+		checks = append(checks, ch)
+		ok = ok && ch.Outcome == models.ShadowCallOK
 	}
-	wsChecks, wsChecksOK := 0, 0
-	if p != nil {
-		for _, ws := range sortedKeys(conn.Secret.ScopedKeys) {
-			if api, has := p.wsAPI(ws); has {
-				probes := s.workspaceProbes(ctx, p, api, ws, "Workspace "+ws+": ")
-				wsChecks++
-				if len(probes) > 0 && probes[0].Outcome == models.ShadowCallOK {
-					wsChecksOK++
-				}
-				checks = append(checks, probes...)
-			}
-		}
+	if wsChecks == 0 {
+		checks = append(checks, models.ShadowConnectionCheck{
+			Name: "Managed Agents", Outcome: models.ShadowCallSkipped, Message: "no workspace keys",
+		})
 	}
-	if strings.TrimSpace(conn.Secret.APIKey) == "" && err == nil {
-		ok = wsChecks > 0 && wsChecksOK == wsChecks
-	}
-	return models.ShadowConnectionTestInfo{OK: ok, Checks: checks}
-}
-
-// analyticsProbes checks the usage and cost analytics over the last full day.
-func (s *scan) analyticsProbes(ctx context.Context, p *platform) []models.ShadowConnectionCheck {
-	day := sa.DayOf(s.now)
-	spans, _, _ := analyticsSpans(sa.Window{Start: day.AddDate(0, 0, -1), End: s.now}, s.now)
-	if len(spans) == 0 {
-		return nil
-	}
-	hdr := http.Header{headerBeta: {betaAnalytics}}
-	q := analyticsQuery(spans[0], []string{p.analyticsGroupBy[0]})
-	q.Set("limit", "1")
-	usage := s.probe(ctx, p.orgAPI, "Usage analytics", p.orgURL("/v1/organizations/analytics/usage"), q, hdr,
-		signalNames(sa.SigAnthropicPlainUsage, sa.SigAnthropicManagedAgentUsage, sa.SigAnthropicServerWebSearch))
-	if usage.Outcome == models.ShadowCallAuthFailed {
-		return []models.ShadowConnectionCheck{usage}
-	}
-	cq := analyticsQuery(spans[0], []string{"cost_type"})
-	cq.Set("limit", "1")
-	cost := s.probe(ctx, p.orgAPI, "Cost analytics", p.orgURL("/v1/organizations/analytics/cost"), cq, hdr,
-		signalNames(sa.SigAnthropicServerCodeExec))
-	return []models.ShadowConnectionCheck{usage, cost}
-}
-
-// workspaceProbes checks the Managed Agents and (with deep inspection) the
-// message batches of one workspace.
-func (s *scan) workspaceProbes(ctx context.Context, p *platform, api *sa.API, ws, label string) []models.ShadowConnectionCheck {
-	unlocks := signalNames(sa.SigAnthropicManagedAgent)
-	if s.conn.Config.DeepInspection {
-		unlocks = append(unlocks, signalNames(sa.SigAnthropicSessionToolUse)...)
-	}
-	agents := s.probe(ctx, api, label+"Managed Agents", p.wsURL(ws, "/v1/agents"), url.Values{"limit": {"1"}},
-		p.wsHeaders(ws, betaManagedAgents), unlocks)
-	out := []models.ShadowConnectionCheck{agents}
-	batchName := label + "Message batches"
-	batchUnlocks := signalNames(sa.SigAnthropicToolCallBatch)
-	switch {
-	case !s.conn.Config.DeepInspection:
-		out = append(out, models.ShadowConnectionCheck{Name: batchName, Outcome: models.ShadowCallSkipped, Message: "deep inspection is off", Unlocks: batchUnlocks})
-	case agents.Outcome == models.ShadowCallAuthFailed:
-		out = append(out, models.ShadowConnectionCheck{Name: batchName, Outcome: models.ShadowCallSkipped, Message: "not called: the credential was rejected", Unlocks: batchUnlocks})
-	default:
-		out = append(out, s.probe(ctx, api, batchName, p.wsURL(ws, "/v1/messages/batches"), url.Values{"limit": {"1"}},
-			p.wsHeaders(ws, ""), batchUnlocks))
-	}
-	return out
+	return models.ShadowConnectionTestInfo{OK: ok && wsChecks > 0, Checks: checks}
 }
 
 // probe makes one GET and checks the response has a data list.
@@ -139,7 +77,7 @@ func failedCheck(name string, err error, unlocks []string) models.ShadowConnecti
 	return models.ShadowConnectionCheck{Name: name, Outcome: sa.OutcomeOf(err), Message: sa.MessageOf(err), Unlocks: unlocks}
 }
 
-// signalNames returns the catalog names of signal codes.
+// signalNames returns the catalog names of evidence codes.
 func signalNames(codes ...string) []string {
 	out := make([]string, 0, len(codes))
 	for _, c := range codes {

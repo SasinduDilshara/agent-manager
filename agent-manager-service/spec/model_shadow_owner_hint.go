@@ -18,7 +18,7 @@ import (
 // checks if the ShadowOwnerHint type satisfies the MappedNullable interface at compile time
 var _ MappedNullable = &ShadowOwnerHint{}
 
-// ShadowOwnerHint Minimised personal data to say who is behind a finding.
+// ShadowOwnerHint Who created the agent, only when its platform's agent listing says so (minimised personal data).
 type ShadowOwnerHint struct {
 	Name      *string    `json:"name,omitempty"`
 	Email     *string    `json:"email,omitempty"`

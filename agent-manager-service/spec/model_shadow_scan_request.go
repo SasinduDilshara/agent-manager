@@ -21,8 +21,6 @@ var _ MappedNullable = &ShadowScanRequest{}
 type ShadowScanRequest struct {
 	// Connections to scan; all of the organization's when empty.
 	ConnectionIds []string `json:"connectionIds,omitempty"`
-	// Days of history to read (default 30).
-	LookbackDays *int32 `json:"lookbackDays,omitempty"`
 }
 
 // NewShadowScanRequest instantiates a new ShadowScanRequest object
@@ -74,38 +72,6 @@ func (o *ShadowScanRequest) SetConnectionIds(v []string) {
 	o.ConnectionIds = v
 }
 
-// GetLookbackDays returns the LookbackDays field value if set, zero value otherwise.
-func (o *ShadowScanRequest) GetLookbackDays() int32 {
-	if o == nil || IsNil(o.LookbackDays) {
-		var ret int32
-		return ret
-	}
-	return *o.LookbackDays
-}
-
-// GetLookbackDaysOk returns a tuple with the LookbackDays field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *ShadowScanRequest) GetLookbackDaysOk() (*int32, bool) {
-	if o == nil || IsNil(o.LookbackDays) {
-		return nil, false
-	}
-	return o.LookbackDays, true
-}
-
-// HasLookbackDays returns a boolean if a field has been set.
-func (o *ShadowScanRequest) HasLookbackDays() bool {
-	if o != nil && !IsNil(o.LookbackDays) {
-		return true
-	}
-
-	return false
-}
-
-// SetLookbackDays gets a reference to the given int32 and assigns it to the LookbackDays field.
-func (o *ShadowScanRequest) SetLookbackDays(v int32) {
-	o.LookbackDays = &v
-}
-
 func (o ShadowScanRequest) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -118,9 +84,6 @@ func (o ShadowScanRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	if !IsNil(o.ConnectionIds) {
 		toSerialize["connectionIds"] = o.ConnectionIds
-	}
-	if !IsNil(o.LookbackDays) {
-		toSerialize["lookbackDays"] = o.LookbackDays
 	}
 	return toSerialize, nil
 }

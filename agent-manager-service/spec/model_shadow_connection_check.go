@@ -19,9 +19,10 @@ var _ MappedNullable = &ShadowConnectionCheck{}
 
 // ShadowConnectionCheck struct for ShadowConnectionCheck
 type ShadowConnectionCheck struct {
-	Name    string   `json:"name"`
-	Outcome string   `json:"outcome"`
-	Message *string  `json:"message,omitempty"`
+	Name    string  `json:"name"`
+	Outcome string  `json:"outcome"`
+	Message *string `json:"message,omitempty"`
+	// The evidence this call provides, so a failed check says which agents a scan would miss.
 	Unlocks []string `json:"unlocks,omitempty"`
 }
 

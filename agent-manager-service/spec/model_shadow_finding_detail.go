@@ -24,41 +24,37 @@ type ShadowFindingDetail struct {
 	ConnectionId   string `json:"connectionId"`
 	ConnectionName string `json:"connectionName"`
 	Provider       string `json:"provider"`
-	// project is an OpenAI project or an Anthropic workspace that holds evidence (tool calls in stored completions or batches) which cannot be tied to one API key.
-	Kind              string          `json:"kind"`
-	ExternalId        string          `json:"externalId"`
-	DisplayName       string          `json:"displayName"`
-	Scope             string          `json:"scope"`
+	// runtime is an AgentCore runtime or a Google Agent Runtime engine; platform_agent is any other agent object a platform lists.
+	Kind string `json:"kind"`
+	// The platform's own ID of the agent (agent ID, ARN or resource name).
+	ExternalId  string `json:"externalId"`
+	DisplayName string `json:"displayName"`
+	// Where the agent lives at the platform (project, workspace, region or location).
+	Scope string `json:"scope"`
+	// The agent's state as its platform reports it.
 	State             string          `json:"state"`
-	Score             int32           `json:"score"`
-	Verdict           string          `json:"verdict"`
 	Status            string          `json:"status"`
 	OwnerHint         ShadowOwnerHint `json:"ownerHint"`
 	ProviderCreatedAt *time.Time      `json:"providerCreatedAt,omitempty"`
-	FirstUsedAt       *time.Time      `json:"firstUsedAt,omitempty"`
-	LastUsedAt        *time.Time      `json:"lastUsedAt,omitempty"`
 	FirstSeenAt       time.Time       `json:"firstSeenAt"`
 	LastSeenAt        time.Time       `json:"lastSeenAt"`
-	LinkedProject     string          `json:"linkedProject"`
-	LinkedAgent       string          `json:"linkedAgent"`
-	RetirementState   string          `json:"retirementState"`
-	// Requests in the stored daily usage.
-	RequestsInWindow int64                   `json:"requestsInWindow"`
-	Attributes       map[string]interface{}  `json:"attributes"`
-	Related          []ShadowFindingRelation `json:"related"`
-	Signals          []ShadowFindingSignal   `json:"signals"`
-	Keys             []ShadowAPIKey          `json:"keys"`
-	Usage            []ShadowUsageDay        `json:"usage"`
-	Retirement       ShadowRetirement        `json:"retirement"`
-	OnboardedAt      *time.Time              `json:"onboardedAt,omitempty"`
-	OnboardedBy      *string                 `json:"onboardedBy,omitempty"`
+	// False once a complete listing of its connection no longer returns the agent.
+	Present bool `json:"present"`
+	// Every connection that found this agent.
+	FoundBy []ShadowFindingSource `json:"foundBy"`
+	// What the platform's agent listing reports about the agent (allow-listed fields only).
+	Attributes map[string]interface{} `json:"attributes"`
+	// Agents on other platforms that may be the same agent.
+	Related []ShadowFindingRelation `json:"related"`
+	// The evidence, one entry per listing that returned the agent.
+	Signals []ShadowFindingSignal `json:"signals"`
 }
 
 // NewShadowFindingDetail instantiates a new ShadowFindingDetail object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewShadowFindingDetail(id string, connectionId string, connectionName string, provider string, kind string, externalId string, displayName string, scope string, state string, score int32, verdict string, status string, ownerHint ShadowOwnerHint, firstSeenAt time.Time, lastSeenAt time.Time, linkedProject string, linkedAgent string, retirementState string, requestsInWindow int64, attributes map[string]interface{}, related []ShadowFindingRelation, signals []ShadowFindingSignal, keys []ShadowAPIKey, usage []ShadowUsageDay, retirement ShadowRetirement) *ShadowFindingDetail {
+func NewShadowFindingDetail(id string, connectionId string, connectionName string, provider string, kind string, externalId string, displayName string, scope string, state string, status string, ownerHint ShadowOwnerHint, firstSeenAt time.Time, lastSeenAt time.Time, present bool, foundBy []ShadowFindingSource, attributes map[string]interface{}, related []ShadowFindingRelation, signals []ShadowFindingSignal) *ShadowFindingDetail {
 	this := ShadowFindingDetail{}
 	this.Id = id
 	this.ConnectionId = connectionId
@@ -69,22 +65,15 @@ func NewShadowFindingDetail(id string, connectionId string, connectionName strin
 	this.DisplayName = displayName
 	this.Scope = scope
 	this.State = state
-	this.Score = score
-	this.Verdict = verdict
 	this.Status = status
 	this.OwnerHint = ownerHint
 	this.FirstSeenAt = firstSeenAt
 	this.LastSeenAt = lastSeenAt
-	this.LinkedProject = linkedProject
-	this.LinkedAgent = linkedAgent
-	this.RetirementState = retirementState
-	this.RequestsInWindow = requestsInWindow
+	this.Present = present
+	this.FoundBy = foundBy
 	this.Attributes = attributes
 	this.Related = related
 	this.Signals = signals
-	this.Keys = keys
-	this.Usage = usage
-	this.Retirement = retirement
 	return &this
 }
 
@@ -312,54 +301,6 @@ func (o *ShadowFindingDetail) SetState(v string) {
 	o.State = v
 }
 
-// GetScore returns the Score field value
-func (o *ShadowFindingDetail) GetScore() int32 {
-	if o == nil {
-		var ret int32
-		return ret
-	}
-
-	return o.Score
-}
-
-// GetScoreOk returns a tuple with the Score field value
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetScoreOk() (*int32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Score, true
-}
-
-// SetScore sets field value
-func (o *ShadowFindingDetail) SetScore(v int32) {
-	o.Score = v
-}
-
-// GetVerdict returns the Verdict field value
-func (o *ShadowFindingDetail) GetVerdict() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.Verdict
-}
-
-// GetVerdictOk returns a tuple with the Verdict field value
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetVerdictOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Verdict, true
-}
-
-// SetVerdict sets field value
-func (o *ShadowFindingDetail) SetVerdict(v string) {
-	o.Verdict = v
-}
-
 // GetStatus returns the Status field value
 func (o *ShadowFindingDetail) GetStatus() string {
 	if o == nil {
@@ -440,70 +381,6 @@ func (o *ShadowFindingDetail) SetProviderCreatedAt(v time.Time) {
 	o.ProviderCreatedAt = &v
 }
 
-// GetFirstUsedAt returns the FirstUsedAt field value if set, zero value otherwise.
-func (o *ShadowFindingDetail) GetFirstUsedAt() time.Time {
-	if o == nil || IsNil(o.FirstUsedAt) {
-		var ret time.Time
-		return ret
-	}
-	return *o.FirstUsedAt
-}
-
-// GetFirstUsedAtOk returns a tuple with the FirstUsedAt field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetFirstUsedAtOk() (*time.Time, bool) {
-	if o == nil || IsNil(o.FirstUsedAt) {
-		return nil, false
-	}
-	return o.FirstUsedAt, true
-}
-
-// HasFirstUsedAt returns a boolean if a field has been set.
-func (o *ShadowFindingDetail) HasFirstUsedAt() bool {
-	if o != nil && !IsNil(o.FirstUsedAt) {
-		return true
-	}
-
-	return false
-}
-
-// SetFirstUsedAt gets a reference to the given time.Time and assigns it to the FirstUsedAt field.
-func (o *ShadowFindingDetail) SetFirstUsedAt(v time.Time) {
-	o.FirstUsedAt = &v
-}
-
-// GetLastUsedAt returns the LastUsedAt field value if set, zero value otherwise.
-func (o *ShadowFindingDetail) GetLastUsedAt() time.Time {
-	if o == nil || IsNil(o.LastUsedAt) {
-		var ret time.Time
-		return ret
-	}
-	return *o.LastUsedAt
-}
-
-// GetLastUsedAtOk returns a tuple with the LastUsedAt field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetLastUsedAtOk() (*time.Time, bool) {
-	if o == nil || IsNil(o.LastUsedAt) {
-		return nil, false
-	}
-	return o.LastUsedAt, true
-}
-
-// HasLastUsedAt returns a boolean if a field has been set.
-func (o *ShadowFindingDetail) HasLastUsedAt() bool {
-	if o != nil && !IsNil(o.LastUsedAt) {
-		return true
-	}
-
-	return false
-}
-
-// SetLastUsedAt gets a reference to the given time.Time and assigns it to the LastUsedAt field.
-func (o *ShadowFindingDetail) SetLastUsedAt(v time.Time) {
-	o.LastUsedAt = &v
-}
-
 // GetFirstSeenAt returns the FirstSeenAt field value
 func (o *ShadowFindingDetail) GetFirstSeenAt() time.Time {
 	if o == nil {
@@ -552,100 +429,52 @@ func (o *ShadowFindingDetail) SetLastSeenAt(v time.Time) {
 	o.LastSeenAt = v
 }
 
-// GetLinkedProject returns the LinkedProject field value
-func (o *ShadowFindingDetail) GetLinkedProject() string {
+// GetPresent returns the Present field value
+func (o *ShadowFindingDetail) GetPresent() bool {
 	if o == nil {
-		var ret string
+		var ret bool
 		return ret
 	}
 
-	return o.LinkedProject
+	return o.Present
 }
 
-// GetLinkedProjectOk returns a tuple with the LinkedProject field value
+// GetPresentOk returns a tuple with the Present field value
 // and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetLinkedProjectOk() (*string, bool) {
+func (o *ShadowFindingDetail) GetPresentOk() (*bool, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.LinkedProject, true
+	return &o.Present, true
 }
 
-// SetLinkedProject sets field value
-func (o *ShadowFindingDetail) SetLinkedProject(v string) {
-	o.LinkedProject = v
+// SetPresent sets field value
+func (o *ShadowFindingDetail) SetPresent(v bool) {
+	o.Present = v
 }
 
-// GetLinkedAgent returns the LinkedAgent field value
-func (o *ShadowFindingDetail) GetLinkedAgent() string {
+// GetFoundBy returns the FoundBy field value
+func (o *ShadowFindingDetail) GetFoundBy() []ShadowFindingSource {
 	if o == nil {
-		var ret string
+		var ret []ShadowFindingSource
 		return ret
 	}
 
-	return o.LinkedAgent
+	return o.FoundBy
 }
 
-// GetLinkedAgentOk returns a tuple with the LinkedAgent field value
+// GetFoundByOk returns a tuple with the FoundBy field value
 // and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetLinkedAgentOk() (*string, bool) {
+func (o *ShadowFindingDetail) GetFoundByOk() ([]ShadowFindingSource, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.LinkedAgent, true
+	return o.FoundBy, true
 }
 
-// SetLinkedAgent sets field value
-func (o *ShadowFindingDetail) SetLinkedAgent(v string) {
-	o.LinkedAgent = v
-}
-
-// GetRetirementState returns the RetirementState field value
-func (o *ShadowFindingDetail) GetRetirementState() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.RetirementState
-}
-
-// GetRetirementStateOk returns a tuple with the RetirementState field value
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetRetirementStateOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.RetirementState, true
-}
-
-// SetRetirementState sets field value
-func (o *ShadowFindingDetail) SetRetirementState(v string) {
-	o.RetirementState = v
-}
-
-// GetRequestsInWindow returns the RequestsInWindow field value
-func (o *ShadowFindingDetail) GetRequestsInWindow() int64 {
-	if o == nil {
-		var ret int64
-		return ret
-	}
-
-	return o.RequestsInWindow
-}
-
-// GetRequestsInWindowOk returns a tuple with the RequestsInWindow field value
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetRequestsInWindowOk() (*int64, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.RequestsInWindow, true
-}
-
-// SetRequestsInWindow sets field value
-func (o *ShadowFindingDetail) SetRequestsInWindow(v int64) {
-	o.RequestsInWindow = v
+// SetFoundBy sets field value
+func (o *ShadowFindingDetail) SetFoundBy(v []ShadowFindingSource) {
+	o.FoundBy = v
 }
 
 // GetAttributes returns the Attributes field value
@@ -720,142 +549,6 @@ func (o *ShadowFindingDetail) SetSignals(v []ShadowFindingSignal) {
 	o.Signals = v
 }
 
-// GetKeys returns the Keys field value
-func (o *ShadowFindingDetail) GetKeys() []ShadowAPIKey {
-	if o == nil {
-		var ret []ShadowAPIKey
-		return ret
-	}
-
-	return o.Keys
-}
-
-// GetKeysOk returns a tuple with the Keys field value
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetKeysOk() ([]ShadowAPIKey, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return o.Keys, true
-}
-
-// SetKeys sets field value
-func (o *ShadowFindingDetail) SetKeys(v []ShadowAPIKey) {
-	o.Keys = v
-}
-
-// GetUsage returns the Usage field value
-func (o *ShadowFindingDetail) GetUsage() []ShadowUsageDay {
-	if o == nil {
-		var ret []ShadowUsageDay
-		return ret
-	}
-
-	return o.Usage
-}
-
-// GetUsageOk returns a tuple with the Usage field value
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetUsageOk() ([]ShadowUsageDay, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return o.Usage, true
-}
-
-// SetUsage sets field value
-func (o *ShadowFindingDetail) SetUsage(v []ShadowUsageDay) {
-	o.Usage = v
-}
-
-// GetRetirement returns the Retirement field value
-func (o *ShadowFindingDetail) GetRetirement() ShadowRetirement {
-	if o == nil {
-		var ret ShadowRetirement
-		return ret
-	}
-
-	return o.Retirement
-}
-
-// GetRetirementOk returns a tuple with the Retirement field value
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetRetirementOk() (*ShadowRetirement, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Retirement, true
-}
-
-// SetRetirement sets field value
-func (o *ShadowFindingDetail) SetRetirement(v ShadowRetirement) {
-	o.Retirement = v
-}
-
-// GetOnboardedAt returns the OnboardedAt field value if set, zero value otherwise.
-func (o *ShadowFindingDetail) GetOnboardedAt() time.Time {
-	if o == nil || IsNil(o.OnboardedAt) {
-		var ret time.Time
-		return ret
-	}
-	return *o.OnboardedAt
-}
-
-// GetOnboardedAtOk returns a tuple with the OnboardedAt field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetOnboardedAtOk() (*time.Time, bool) {
-	if o == nil || IsNil(o.OnboardedAt) {
-		return nil, false
-	}
-	return o.OnboardedAt, true
-}
-
-// HasOnboardedAt returns a boolean if a field has been set.
-func (o *ShadowFindingDetail) HasOnboardedAt() bool {
-	if o != nil && !IsNil(o.OnboardedAt) {
-		return true
-	}
-
-	return false
-}
-
-// SetOnboardedAt gets a reference to the given time.Time and assigns it to the OnboardedAt field.
-func (o *ShadowFindingDetail) SetOnboardedAt(v time.Time) {
-	o.OnboardedAt = &v
-}
-
-// GetOnboardedBy returns the OnboardedBy field value if set, zero value otherwise.
-func (o *ShadowFindingDetail) GetOnboardedBy() string {
-	if o == nil || IsNil(o.OnboardedBy) {
-		var ret string
-		return ret
-	}
-	return *o.OnboardedBy
-}
-
-// GetOnboardedByOk returns a tuple with the OnboardedBy field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingDetail) GetOnboardedByOk() (*string, bool) {
-	if o == nil || IsNil(o.OnboardedBy) {
-		return nil, false
-	}
-	return o.OnboardedBy, true
-}
-
-// HasOnboardedBy returns a boolean if a field has been set.
-func (o *ShadowFindingDetail) HasOnboardedBy() bool {
-	if o != nil && !IsNil(o.OnboardedBy) {
-		return true
-	}
-
-	return false
-}
-
-// SetOnboardedBy gets a reference to the given string and assigns it to the OnboardedBy field.
-func (o *ShadowFindingDetail) SetOnboardedBy(v string) {
-	o.OnboardedBy = &v
-}
-
 func (o ShadowFindingDetail) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -875,37 +568,18 @@ func (o ShadowFindingDetail) ToMap() (map[string]interface{}, error) {
 	toSerialize["displayName"] = o.DisplayName
 	toSerialize["scope"] = o.Scope
 	toSerialize["state"] = o.State
-	toSerialize["score"] = o.Score
-	toSerialize["verdict"] = o.Verdict
 	toSerialize["status"] = o.Status
 	toSerialize["ownerHint"] = o.OwnerHint
 	if !IsNil(o.ProviderCreatedAt) {
 		toSerialize["providerCreatedAt"] = o.ProviderCreatedAt
 	}
-	if !IsNil(o.FirstUsedAt) {
-		toSerialize["firstUsedAt"] = o.FirstUsedAt
-	}
-	if !IsNil(o.LastUsedAt) {
-		toSerialize["lastUsedAt"] = o.LastUsedAt
-	}
 	toSerialize["firstSeenAt"] = o.FirstSeenAt
 	toSerialize["lastSeenAt"] = o.LastSeenAt
-	toSerialize["linkedProject"] = o.LinkedProject
-	toSerialize["linkedAgent"] = o.LinkedAgent
-	toSerialize["retirementState"] = o.RetirementState
-	toSerialize["requestsInWindow"] = o.RequestsInWindow
+	toSerialize["present"] = o.Present
+	toSerialize["foundBy"] = o.FoundBy
 	toSerialize["attributes"] = o.Attributes
 	toSerialize["related"] = o.Related
 	toSerialize["signals"] = o.Signals
-	toSerialize["keys"] = o.Keys
-	toSerialize["usage"] = o.Usage
-	toSerialize["retirement"] = o.Retirement
-	if !IsNil(o.OnboardedAt) {
-		toSerialize["onboardedAt"] = o.OnboardedAt
-	}
-	if !IsNil(o.OnboardedBy) {
-		toSerialize["onboardedBy"] = o.OnboardedBy
-	}
 	return toSerialize, nil
 }
 

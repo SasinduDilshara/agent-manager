@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
@@ -132,22 +131,6 @@ func (t *tester) subscriptionAndAccounts(ctx context.Context, arm *armClient, co
 		return n, err
 	})
 	return sub, accs
-}
-
-// testMetrics reads one hour of one request metric for an account.
-func testMetrics(ctx context.Context, arm *armClient, accountID string, now time.Time) (int, error) {
-	var resp metricsResponse
-	err := arm.client.GetJSON(ctx, arm.url(accountID+"/providers/Microsoft.Insights/metrics",
-		qp{"api-version", apiMetrics},
-		qp{"metricnamespace", metricsNamespace},
-		qp{"metricnames", metricAOAIRequests},
-		qp{"aggregation", "Total"},
-		qp{"interval", "PT1H"},
-		qp{"timespan", timespan(now.Add(-time.Hour), now)},
-		qp{"$filter", dimDeployment + " eq '*'"},
-		qp{"top", "1"},
-	), &resp)
-	return len(resp.Value), err
 }
 
 // Connection test check names shared by the Foundry checks.

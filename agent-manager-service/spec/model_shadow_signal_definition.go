@@ -17,15 +17,12 @@ import (
 // checks if the ShadowSignalDefinition type satisfies the MappedNullable interface at compile time
 var _ MappedNullable = &ShadowSignalDefinition{}
 
-// ShadowSignalDefinition struct for ShadowSignalDefinition
+// ShadowSignalDefinition One kind of evidence that a platform lists an agent.
 type ShadowSignalDefinition struct {
 	Code     string `json:"code"`
 	Provider string `json:"provider"`
 	Name     string `json:"name"`
-	Group    string `json:"group"`
-	Tier     string `json:"tier"`
-	Weight   int32  `json:"weight"`
-	// The exact condition, in the provider's official field names.
+	// The listing call and the exact condition, in the platform's official field names.
 	Condition string `json:"condition"`
 }
 
@@ -33,14 +30,11 @@ type ShadowSignalDefinition struct {
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewShadowSignalDefinition(code string, provider string, name string, group string, tier string, weight int32, condition string) *ShadowSignalDefinition {
+func NewShadowSignalDefinition(code string, provider string, name string, condition string) *ShadowSignalDefinition {
 	this := ShadowSignalDefinition{}
 	this.Code = code
 	this.Provider = provider
 	this.Name = name
-	this.Group = group
-	this.Tier = tier
-	this.Weight = weight
 	this.Condition = condition
 	return &this
 }
@@ -125,78 +119,6 @@ func (o *ShadowSignalDefinition) SetName(v string) {
 	o.Name = v
 }
 
-// GetGroup returns the Group field value
-func (o *ShadowSignalDefinition) GetGroup() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.Group
-}
-
-// GetGroupOk returns a tuple with the Group field value
-// and a boolean to check if the value has been set.
-func (o *ShadowSignalDefinition) GetGroupOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Group, true
-}
-
-// SetGroup sets field value
-func (o *ShadowSignalDefinition) SetGroup(v string) {
-	o.Group = v
-}
-
-// GetTier returns the Tier field value
-func (o *ShadowSignalDefinition) GetTier() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.Tier
-}
-
-// GetTierOk returns a tuple with the Tier field value
-// and a boolean to check if the value has been set.
-func (o *ShadowSignalDefinition) GetTierOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Tier, true
-}
-
-// SetTier sets field value
-func (o *ShadowSignalDefinition) SetTier(v string) {
-	o.Tier = v
-}
-
-// GetWeight returns the Weight field value
-func (o *ShadowSignalDefinition) GetWeight() int32 {
-	if o == nil {
-		var ret int32
-		return ret
-	}
-
-	return o.Weight
-}
-
-// GetWeightOk returns a tuple with the Weight field value
-// and a boolean to check if the value has been set.
-func (o *ShadowSignalDefinition) GetWeightOk() (*int32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Weight, true
-}
-
-// SetWeight sets field value
-func (o *ShadowSignalDefinition) SetWeight(v int32) {
-	o.Weight = v
-}
-
 // GetCondition returns the Condition field value
 func (o *ShadowSignalDefinition) GetCondition() string {
 	if o == nil {
@@ -234,9 +156,6 @@ func (o ShadowSignalDefinition) ToMap() (map[string]interface{}, error) {
 	toSerialize["code"] = o.Code
 	toSerialize["provider"] = o.Provider
 	toSerialize["name"] = o.Name
-	toSerialize["group"] = o.Group
-	toSerialize["tier"] = o.Tier
-	toSerialize["weight"] = o.Weight
 	toSerialize["condition"] = o.Condition
 	return toSerialize, nil
 }

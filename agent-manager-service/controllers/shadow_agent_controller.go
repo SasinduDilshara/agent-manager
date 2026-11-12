@@ -21,7 +21,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -43,8 +42,8 @@ const (
 	PathParamShadowFindingID    = "findingId"
 )
 
-// ShadowAgentController serves Shadow Agent Discovery: provider connections,
-// scans, findings, onboarding and credential retirement.
+// ShadowAgentController serves Shadow Agent Discovery: platform connections,
+// scans, and the unregistered agents they found.
 type ShadowAgentController interface {
 	ListProviders(w http.ResponseWriter, r *http.Request)
 	GetSummary(w http.ResponseWriter, r *http.Request)
@@ -57,11 +56,12 @@ type ShadowAgentController interface {
 	ListScans(w http.ResponseWriter, r *http.Request)
 	CreateScan(w http.ResponseWriter, r *http.Request)
 	GetScan(w http.ResponseWriter, r *http.Request)
+	ClearScans(w http.ResponseWriter, r *http.Request)
 	ListFindings(w http.ResponseWriter, r *http.Request)
 	GetFinding(w http.ResponseWriter, r *http.Request)
 	UpdateFinding(w http.ResponseWriter, r *http.Request)
-	OnboardFinding(w http.ResponseWriter, r *http.Request)
-	ConfirmRetirement(w http.ResponseWriter, r *http.Request)
+	DeleteFinding(w http.ResponseWriter, r *http.Request)
+	DeleteFindings(w http.ResponseWriter, r *http.Request)
 }
 
 type shadowAgentController struct {
@@ -78,14 +78,6 @@ func (c *shadowAgentController) ListProviders(w http.ResponseWriter, _ *http.Req
 	resp := spec.ShadowProviderListResponse{
 		Providers: make([]spec.ShadowProviderSpec, 0, len(providers)),
 		Signals:   []spec.ShadowSignalDefinition{},
-		Scoring: spec.ShadowScoringRules{
-			AgentThreshold:            sa.AgentThreshold,
-			PossibleAgentThreshold:    sa.PossibleAgentThreshold,
-			MaxScore:                  sa.MaxScore,
-			RetirementObservationDays: services.ShadowRetirementObservationDays,
-			MaxLookbackDays:           services.ShadowMaxLookbackDays,
-			DefaultLookbackDays:       services.ShadowDefaultLookbackDays,
-		},
 	}
 	for _, p := range providers {
 		ps := spec.ShadowProviderSpec{
@@ -160,8 +152,7 @@ func (c *shadowAgentController) ListProviders(w http.ResponseWriter, _ *http.Req
 	}
 	for _, d := range sa.Defs() {
 		resp.Signals = append(resp.Signals, spec.ShadowSignalDefinition{
-			Code: d.Code, Provider: d.Provider, Name: d.Name, Group: d.Group, Tier: d.Tier,
-			Weight: int32(d.Weight), Condition: d.Condition, //nolint:gosec // weights are 0..100
+			Code: d.Code, Provider: d.Provider, Name: d.Name, Condition: d.Condition,
 		})
 	}
 	utils.WriteSuccessResponse(w, http.StatusOK, resp)
@@ -175,7 +166,6 @@ func (c *shadowAgentController) GetSummary(w http.ResponseWriter, r *http.Reques
 	}
 	resp := spec.ShadowAgentSummary{
 		TotalFindings: int32(sum.Total), //nolint:gosec // bounded by row counts
-		ByVerdict:     toInt32Map(sum.ByVerdict),
 		ByProvider:    toInt32Map(sum.ByProvider),
 		ByStatus:      toInt32Map(sum.ByStatus),
 		Connections:   int32(sum.Connections), //nolint:gosec // bounded by the per-org limit
@@ -339,11 +329,7 @@ func (c *shadowAgentController) CreateScan(w http.ResponseWriter, r *http.Reques
 		}
 		ids = append(ids, id)
 	}
-	lookback := 0
-	if req.LookbackDays != nil {
-		lookback = int(*req.LookbackDays)
-	}
-	scan, err := c.svc.CreateScan(r.Context(), middleware.OUIDFromRequest(r), ids, lookback)
+	scan, err := c.svc.CreateScan(r.Context(), middleware.OUIDFromRequest(r), ids)
 	if err != nil {
 		writeShadowError(w, r, err, "Failed to start the scan")
 		return
@@ -365,12 +351,23 @@ func (c *shadowAgentController) GetScan(w http.ResponseWriter, r *http.Request) 
 	utils.WriteSuccessResponse(w, http.StatusOK, toShadowScanResponse(scan))
 }
 
+// ClearScans deletes the org's finished scans. A queued or running scan is
+// kept, and findings are not changed.
+func (c *shadowAgentController) ClearScans(w http.ResponseWriter, r *http.Request) {
+	n, err := c.svc.ClearScans(r.Context(), middleware.OUIDFromRequest(r))
+	if err != nil {
+		writeShadowError(w, r, err, "Failed to clear the scans")
+		return
+	}
+	utils.WriteSuccessResponse(w, http.StatusOK, spec.ShadowScanClearResponse{Deleted: int32(n)}) //nolint:gosec // bounded by row counts
+}
+
 // ---- findings ----
 
 func shadowFindingID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue(PathParamShadowFindingID))
 	if err != nil {
-		utils.WriteErrorResponse(w, http.StatusNotFound, "Finding not found")
+		utils.WriteErrorResponse(w, http.StatusNotFound, "Agent not found")
 		return uuid.Nil, false
 	}
 	return id, true
@@ -379,8 +376,7 @@ func shadowFindingID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 func (c *shadowAgentController) ListFindings(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := repositories.ShadowFindingFilter{
-		Provider: q.Get("provider"), Verdict: q.Get("verdict"), Status: q.Get("status"), Kind: q.Get("kind"),
-		Search: q.Get("search"), Limit: 50,
+		Provider: q.Get("provider"), Status: q.Get("status"), Search: q.Get("search"), Limit: 50,
 	}
 	if v := q.Get("connectionId"); v != "" {
 		id, err := uuid.Parse(v)
@@ -410,7 +406,7 @@ func (c *shadowAgentController) ListFindings(w http.ResponseWriter, r *http.Requ
 	}
 	rows, total, err := c.svc.ListFindings(r.Context(), middleware.OUIDFromRequest(r), f)
 	if err != nil {
-		writeShadowError(w, r, err, "Failed to list findings")
+		writeShadowError(w, r, err, "Failed to list the agents")
 		return
 	}
 	resp := spec.ShadowFindingListResponse{
@@ -432,7 +428,7 @@ func (c *shadowAgentController) GetFinding(w http.ResponseWriter, r *http.Reques
 	}
 	v, err := c.svc.GetFinding(r.Context(), middleware.OUIDFromRequest(r), id)
 	if err != nil {
-		writeShadowError(w, r, err, "Failed to get the finding")
+		writeShadowError(w, r, err, "Failed to get the agent")
 		return
 	}
 	utils.WriteSuccessResponse(w, http.StatusOK, toShadowFindingDetail(v))
@@ -450,41 +446,33 @@ func (c *shadowAgentController) UpdateFinding(w http.ResponseWriter, r *http.Req
 	}
 	v, err := c.svc.UpdateFindingStatus(r.Context(), middleware.OUIDFromRequest(r), id, req.Status)
 	if err != nil {
-		writeShadowError(w, r, err, "Failed to update the finding")
+		writeShadowError(w, r, err, "Failed to update the agent")
 		return
 	}
 	utils.WriteSuccessResponse(w, http.StatusOK, toShadowFindingDetail(v))
 }
 
-func (c *shadowAgentController) OnboardFinding(w http.ResponseWriter, r *http.Request) {
+// DeleteFinding deletes an agent on every connection that found it.
+func (c *shadowAgentController) DeleteFinding(w http.ResponseWriter, r *http.Request) {
 	id, ok := shadowFindingID(w, r)
 	if !ok {
 		return
 	}
-	var req spec.ShadowOnboardingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		utils.WriteErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+	if err := c.svc.DeleteFinding(r.Context(), middleware.OUIDFromRequest(r), id); err != nil {
+		writeShadowError(w, r, err, "Failed to delete the agent")
 		return
 	}
-	v, err := c.svc.Onboard(r.Context(), middleware.OUIDFromRequest(r), id, req.ProjectName, req.AgentName)
-	if err != nil {
-		writeShadowError(w, r, err, "Failed to onboard the finding")
-		return
-	}
-	utils.WriteSuccessResponse(w, http.StatusOK, toShadowFindingDetail(v))
+	w.WriteHeader(http.StatusNoContent)
 }
 
-func (c *shadowAgentController) ConfirmRetirement(w http.ResponseWriter, r *http.Request) {
-	id, ok := shadowFindingID(w, r)
-	if !ok {
-		return
-	}
-	v, err := c.svc.ConfirmRetirement(r.Context(), middleware.OUIDFromRequest(r), id)
+// DeleteFindings deletes every agent of the org. Platforms and scans are kept.
+func (c *shadowAgentController) DeleteFindings(w http.ResponseWriter, r *http.Request) {
+	n, err := c.svc.DeleteFindings(r.Context(), middleware.OUIDFromRequest(r))
 	if err != nil {
-		writeShadowError(w, r, err, "Failed to record the retirement")
+		writeShadowError(w, r, err, "Failed to delete the agents")
 		return
 	}
-	utils.WriteSuccessResponse(w, http.StatusOK, toShadowFindingDetail(v))
+	utils.WriteSuccessResponse(w, http.StatusOK, spec.ShadowFindingClearResponse{Deleted: int32(n)}) //nolint:gosec // bounded by row counts
 }
 
 // ---- errors ----
@@ -496,21 +484,13 @@ func writeShadowError(w http.ResponseWriter, r *http.Request, err error, fallbac
 	case errors.Is(err, utils.ErrShadowScanNotFound):
 		utils.WriteErrorResponse(w, http.StatusNotFound, "Scan not found")
 	case errors.Is(err, utils.ErrShadowFindingNotFound):
-		utils.WriteErrorResponse(w, http.StatusNotFound, "Finding not found")
-	case errors.Is(err, utils.ErrProjectNotFound):
-		utils.WriteErrorResponse(w, http.StatusNotFound, "Project not found")
-	case errors.Is(err, utils.ErrAgentNotFound):
 		utils.WriteErrorResponse(w, http.StatusNotFound, "Agent not found")
 	case errors.Is(err, utils.ErrShadowConnectionNameTaken):
 		utils.WriteErrorResponse(w, http.StatusConflict, "A connection with this name already exists")
 	case errors.Is(err, utils.ErrShadowScanInProgress):
 		utils.WriteErrorResponse(w, http.StatusConflict, "A scan is already queued or running")
-	case errors.Is(err, utils.ErrShadowAlreadyOnboarded):
-		utils.WriteErrorResponse(w, http.StatusConflict, "The finding is already linked to an agent")
-	case errors.Is(err, utils.ErrShadowNotOnboarded), errors.Is(err, utils.ErrConflict):
-		utils.WriteErrorResponse(w, http.StatusConflict, err.Error())
 	case errors.Is(err, utils.ErrShadowNoConnections):
-		utils.WriteErrorResponse(w, http.StatusBadRequest, "Connect a provider before running a scan")
+		utils.WriteErrorResponse(w, http.StatusBadRequest, "Add a platform before running a scan")
 	case errors.Is(err, utils.ErrInvalidInput):
 		utils.WriteErrorResponse(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, audit.ErrRecorderUnavailable):
@@ -565,7 +545,7 @@ func toShadowConnectionTest(t models.ShadowConnectionTestInfo) spec.ShadowConnec
 
 func toShadowScanResponse(s *models.ShadowScan) spec.ShadowScanResponse {
 	resp := spec.ShadowScanResponse{
-		Id: s.ID.String(), Status: s.Status, LookbackDays: int32(s.LookbackDays), //nolint:gosec // 1..90
+		Id: s.ID.String(), Status: s.Status,
 		ConnectionIds: s.ConnectionIDs, Results: make([]spec.ShadowScanConnectionResult, 0, len(s.Results)),
 		FindingsCount: int32(s.FindingsCount), //nolint:gosec // bounded by row counts
 		RequestedBy:   s.RequestedBy, StartedAt: s.StartedAt, FinishedAt: s.FinishedAt, CreatedAt: s.CreatedAt,
@@ -600,14 +580,18 @@ func toShadowOwnerHint(h models.ShadowOwnerHint) spec.ShadowOwnerHint {
 
 func toShadowFindingSummary(row *repositories.ShadowFindingRow) spec.ShadowFindingSummary {
 	f := row.ShadowFinding
+	foundBy := make([]spec.ShadowFindingSource, 0, len(row.FoundBy))
+	for _, src := range row.FoundBy {
+		foundBy = append(foundBy, spec.ShadowFindingSource{
+			FindingId: src.FindingID, ConnectionId: src.ConnectionID, ConnectionName: src.ConnectionName, Present: src.Present,
+		})
+	}
 	return spec.ShadowFindingSummary{
 		Id: f.ID.String(), ConnectionId: f.ConnectionID.String(), ConnectionName: row.ConnectionName,
 		Provider: f.Provider, Kind: f.Kind, ExternalId: f.ExternalID, DisplayName: f.DisplayName,
-		Scope: f.Scope, State: f.State, Score: int32(f.Score), Verdict: f.Verdict, Status: f.Status, //nolint:gosec // 0..100
+		Scope: f.Scope, State: f.State, Status: f.Status,
 		OwnerHint: toShadowOwnerHint(f.OwnerHint), ProviderCreatedAt: f.ProviderCreatedAt,
-		FirstUsedAt: f.FirstUsedAt, LastUsedAt: f.LastUsedAt, FirstSeenAt: f.FirstSeenAt, LastSeenAt: f.LastSeenAt,
-		LinkedProject: f.LinkedProject, LinkedAgent: f.LinkedAgent, RetirementState: f.RetirementState,
-		RequestsInWindow: row.Requests,
+		FirstSeenAt: f.FirstSeenAt, LastSeenAt: f.LastSeenAt, Present: f.Present, FoundBy: foundBy,
 	}
 }
 
@@ -617,17 +601,10 @@ func toShadowFindingDetail(v *services.ShadowFindingView) spec.ShadowFindingDeta
 	out := spec.ShadowFindingDetail{
 		Id: sum.Id, ConnectionId: sum.ConnectionId, ConnectionName: sum.ConnectionName, Provider: sum.Provider,
 		Kind: sum.Kind, ExternalId: sum.ExternalId, DisplayName: sum.DisplayName, Scope: sum.Scope, State: sum.State,
-		Score: sum.Score, Verdict: sum.Verdict, Status: sum.Status, OwnerHint: sum.OwnerHint,
-		ProviderCreatedAt: sum.ProviderCreatedAt, FirstUsedAt: sum.FirstUsedAt, LastUsedAt: sum.LastUsedAt,
-		FirstSeenAt: sum.FirstSeenAt, LastSeenAt: sum.LastSeenAt, LinkedProject: sum.LinkedProject,
-		LinkedAgent: sum.LinkedAgent, RetirementState: v.Retirement.State, RequestsInWindow: sum.RequestsInWindow,
-		Attributes: f.Attributes, Related: make([]spec.ShadowFindingRelation, 0, len(v.Related)),
-		Signals: make([]spec.ShadowFindingSignal, 0, len(v.Signals)), Keys: make([]spec.ShadowAPIKey, 0, len(v.Keys)),
-		Usage: make([]spec.ShadowUsageDay, 0, len(v.Usage)), Retirement: toShadowRetirement(v.Retirement),
-		OnboardedAt: f.OnboardedAt, OnboardedBy: optionalString(f.OnboardedBy),
-	}
-	if out.Attributes == nil {
-		out.Attributes = map[string]interface{}{}
+		Status: sum.Status, OwnerHint: sum.OwnerHint, ProviderCreatedAt: sum.ProviderCreatedAt,
+		FirstSeenAt: sum.FirstSeenAt, LastSeenAt: sum.LastSeenAt, Present: sum.Present, FoundBy: sum.FoundBy,
+		Attributes: sa.AllowedAttributes(f.Attributes), Related: make([]spec.ShadowFindingRelation, 0, len(v.Related)),
+		Signals: make([]spec.ShadowFindingSignal, 0, len(v.Signals)),
 	}
 	for _, rel := range v.Related {
 		out.Related = append(out.Related, spec.ShadowFindingRelation{
@@ -636,43 +613,19 @@ func toShadowFindingDetail(v *services.ShadowFindingView) spec.ShadowFindingDeta
 		})
 	}
 	for _, sig := range v.Signals {
-		d, _ := sa.Def(sig.Code)
-		counted := v.Counted[sig.ID]
+		// The name and condition come from the catalog, so they always say
+		// what this version of Agent Manager checks.
+		d, ok := sa.Def(sig.Code)
+		if !ok {
+			continue
+		}
 		observed := sig.Observed
 		if observed == nil {
 			observed = map[string]any{}
 		}
 		out.Signals = append(out.Signals, spec.ShadowFindingSignal{
-			Code: sig.Code, Name: d.Name, Group: d.Group, Tier: sig.Tier, Weight: int32(sig.Weight), //nolint:gosec // 0..100
-			Counted: &counted, Source: sig.Source, Condition: sig.Condition, Observed: observed, DetectedAt: sig.DetectedAt,
-		})
-	}
-	for _, k := range v.Keys {
-		lastSeen := k.LastSeenAt
-		out.Keys = append(out.Keys, spec.ShadowAPIKey{
-			KeyId: k.KeyID, Name: k.Name, RedactedHint: k.RedactedHint, Status: k.Status, Scope: k.Scope,
-			OwnerHint: toShadowOwnerHint(k.OwnerHint), CreatedAt: k.ProviderCreatedAt, LastUsedAt: k.LastUsedAt,
-			LastSeenAt: &lastSeen, Present: k.Present,
-		})
-	}
-	for _, u := range v.Usage {
-		out.Usage = append(out.Usage, spec.ShadowUsageDay{
-			Day: u.Day.Format(time.DateOnly), KeyId: u.KeyID, Model: u.Model, Requests: u.Requests,
-			InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CostAmount: u.CostAmount, Currency: optionalString(u.Currency),
+			Code: sig.Code, Name: d.Name, Source: sig.Source, Condition: d.Condition, Observed: observed, DetectedAt: sig.DetectedAt,
 		})
 	}
 	return out
-}
-
-func toShadowRetirement(r services.ShadowRetirementView) spec.ShadowRetirement {
-	steps := r.Guidance.Steps
-	if steps == nil {
-		steps = []string{}
-	}
-	return spec.ShadowRetirement{
-		State: r.State, ObservationDays: int32(r.ObservationDays), ZeroUsageDays: int32(r.ZeroUsageDays), //nolint:gosec // small
-		LastDirectUseAt: r.LastDirectUseAt, DataThrough: r.DataThrough, MarkedAt: r.MarkedAt,
-		MarkedBy: optionalString(r.MarkedBy), VerifiedAt: r.VerifiedAt, Verification: optionalString(r.Verification),
-		Guidance: spec.ShadowRetirementGuidance{Title: r.Guidance.Title, Steps: steps, DocsUrl: optionalString(r.Guidance.DocsURL)},
-	}
 }

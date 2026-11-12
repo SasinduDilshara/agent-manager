@@ -16,8 +16,9 @@
  * under the License.
  */
 
-// Shadow Agent Discovery (Method 1: provider and cloud admin APIs). These
-// mirror the agent-manager-service OpenAPI schemas named Shadow*.
+// Shadow Agent Discovery: the agents AI platforms list, outside Agent
+// Manager. These mirror the agent-manager-service OpenAPI schemas named
+// Shadow*; the API calls a platform a "provider".
 
 export type ShadowProvider =
   | "openai"
@@ -29,25 +30,10 @@ export type ShadowProvider =
   | "github"
   | "azure_devops";
 
-export type ShadowFindingKind =
-  | "platform_agent"
-  | "runtime"
-  | "api_key"
-  | "principal"
-  | "tool_infrastructure"
-  /** An OpenAI project or Anthropic workspace holding evidence not tied to one key. */
-  | "project";
+/** runtime: an AgentCore runtime or a Google Agent Runtime engine; platform_agent: any other agent object. */
+export type ShadowFindingKind = "platform_agent" | "runtime";
 
-export type ShadowVerdict = "agent" | "possible_agent" | "llm_consumer" | "tool_infrastructure";
-
-export type ShadowFindingStatus = "new" | "reviewed" | "dismissed" | "onboarded" | "retired";
-
-export type ShadowRetirementState =
-  | ""
-  | "monitoring"
-  | "ready_to_retire"
-  | "pending_verification"
-  | "retired";
+export type ShadowFindingStatus = "new" | "reviewed" | "dismissed";
 
 export type ShadowScanStatus = "queued" | "running" | "succeeded" | "partial" | "failed";
 
@@ -62,8 +48,6 @@ export type ShadowCallOutcome =
   | "failed";
 
 export type ShadowFieldKind = "text" | "secret" | "textarea" | "list" | "checkbox" | "key_map";
-
-export type ShadowSignalTier = "definitive" | "high" | "medium" | "low" | "info";
 
 export interface ShadowEndpointSpec {
   key: string;
@@ -104,7 +88,7 @@ export interface ShadowCredentialChoice {
   message: string;
 }
 
-/** One thing a scan can analyze, and the fields or options it needs. */
+/** One thing a scan lists, and the fields or options it needs. */
 export interface ShadowCapabilitySpec {
   key: string;
   title: string;
@@ -139,29 +123,18 @@ export interface ShadowProviderSpec {
   capabilities: ShadowCapabilitySpec[];
 }
 
+/** One kind of evidence that a platform lists an agent. */
 export interface ShadowSignalDefinition {
   code: string;
   provider: string;
   name: string;
-  group: string;
-  tier: ShadowSignalTier;
-  weight: number;
+  /** The listing call and the exact condition, in the platform's field names. */
   condition: string;
-}
-
-export interface ShadowScoringRules {
-  agentThreshold: number;
-  possibleAgentThreshold: number;
-  maxScore: number;
-  retirementObservationDays: number;
-  maxLookbackDays: number;
-  defaultLookbackDays: number;
 }
 
 export interface ShadowProviderListResponse {
   providers: ShadowProviderSpec[];
   signals: ShadowSignalDefinition[];
-  scoring: ShadowScoringRules;
 }
 
 export type ShadowSettingValue = string | boolean | string[] | Record<string, string>;
@@ -224,14 +197,13 @@ export interface ShadowScanConnectionResult {
 }
 
 export interface ShadowScanRequest {
+  /** The connections to scan; every connection when empty. */
   connectionIds?: string[];
-  lookbackDays?: number;
 }
 
 export interface ShadowScanResponse {
   id: string;
   status: ShadowScanStatus;
-  lookbackDays: number;
   connectionIds: string[];
   results: ShadowScanConnectionResult[];
   findingsCount: number;
@@ -245,9 +217,19 @@ export interface ShadowScanListResponse {
   scans: ShadowScanResponse[];
 }
 
+/** DELETE .../scans: how many finished scans were deleted. */
+export interface ShadowScanClearResponse {
+  deleted: number;
+}
+
+/** DELETE .../findings: how many agents were deleted. */
+export interface ShadowFindingClearResponse {
+  deleted: number;
+}
+
 export interface ShadowAgentSummary {
+  /** The agents found that their platforms still list, each agent once. */
   totalFindings: number;
-  byVerdict: Record<string, number>;
   byProvider: Record<string, number>;
   byStatus: Record<string, number>;
   connections: number;
@@ -263,29 +245,40 @@ export interface ShadowOwnerHint {
   createdAt?: string;
 }
 
+/** One connection that found an agent: the agent's finding in that connection. */
+export interface ShadowFindingSource {
+  findingId: string;
+  connectionId: string;
+  connectionName: string;
+  present: boolean;
+}
+
+/**
+ * One agent a platform lists, shown once however many connections found it:
+ * its finding in the connection that saw it last, and every connection in foundBy.
+ */
 export interface ShadowFindingSummary {
   id: string;
   connectionId: string;
   connectionName: string;
   provider: ShadowProvider;
   kind: ShadowFindingKind;
+  /** The platform's own ID of the agent (agent ID, ARN or resource name). */
   externalId: string;
   displayName: string;
+  /** Where the agent lives at the platform (project, workspace, region or location). */
   scope: string;
+  /** The agent's state as its platform reports it. */
   state: string;
-  score: number;
-  verdict: ShadowVerdict;
   status: ShadowFindingStatus;
+  /** Who created the agent, only when its platform's listing says so. */
   ownerHint: ShadowOwnerHint;
   providerCreatedAt?: string;
-  firstUsedAt?: string;
-  lastUsedAt?: string;
   firstSeenAt: string;
   lastSeenAt: string;
-  linkedProject: string;
-  linkedAgent: string;
-  retirementState: ShadowRetirementState;
-  requestsInWindow: number;
+  /** False once a complete listing of its connection no longer returns the agent. */
+  present: boolean;
+  foundBy: ShadowFindingSource[];
 }
 
 export interface ShadowFindingListResponse {
@@ -296,53 +289,25 @@ export interface ShadowFindingListResponse {
 }
 
 export interface ShadowFindingListQuery {
+  /** A platform. */
   provider?: string;
-  verdict?: string;
   status?: string;
-  kind?: string;
   connectionId?: string;
-  /** Keep the findings this scan saw. */
+  /** Keep the agents this scan found; without it, only the agents still listed. */
   scanId?: string;
   search?: string;
   limit?: number;
   offset?: number;
 }
 
+/** Evidence that a platform lists the agent. */
 export interface ShadowFindingSignal {
   code: string;
   name: string;
-  group: string;
-  tier: ShadowSignalTier;
-  weight: number;
-  counted?: boolean;
   source: string;
   condition: string;
   observed: Record<string, unknown>;
   detectedAt: string;
-}
-
-export interface ShadowAPIKey {
-  keyId: string;
-  name: string;
-  redactedHint: string;
-  status: string;
-  scope: string;
-  ownerHint: ShadowOwnerHint;
-  createdAt?: string;
-  lastUsedAt?: string;
-  lastSeenAt?: string;
-  present: boolean;
-}
-
-export interface ShadowUsageDay {
-  day: string;
-  keyId: string;
-  model: string;
-  requests: number;
-  inputTokens: number;
-  outputTokens: number;
-  costAmount?: number;
-  currency?: string;
 }
 
 export interface ShadowFindingRelation {
@@ -353,41 +318,14 @@ export interface ShadowFindingRelation {
   provider?: string;
 }
 
-export interface ShadowRetirementGuidance {
-  title: string;
-  steps: string[];
-  docsUrl?: string;
-}
-
-export interface ShadowRetirement {
-  state: ShadowRetirementState;
-  observationDays: number;
-  zeroUsageDays: number;
-  lastDirectUseAt?: string;
-  dataThrough?: string;
-  markedAt?: string;
-  markedBy?: string;
-  verifiedAt?: string;
-  verification?: string;
-  guidance: ShadowRetirementGuidance;
-}
-
 export interface ShadowFindingDetail extends ShadowFindingSummary {
+  /** What the platform's agent listing reports (allow-listed fields only). */
   attributes: Record<string, unknown>;
+  /** Agents on other platforms that may be the same agent. */
   related: ShadowFindingRelation[];
   signals: ShadowFindingSignal[];
-  keys: ShadowAPIKey[];
-  usage: ShadowUsageDay[];
-  retirement: ShadowRetirement;
-  onboardedAt?: string;
-  onboardedBy?: string;
 }
 
 export interface ShadowFindingUpdateRequest {
   status: "new" | "reviewed" | "dismissed";
-}
-
-export interface ShadowOnboardingRequest {
-  projectName: string;
-  agentName: string;
 }

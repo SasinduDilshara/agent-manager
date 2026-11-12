@@ -22,7 +22,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Shadow Agent Discovery providers (Method 1: provider and cloud admin APIs).
+// Shadow Agent Discovery platforms (the API calls them providers). The agent
+// platforms are scanned through their agent listing APIs.
 const (
 	ShadowProviderOpenAI    = "openai"
 	ShadowProviderAnthropic = "anthropic"
@@ -35,46 +36,22 @@ const (
 	ShadowProviderAzureDevOps = "azure_devops"
 )
 
-// ShadowProviders lists every supported provider, in display order.
+// ShadowProviders lists every supported platform, in display order.
 var ShadowProviders = []string{
 	ShadowProviderOpenAI, ShadowProviderAnthropic,
 	ShadowProviderBedrock, ShadowProviderGoogle, ShadowProviderFoundry,
 	ShadowProviderGitHub, ShadowProviderAzureDevOps,
 }
 
-// Finding kinds: what a finding stands for at the provider.
+// Finding kinds: what an agent is at its platform.
 const (
-	// ShadowKindPlatformAgent is an agent object hosted by the provider
-	// (OpenAI agent, Anthropic Managed Agent, Bedrock classic agent,
-	// Foundry agent, Google Agent Registry agent).
+	// ShadowKindPlatformAgent is an agent object the platform lists (OpenAI
+	// agent, Anthropic Managed Agent, Bedrock classic agent or Agent Registry
+	// agent record, Foundry agent, Google Agent Registry agent).
 	ShadowKindPlatformAgent = "platform_agent"
 	// ShadowKindRuntime is an AgentCore runtime or a Google Agent Runtime
-	// (reasoning engine).
+	// engine (reasoning engine).
 	ShadowKindRuntime = "runtime"
-	// ShadowKindAPIKey is a provider API key and the workload behind it.
-	ShadowKindAPIKey = "api_key"
-	// ShadowKindPrincipal is a cloud identity (an IAM user or role) calling
-	// models directly.
-	ShadowKindPrincipal = "principal"
-	// ShadowKindToolInfra is tool infrastructure agents use (an MCP gateway
-	// or a registered MCP server). It is evidence, never an agent itself.
-	ShadowKindToolInfra = "tool_infrastructure"
-	// ShadowKindProject is an OpenAI project or an Anthropic workspace. It
-	// holds evidence read with a project or workspace key (tool calls in
-	// stored completions or batches) that cannot be tied to one API key:
-	// without the Admin key the keys are unknown, and with it more than one
-	// key of the project had usage. It has no credential of its own to retire.
-	ShadowKindProject = "project"
-)
-
-// Verdicts, from the score.
-const (
-	ShadowVerdictAgent         = "agent"
-	ShadowVerdictPossibleAgent = "possible_agent"
-	ShadowVerdictLLMConsumer   = "llm_consumer"
-	// ShadowVerdictToolInfra marks tool infrastructure (MCP gateways and
-	// registered MCP servers): evidence agents exist, never an agent itself.
-	ShadowVerdictToolInfra = "tool_infrastructure"
 )
 
 // Finding review statuses.
@@ -82,36 +59,6 @@ const (
 	ShadowStatusNew       = "new"
 	ShadowStatusReviewed  = "reviewed"
 	ShadowStatusDismissed = "dismissed"
-	ShadowStatusOnboarded = "onboarded"
-	ShadowStatusRetired   = "retired"
-)
-
-// Retirement states of the direct provider credential behind an onboarded
-// finding. Agent Manager never revokes anything: it watches the usage and
-// guides the user.
-const (
-	// ShadowRetirementMonitoring: onboarded; waiting for the direct usage to
-	// stay at zero for the observation window.
-	ShadowRetirementMonitoring = "monitoring"
-	// ShadowRetirementReady: no direct usage for the whole window; the user
-	// is guided to revoke the credential.
-	ShadowRetirementReady = "ready_to_retire"
-	// ShadowRetirementPendingVerify: the user says it is revoked; the next
-	// scan checks it.
-	ShadowRetirementPendingVerify = "pending_verification"
-	// ShadowRetirementRetired: a scan confirmed the credential is revoked or
-	// disabled at the provider.
-	ShadowRetirementRetired = "retired"
-)
-
-// Signal tiers and their weights. Weights are fixed and documented in
-// docs/shadow-agent-discovery.md.
-const (
-	ShadowTierDefinitive = "definitive"
-	ShadowTierHigh       = "high"
-	ShadowTierMedium     = "medium"
-	ShadowTierLow        = "low"
-	ShadowTierInfo       = "info"
 )
 
 // Scan statuses.
@@ -135,8 +82,8 @@ const (
 	ShadowCallFailed           = "failed"
 )
 
-// ShadowConnection is one provider account an org scans: the credential and
-// where to reach the provider. The secret is AES-GCM encrypted and never
+// ShadowConnection is one platform account an org scans: the credential and
+// where to reach the platform. The secret is AES-GCM encrypted and never
 // returned by the API.
 type ShadowConnection struct {
 	ID       uuid.UUID              `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
@@ -166,11 +113,6 @@ type ShadowConnectionConfig struct {
 	// {region}, {location} or {account}; the user sees the official values
 	// prefilled and may change them.
 	Endpoints map[string]string `json:"endpoints"`
-
-	// DeepInspection lets the connector read sources that hold prompts or
-	// tool payloads (batches, stored responses, invocation logs, session
-	// events) in memory to derive tool-use signals. Nothing read is stored.
-	DeepInspection bool `json:"deepInspection"`
 
 	// Foundry and Azure DevOps (with UseEntra): the Entra app. Foundry: the
 	// subscriptions to scan.
@@ -224,10 +166,10 @@ type ShadowConnectionConfig struct {
 // plain text only in memory while a connector runs; it is stored encrypted
 // and never returned, logged or audited.
 type ShadowConnectionSecret struct {
-	// APIKey is the OpenAI or Anthropic Admin API key.
-	APIKey string `json:"apiKey,omitempty"`
 	// ScopedKeys maps an OpenAI project ID or an Anthropic workspace ID to a
-	// read-only key for it, for the endpoints an Admin key cannot call.
+	// read-only key for it: each key lists its project's or workspace's agents.
+	// (An Admin API key stored by an earlier version is not decoded, so it is
+	// dropped when the platform is next saved.)
 	ScopedKeys map[string]string `json:"scopedKeys,omitempty"`
 	// ClientSecret is the Entra app's client secret (Foundry, Azure DevOps).
 	ClientSecret string `json:"clientSecret,omitempty"`
@@ -253,8 +195,8 @@ type ShadowConnectionCheck struct {
 	Name    string `json:"name"`
 	Outcome string `json:"outcome"`
 	Message string `json:"message,omitempty"`
-	// Unlocks names the signals this call provides, so a failed check says
-	// what a scan will miss.
+	// Unlocks names the evidence this call provides, so a failed check says
+	// which agents a scan will miss.
 	Unlocks []string `json:"unlocks,omitempty"`
 }
 
@@ -263,7 +205,6 @@ type ShadowScan struct {
 	ID            uuid.UUID                    `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
 	OUID          string                       `gorm:"column:ou_id;not null"`
 	Status        string                       `gorm:"column:status;not null"`
-	LookbackDays  int                          `gorm:"column:lookback_days;not null"`
 	ConnectionIDs []string                     `gorm:"column:connection_ids;type:jsonb;serializer:json;not null"`
 	Results       []ShadowScanConnectionResult `gorm:"column:results;type:jsonb;serializer:json;not null"`
 	FindingsCount int                          `gorm:"column:findings_count;not null"`
@@ -298,8 +239,9 @@ type ShadowScanCallResult struct {
 	Items   int    `json:"items"`
 }
 
-// ShadowOwnerHint is the minimised personal data kept to say who is behind a
-// finding: no more than a name, an email and a username or principal.
+// ShadowOwnerHint is the minimised personal data kept to say who created an
+// agent, only when the platform's agent listing says so: no more than a
+// name, an email and a username or principal.
 type ShadowOwnerHint struct {
 	Name      string     `json:"name,omitempty"`
 	Email     string     `json:"email,omitempty"`
@@ -309,67 +251,57 @@ type ShadowOwnerHint struct {
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 }
 
-// ShadowFindingRelation links a finding to another one about the same or a
-// connected workload.
+// ShadowFindingRelation links a finding to another one that may be the same
+// agent.
 type ShadowFindingRelation struct {
 	FindingID string `json:"findingId"`
-	// Relation is "uses_deployment", "used_by_agent", "possible_duplicate" or
-	// "registered_as".
+	// Relation is "possible_duplicate".
 	Relation string `json:"relation"`
 	Reason   string `json:"reason,omitempty"`
-	// Source is "correlation" for relations found across connections, empty
-	// for those the finding's own connector reported.
+	// Source is "correlation" for relations found across connections.
 	Source string `json:"source,omitempty"`
 }
 
-// ShadowFinding is a potential agent: everything the scans learnt about one
-// workload, its score and verdict, and where it is in onboarding.
+// ShadowFinding is an agent a platform lists, as one connection found it:
+// what the platform reports about it and its review status. The same agent
+// found through two connections is two rows with the same provider, kind
+// and external ID; the API shows them as one agent.
 type ShadowFinding struct {
-	ID                   uuid.UUID               `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
-	OUID                 string                  `gorm:"column:ou_id;not null"`
-	ConnectionID         uuid.UUID               `gorm:"column:connection_id;type:uuid;not null"`
-	Provider             string                  `gorm:"column:provider;not null"`
-	Kind                 string                  `gorm:"column:kind;not null"`
-	ExternalID           string                  `gorm:"column:external_id;not null"`
-	DisplayName          string                  `gorm:"column:display_name;not null"`
-	Scope                string                  `gorm:"column:scope;not null"`
-	State                string                  `gorm:"column:state;not null"`
-	Score                int                     `gorm:"column:score;not null"`
-	Verdict              string                  `gorm:"column:verdict;not null"`
-	Status               string                  `gorm:"column:status;not null"`
-	OwnerHint            ShadowOwnerHint         `gorm:"column:owner_hint;type:jsonb;serializer:json;not null"`
-	Attributes           map[string]any          `gorm:"column:attributes;type:jsonb;serializer:json;not null"`
-	Related              []ShadowFindingRelation `gorm:"column:related;type:jsonb;serializer:json;not null"`
-	ProviderCreatedAt    *time.Time              `gorm:"column:provider_created_at"`
-	FirstUsedAt          *time.Time              `gorm:"column:first_used_at"`
-	LastUsedAt           *time.Time              `gorm:"column:last_used_at"`
-	FirstSeenAt          time.Time               `gorm:"column:first_seen_at;not null"`
-	LastSeenAt           time.Time               `gorm:"column:last_seen_at;not null"`
-	LastScanID           *uuid.UUID              `gorm:"column:last_scan_id;type:uuid"`
-	LinkedProject        string                  `gorm:"column:linked_project;not null"`
-	LinkedAgent          string                  `gorm:"column:linked_agent;not null"`
-	OnboardedAt          *time.Time              `gorm:"column:onboarded_at"`
-	OnboardedBy          string                  `gorm:"column:onboarded_by;not null"`
-	RetirementState      string                  `gorm:"column:retirement_state;not null"`
-	RetirementMarkedAt   *time.Time              `gorm:"column:retirement_marked_at"`
-	RetirementMarkedBy   string                  `gorm:"column:retirement_marked_by;not null"`
-	RetirementVerifiedAt *time.Time              `gorm:"column:retirement_verified_at"`
-	CreatedAt            time.Time               `gorm:"column:created_at;not null;default:NOW()"`
-	UpdatedAt            time.Time               `gorm:"column:updated_at;not null;default:NOW()"`
+	ID                uuid.UUID               `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
+	OUID              string                  `gorm:"column:ou_id;not null"`
+	ConnectionID      uuid.UUID               `gorm:"column:connection_id;type:uuid;not null"`
+	Provider          string                  `gorm:"column:provider;not null"`
+	Kind              string                  `gorm:"column:kind;not null"`
+	ExternalID        string                  `gorm:"column:external_id;not null"`
+	DisplayName       string                  `gorm:"column:display_name;not null"`
+	Scope             string                  `gorm:"column:scope;not null"`
+	State             string                  `gorm:"column:state;not null"`
+	Status            string                  `gorm:"column:status;not null"`
+	OwnerHint         ShadowOwnerHint         `gorm:"column:owner_hint;type:jsonb;serializer:json;not null"`
+	Attributes        map[string]any          `gorm:"column:attributes;type:jsonb;serializer:json;not null"`
+	Related           []ShadowFindingRelation `gorm:"column:related;type:jsonb;serializer:json;not null"`
+	ProviderCreatedAt *time.Time              `gorm:"column:provider_created_at"`
+	FirstSeenAt       time.Time               `gorm:"column:first_seen_at;not null"`
+	LastSeenAt        time.Time               `gorm:"column:last_seen_at;not null"`
+	LastScanID        *uuid.UUID              `gorm:"column:last_scan_id;type:uuid"`
+	// Present is false once a complete listing of its connection no longer
+	// returns the agent: it was deleted at the platform, or is out of the
+	// connection's scope now.
+	Present   bool      `gorm:"column:present;not null"`
+	CreatedAt time.Time `gorm:"column:created_at;not null;default:NOW()"`
+	UpdatedAt time.Time `gorm:"column:updated_at;not null;default:NOW()"`
 }
 
 func (ShadowFinding) TableName() string { return "shadow_findings" }
 
-// ShadowFindingSignal is one piece of evidence on a finding: a signal from
-// the design's signal tables, the call that produced it, and what was
-// observed (counts and flags only).
+// ShadowFindingSignal is one piece of evidence on a finding: the listing
+// that returned the agent, the exact condition, and what was observed
+// (flags and short labels only).
 type ShadowFindingSignal struct {
 	ID         uuid.UUID      `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
 	OUID       string         `gorm:"column:ou_id;not null"`
 	FindingID  uuid.UUID      `gorm:"column:finding_id;type:uuid;not null"`
 	Code       string         `gorm:"column:code;not null"`
-	Tier       string         `gorm:"column:tier;not null"`
-	Weight     int            `gorm:"column:weight;not null"`
 	Source     string         `gorm:"column:source;not null"`
 	Condition  string         `gorm:"column:condition;not null"`
 	Observed   map[string]any `gorm:"column:observed;type:jsonb;serializer:json;not null"`
@@ -378,44 +310,3 @@ type ShadowFindingSignal struct {
 }
 
 func (ShadowFindingSignal) TableName() string { return "shadow_finding_signals" }
-
-// ShadowAPIKey is a provider API key, recorded as the retention rules allow:
-// ID, name, redacted hint, status and timestamps, plus a minimised owner hint.
-type ShadowAPIKey struct {
-	ID                uuid.UUID       `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
-	OUID              string          `gorm:"column:ou_id;not null"`
-	ConnectionID      uuid.UUID       `gorm:"column:connection_id;type:uuid;not null"`
-	FindingID         *uuid.UUID      `gorm:"column:finding_id;type:uuid"`
-	KeyID             string          `gorm:"column:key_id;not null"`
-	Name              string          `gorm:"column:name;not null"`
-	RedactedHint      string          `gorm:"column:redacted_hint;not null"`
-	Status            string          `gorm:"column:status;not null"`
-	Scope             string          `gorm:"column:scope;not null"`
-	OwnerHint         ShadowOwnerHint `gorm:"column:owner_hint;type:jsonb;serializer:json;not null"`
-	ProviderCreatedAt *time.Time      `gorm:"column:provider_created_at"`
-	LastUsedAt        *time.Time      `gorm:"column:last_used_at"`
-	LastSeenAt        time.Time       `gorm:"column:last_seen_at;not null"`
-	// Present is false once a scan's key listing no longer returns the key.
-	Present   bool      `gorm:"column:present;not null"`
-	CreatedAt time.Time `gorm:"column:created_at;not null;default:NOW()"`
-	UpdatedAt time.Time `gorm:"column:updated_at;not null;default:NOW()"`
-}
-
-func (ShadowAPIKey) TableName() string { return "shadow_api_keys" }
-
-// ShadowUsageDaily is one day of usage for a finding, per key and model.
-type ShadowUsageDaily struct {
-	OUID         string    `gorm:"column:ou_id;not null"`
-	FindingID    uuid.UUID `gorm:"column:finding_id;type:uuid;primaryKey"`
-	KeyID        string    `gorm:"column:key_id;primaryKey"`
-	Model        string    `gorm:"column:model;primaryKey"`
-	Day          time.Time `gorm:"column:day;type:date;primaryKey"`
-	Requests     int64     `gorm:"column:requests;not null"`
-	InputTokens  int64     `gorm:"column:input_tokens;not null"`
-	OutputTokens int64     `gorm:"column:output_tokens;not null"`
-	CostAmount   *float64  `gorm:"column:cost_amount"`
-	Currency     string    `gorm:"column:currency;not null"`
-	UpdatedAt    time.Time `gorm:"column:updated_at;not null;default:NOW()"`
-}
-
-func (ShadowUsageDaily) TableName() string { return "shadow_usage_daily" }

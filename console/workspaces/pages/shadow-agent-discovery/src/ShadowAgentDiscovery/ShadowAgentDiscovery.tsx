@@ -33,19 +33,19 @@ import { absoluteRouteMap } from "@agent-management-platform/types";
 import { ConnectionEditor, editConnectionPath } from "./subComponents/ConnectionEditor";
 import { ConnectionsTab } from "./subComponents/ConnectionsTab";
 import { FindingDetail } from "./subComponents/FindingDetail";
-import { OnboardFinding } from "./subComponents/OnboardFinding";
+import { FindingsTab } from "./subComponents/FindingsTab";
 import { OverviewPanel } from "./subComponents/OverviewPanel";
 import { RunScanButton } from "./subComponents/RunScanButton";
 import { ScanFindings } from "./subComponents/ScanFindings";
 import { ScansTab } from "./subComponents/ScansTab";
 import { useShadowAccess } from "./useShadowAccess";
 
-export type ShadowTab = "overview" | "scans" | "connections";
-const TABS: ShadowTab[] = ["overview", "scans", "connections"];
+export type ShadowTab = "overview" | "agents" | "scans" | "platforms";
+const TABS: ShadowTab[] = ["overview", "agents", "scans", "platforms"];
 
 const PAGE_TITLE = "Shadow Agent Discovery";
 const PAGE_DESCRIPTION =
-  "Find agents and LLM workloads that call model providers directly, bypassing Agent Manager, and bring them under governance.";
+  "Find the agents your organization runs on AI platforms outside Agent Manager: the unregistered agents.";
 
 function ShadowOverview({
   orgName,
@@ -59,7 +59,11 @@ function ShadowOverview({
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get("tab") as ShadowTab | null;
   const tab: ShadowTab = requested && TABS.includes(requested) ? requested : "overview";
-  const setTab = (t: ShadowTab) => setSearchParams({ tab: t }, { replace: true });
+  const platform = searchParams.get("platform") ?? "";
+  const setTab = (t: ShadowTab, params: Record<string, string> = {}) =>
+    setSearchParams({ tab: t, ...params }, { replace: true });
+  const openAgents = (provider?: string) =>
+    setTab("agents", provider ? { platform: provider } : {});
   const newConnection = () =>
     navigate(
       generatePath(
@@ -88,8 +92,9 @@ function ShadowOverview({
               allowScrollButtonsMobile
             >
               <Tab value="overview" label="Overview" />
+              <Tab value="agents" label="Unregistered Agents" />
               <Tab value="scans" label="Scans" />
-              <Tab value="connections" label="Connections" />
+              <Tab value="platforms" label="Platforms" />
             </Tabs>
             <Divider />
           </Box>
@@ -100,11 +105,20 @@ function ShadowOverview({
                 canManage={canManage}
                 onConnect={newConnection}
                 onOpenScans={() => setTab("scans")}
-                onOpenConnections={() => setTab("connections")}
+                onOpenPlatforms={() => setTab("platforms")}
+                onOpenAgents={openAgents}
               />
             )}
-            {tab === "scans" && <ScansTab orgName={orgName} />}
-            {tab === "connections" && (
+            {tab === "agents" && (
+              <FindingsTab
+                orgName={orgName}
+                canManage={canManage}
+                provider={platform}
+                onProviderChange={(p) => setTab("agents", p ? { platform: p } : {})}
+              />
+            )}
+            {tab === "scans" && <ScansTab orgName={orgName} canManage={canManage} />}
+            {tab === "platforms" && (
               <ConnectionsTab
                 orgName={orgName}
                 canManage={canManage}
@@ -124,10 +138,9 @@ function ShadowOverview({
 }
 
 /**
- * Shadow Agent Discovery (org level): overview, scans (each with the
- * findings it saw) and provider connections, with the scan findings,
- * finding, onboarding and connection pages below it. Mount it on a "/*"
- * route.
+ * Shadow Agent Discovery (org level): overview, the unregistered agents,
+ * scans (each with the agents it found) and platforms, with the scan,
+ * agent and platform form pages below it. Mount it on a "/*" route.
  */
 export function ShadowAgentDiscovery() {
   const { orgId } = useParams<{ orgId: string }>();
@@ -147,7 +160,7 @@ export function ShadowAgentDiscovery() {
         <StateNotice
           icon={Lock}
           title="You don't have access to Shadow Agent Discovery"
-          description="It shows provider credentials, usage and owners, so it is available to organization administrators."
+          description="It holds platform credentials and shows the agents they reach, so it is available to organization administrators."
         />
       </PageLayout>
     );
@@ -157,21 +170,17 @@ export function ShadowAgentDiscovery() {
       <Route index element={<ShadowOverview orgName={orgId} canManage={access.canManage} />} />
       <Route path="scans/:scanId" element={<ScanFindings orgName={orgId} listPath={listPath} />} />
       <Route
-        path="findings/:findingId"
+        path="agents/:findingId"
         element={<FindingDetail orgName={orgId} canManage={access.canManage} listPath={listPath} />}
       />
       {access.canManage && (
         <>
           <Route
-            path="findings/:findingId/onboard"
-            element={<OnboardFinding orgName={orgId} listPath={listPath} />}
-          />
-          <Route
-            path="connections/new"
+            path="platforms/new"
             element={<ConnectionEditor orgName={orgId} listPath={listPath} />}
           />
           <Route
-            path="connections/:connectionId/edit"
+            path="platforms/:connectionId/edit"
             element={<ConnectionEditor orgName={orgId} listPath={listPath} />}
           />
         </>

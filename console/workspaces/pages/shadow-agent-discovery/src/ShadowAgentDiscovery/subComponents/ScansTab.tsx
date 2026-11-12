@@ -27,19 +27,24 @@ import {
   Stack,
   Typography,
 } from "@wso2/oxygen-ui";
-import { History, X } from "@wso2/oxygen-ui-icons-react";
+import { History, Trash2, X } from "@wso2/oxygen-ui-icons-react";
 import { generatePath, useLocation, useNavigate } from "react-router-dom";
 import { returnToState } from "@agent-management-platform/views";
-import { useShadowScans } from "@agent-management-platform/api-client";
+import {
+  isShadowScanActive,
+  useClearShadowScans,
+  useShadowScans,
+} from "@agent-management-platform/api-client";
 import {
   formatRelativeTime,
   isListEmpty,
   ResourceListShell,
+  useConfirmationDialog,
 } from "@agent-management-platform/shared-component";
 import { absoluteRouteMap, type ShadowScanResponse } from "@agent-management-platform/types";
 import { itemCount, OutcomeChip, providerLabel, ScanStatusChip } from "../shadowUi";
 
-/** The path of a scan's findings page. */
+/** The path of a scan's agents page. */
 export function scanFindingsPath(orgName: string, scanId: string): string {
   return generatePath(
     absoluteRouteMap.children.org.children.shadowAgentDiscovery.children.scan.path,
@@ -50,7 +55,7 @@ export function scanFindingsPath(orgName: string, scanId: string): string {
   );
 }
 
-/** The outcome of every provider call of a scan, per connection. */
+/** The outcome of every platform call of a scan, per connection. */
 export function ScanDetailsDrawer({
   scan,
   onClose,
@@ -72,7 +77,8 @@ export function ScanDetailsDrawer({
             <Stack direction="row" spacing={1} alignItems="center">
               <ScanStatusChip status={scan.status} />
               <Typography variant="body2" color="text.secondary">
-                {scan.findingsCount} findings · {scan.lookbackDays} days of history
+                {scan.connectionIds.length}{" "}
+                {scan.connectionIds.length === 1 ? "platform" : "platforms"} scanned
               </Typography>
             </Stack>
             {scan.results.length === 0 && (
@@ -88,7 +94,8 @@ export function ScanDetailsDrawer({
                       {r.connectionName || r.connectionId}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      {providerLabel(r.provider)} · {r.findingsCount} findings
+                      {providerLabel(r.provider)} · {r.findingsCount}{" "}
+                      {r.findingsCount === 1 ? "agent" : "agents"}
                     </Typography>
                   </Box>
                   <OutcomeChip outcome={r.outcome} />
@@ -141,17 +148,67 @@ export function ScanDetailsDrawer({
   );
 }
 
+/** The platforms a scan covered: their names once it ran, else how many. */
+function scannedLabel(s: ShadowScanResponse): string {
+  const names = s.results.map((r) => r.connectionName).filter(Boolean);
+  if (names.length > 0) return names.join(", ");
+  const n = s.connectionIds.length;
+  return `${n} ${n === 1 ? "platform" : "platforms"}`;
+}
+
 /**
- * The scan history, newest first. A row opens the outcome of every provider
- * call; View findings opens the findings the scan saw.
+ * The scan history, newest first. A row opens the outcome of every platform
+ * call; View agents opens the agents the scan found.
  */
-export function ScansTab({ orgName }: { orgName: string | undefined }) {
+export function ScansTab({
+  orgName,
+  canManage,
+}: {
+  orgName: string | undefined;
+  canManage: boolean;
+}) {
   const navigate = useNavigate();
   const location = useLocation();
   const { data, isLoading, error } = useShadowScans(orgName);
+  const clear = useClearShadowScans(orgName);
+  const { addConfirmation } = useConfirmationDialog();
   const [open, setOpen] = useState<ShadowScanResponse | null>(null);
   const scans = data?.scans ?? [];
   const current = open ? (scans.find((s) => s.id === open.id) ?? open) : null;
+  const finished = scans.filter((s) => !isShadowScanActive(s.status)).length;
+  const active = scans.length - finished;
+
+  const handleClear = () =>
+    addConfirmation({
+      title: "Clear all scans?",
+      description:
+        `Every finished scan is deleted, with its call results and its list of agents.${
+          active > 0 ? " The scan that is queued or running is kept." : ""
+        } Unregistered Agents and their evidence are kept, and the next scan updates them as usual. ` +
+        "This can't be undone.",
+      confirmButtonText: "Clear scans",
+      confirmButtonColor: "error",
+      onConfirm: () => {
+        setOpen(null);
+        clear.mutate();
+      },
+    });
+
+  const toolbar = canManage ? (
+    <Stack direction="row" justifyContent="flex-end" sx={{ width: "100%" }}>
+      <Button
+        variant="outlined"
+        color="error"
+        startIcon={<Trash2 size={16} />}
+        disabled={finished === 0 || clear.isPending}
+        onClick={handleClear}
+      >
+        Clear scans
+      </Button>
+    </Stack>
+  ) : (
+    <span />
+  );
 
   return (
     <>
@@ -160,14 +217,14 @@ export function ScansTab({ orgName }: { orgName: string | undefined }) {
         disablePaper
         searchValue=""
         onSearchChange={() => undefined}
-        toolbar={<span />}
+        toolbar={toolbar}
         error={error ? new Error("Couldn't load scans. Reload the page to try again.") : undefined}
         isLoading={isLoading}
         isEmpty={isListEmpty({ isLoading, count: scans.length, isFiltered: false })}
         emptyState={{
           illustration: <History size={64} />,
           title: "No scans yet",
-          description: "Run a scan from the top of this page once a provider is connected.",
+          description: "Run a scan from the top of this page once a platform is added.",
         }}
       >
         <ListingTable>
@@ -175,9 +232,8 @@ export function ScansTab({ orgName }: { orgName: string | undefined }) {
             <ListingTable.Row>
               <ListingTable.Cell>Started</ListingTable.Cell>
               <ListingTable.Cell>Status</ListingTable.Cell>
-              <ListingTable.Cell>History read</ListingTable.Cell>
-              <ListingTable.Cell>Connections</ListingTable.Cell>
-              <ListingTable.Cell>Findings</ListingTable.Cell>
+              <ListingTable.Cell>Platforms scanned</ListingTable.Cell>
+              <ListingTable.Cell>Agents found</ListingTable.Cell>
               <ListingTable.Cell align="right" />
             </ListingTable.Row>
           </ListingTable.Head>
@@ -198,10 +254,7 @@ export function ScansTab({ orgName }: { orgName: string | undefined }) {
                   <ScanStatusChip status={s.status} />
                 </ListingTable.Cell>
                 <ListingTable.Cell>
-                  <Typography variant="body2">{s.lookbackDays} days</Typography>
-                </ListingTable.Cell>
-                <ListingTable.Cell>
-                  <Typography variant="body2">{s.connectionIds.length}</Typography>
+                  <Typography variant="body2">{scannedLabel(s)}</Typography>
                 </ListingTable.Cell>
                 <ListingTable.Cell>
                   <Typography variant="body2">{s.findingsCount}</Typography>
@@ -210,7 +263,7 @@ export function ScansTab({ orgName }: { orgName: string | undefined }) {
                   <Button
                     variant="outlined"
                     size="small"
-                    aria-label={`View findings of the scan started ${formatRelativeTime(
+                    aria-label={`View agents of the scan started ${formatRelativeTime(
                       s.startedAt ?? s.createdAt,
                     )}`}
                     onClick={(e) => {
@@ -220,7 +273,7 @@ export function ScansTab({ orgName }: { orgName: string | undefined }) {
                       });
                     }}
                   >
-                    View findings
+                    View agents
                   </Button>
                 </ListingTable.Cell>
               </ListingTable.Row>

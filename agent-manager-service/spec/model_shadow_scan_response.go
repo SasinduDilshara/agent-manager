@@ -22,25 +22,24 @@ var _ MappedNullable = &ShadowScanResponse{}
 type ShadowScanResponse struct {
 	Id            string                       `json:"id"`
 	Status        string                       `json:"status"`
-	LookbackDays  int32                        `json:"lookbackDays"`
 	ConnectionIds []string                     `json:"connectionIds"`
 	Results       []ShadowScanConnectionResult `json:"results"`
-	FindingsCount int32                        `json:"findingsCount"`
-	RequestedBy   string                       `json:"requestedBy"`
-	StartedAt     *time.Time                   `json:"startedAt,omitempty"`
-	FinishedAt    *time.Time                   `json:"finishedAt,omitempty"`
-	CreatedAt     time.Time                    `json:"createdAt"`
+	// Agents found, counted per connection.
+	FindingsCount int32      `json:"findingsCount"`
+	RequestedBy   string     `json:"requestedBy"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
 }
 
 // NewShadowScanResponse instantiates a new ShadowScanResponse object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewShadowScanResponse(id string, status string, lookbackDays int32, connectionIds []string, results []ShadowScanConnectionResult, findingsCount int32, requestedBy string, createdAt time.Time) *ShadowScanResponse {
+func NewShadowScanResponse(id string, status string, connectionIds []string, results []ShadowScanConnectionResult, findingsCount int32, requestedBy string, createdAt time.Time) *ShadowScanResponse {
 	this := ShadowScanResponse{}
 	this.Id = id
 	this.Status = status
-	this.LookbackDays = lookbackDays
 	this.ConnectionIds = connectionIds
 	this.Results = results
 	this.FindingsCount = findingsCount
@@ -103,30 +102,6 @@ func (o *ShadowScanResponse) GetStatusOk() (*string, bool) {
 // SetStatus sets field value
 func (o *ShadowScanResponse) SetStatus(v string) {
 	o.Status = v
-}
-
-// GetLookbackDays returns the LookbackDays field value
-func (o *ShadowScanResponse) GetLookbackDays() int32 {
-	if o == nil {
-		var ret int32
-		return ret
-	}
-
-	return o.LookbackDays
-}
-
-// GetLookbackDaysOk returns a tuple with the LookbackDays field value
-// and a boolean to check if the value has been set.
-func (o *ShadowScanResponse) GetLookbackDaysOk() (*int32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.LookbackDays, true
-}
-
-// SetLookbackDays sets field value
-func (o *ShadowScanResponse) SetLookbackDays(v int32) {
-	o.LookbackDays = v
 }
 
 // GetConnectionIds returns the ConnectionIds field value
@@ -325,7 +300,6 @@ func (o ShadowScanResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["id"] = o.Id
 	toSerialize["status"] = o.Status
-	toSerialize["lookbackDays"] = o.LookbackDays
 	toSerialize["connectionIds"] = o.ConnectionIds
 	toSerialize["results"] = o.Results
 	toSerialize["findingsCount"] = o.FindingsCount

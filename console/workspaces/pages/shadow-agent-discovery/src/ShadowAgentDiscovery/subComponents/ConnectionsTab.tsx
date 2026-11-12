@@ -32,11 +32,14 @@ import {
   Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
-import { Pencil, PlugZap, Plus, Trash2, TriangleAlert } from "@wso2/oxygen-ui-icons-react";
+import { Pencil, PlugZap, Plus, Radar, Trash2, TriangleAlert } from "@wso2/oxygen-ui-icons-react";
 import {
+  isShadowScanActive,
   useDeleteShadowConnection,
   useShadowConnections,
   useShadowProviders,
+  useShadowSummary,
+  useStartShadowScan,
   useTestShadowConnection,
 } from "@agent-management-platform/api-client";
 import {
@@ -49,28 +52,23 @@ import type {
   ShadowConnectionResponse,
   ShadowConnectionTest,
 } from "@agent-management-platform/types";
-import { OutcomeChip, providerLabel, unlockLabels } from "../shadowUi";
-import { credentialMode } from "../capabilities";
+import { OutcomeChip, providerLabel, SOURCE_HOSTS, unlockLabels } from "../shadowUi";
+import { scopedKeyCount } from "../capabilities";
 
-/** "Admin key" or "Project keys only", for OpenAI and Anthropic connections. */
-export function CredentialModeChip({
+/** The number of keys an OpenAI or Anthropic platform lists agents with. */
+export function ScopedKeysChip({
   provider,
   secretHints,
 }: {
   provider: string;
   secretHints: Record<string, string> | undefined;
 }) {
-  const mode = credentialMode(provider, secretHints);
-  if (!mode) return null;
-  if (mode === "admin") return <Chip size="small" variant="outlined" label="Admin key" />;
-  const scoped = provider === "anthropic" ? "Workspace keys only" : "Project keys only";
+  const n = scopedKeyCount(provider, secretHints);
+  if (n === undefined) return null;
+  const unit = provider === "anthropic" ? "workspace" : "project";
   return (
-    <Tooltip
-      title={`Limited: API keys, usage, costs and owners are not read, so workloads that call ${providerLabel(
-        provider,
-      )} without an agent object are not found. Add an Admin API key to scan the whole organization.`}
-    >
-      <Chip size="small" variant="outlined" color="warning" label={`${scoped} (limited)`} />
+    <Tooltip title={`Agents are listed in each ${unit} that has a key.`}>
+      <Chip size="small" variant="outlined" label={`${n} ${unit} ${n === 1 ? "key" : "keys"}`} />
     </Tooltip>
   );
 }
@@ -100,7 +98,10 @@ interface ConnectionsTabProps {
   onEdit: (c: ShadowConnectionResponse) => void;
 }
 
-/** The provider connections: which accounts are scanned and how their last test went. */
+/**
+ * The platforms: which accounts are scanned, how their last test went, and
+ * a Scan action to scan one platform on its own.
+ */
 export function ConnectionsTab({ orgName, canManage, onAdd, onEdit }: ConnectionsTabProps) {
   const [search, setSearch] = useState("");
   const [testResult, setTestResult] = useState<{
@@ -110,6 +111,9 @@ export function ConnectionsTab({ orgName, canManage, onAdd, onEdit }: Connection
   const { data, isLoading, error } = useShadowConnections(orgName);
   const remove = useDeleteShadowConnection(orgName);
   const test = useTestShadowConnection(orgName);
+  const scan = useStartShadowScan(orgName);
+  const summary = useShadowSummary(orgName);
+  const scanActive = isShadowScanActive(summary.data?.latestScan?.status);
   const providers = useShadowProviders(orgName);
   const signalNames = useMemo(
     () => new Map((providers.data?.signals ?? []).map((d) => [d.code, d.name])),
@@ -128,7 +132,7 @@ export function ConnectionsTab({ orgName, canManage, onAdd, onEdit }: Connection
 
   const addButton = canManage ? (
     <Button variant="outlined" startIcon={<Plus size={16} />} onClick={onAdd}>
-      Connect provider
+      Add platform
     </Button>
   ) : undefined;
 
@@ -136,7 +140,7 @@ export function ConnectionsTab({ orgName, canManage, onAdd, onEdit }: Connection
     addConfirmation({
       title: `Delete ${c.name}?`,
       description:
-        "The stored credential and every finding of this connection are deleted. The provider account is not changed.",
+        "The stored credential and every agent this platform found are deleted from Agent Manager. The platform account is not changed.",
       confirmButtonText: "Delete",
       confirmButtonColor: "error",
       onConfirm: () => remove.mutate(c.id),
@@ -149,7 +153,7 @@ export function ConnectionsTab({ orgName, canManage, onAdd, onEdit }: Connection
     <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }}>
       <Box sx={{ width: { xs: "100%", sm: 400 } }}>
         <SearchBar
-          placeholder="Search connections"
+          placeholder="Search platforms"
           size="small"
           fullWidth
           value={search}
@@ -164,35 +168,37 @@ export function ConnectionsTab({ orgName, canManage, onAdd, onEdit }: Connection
   return (
     <>
       <ResourceListShell
-        resourceName="shadow-agent-connections"
+        resourceName="shadow-agent-platforms"
         disablePaper
         searchValue={search}
         onSearchChange={setSearch}
         toolbar={toolbar}
         error={
-          error ? new Error("Couldn't load connections. Reload the page to try again.") : undefined
+          error
+            ? new Error("Couldn't load the platforms. Reload the page to try again.")
+            : undefined
         }
         isLoading={isLoading}
         isEmpty={isListEmpty({ isLoading, count: connections.length, isFiltered: !!search })}
         isSearchEmpty={!isLoading && connections.length > 0 && filtered.length === 0}
         emptyState={{
           illustration: <PlugZap size={64} />,
-          title: "No providers connected",
+          title: "No platforms added",
           description:
             "Connect OpenAI, Anthropic, Amazon Bedrock, Google Agent Platform, Microsoft Foundry, GitHub or Azure DevOps with a read-only credential.",
           action: addButton,
         }}
         searchEmptyState={{
           illustration: <PlugZap size={64} />,
-          title: "No connections match your search",
-          description: "Try another name or provider.",
+          title: "No platforms match your search",
+          description: "Try another name or platform.",
         }}
       >
         <ListingTable>
           <ListingTable.Head>
             <ListingTable.Row>
-              <ListingTable.Cell>Connection</ListingTable.Cell>
-              <ListingTable.Cell>Provider</ListingTable.Cell>
+              <ListingTable.Cell>Name</ListingTable.Cell>
+              <ListingTable.Cell>Platform</ListingTable.Cell>
               <ListingTable.Cell>Last test</ListingTable.Cell>
               <ListingTable.Cell>Created</ListingTable.Cell>
               <ListingTable.Cell align="right" />
@@ -222,7 +228,7 @@ export function ConnectionsTab({ orgName, canManage, onAdd, onEdit }: Connection
                 <ListingTable.Cell>
                   <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
                     <Typography variant="body2">{providerLabel(c.provider)}</Typography>
-                    <CredentialModeChip provider={c.provider} secretHints={c.secretHints} />
+                    <ScopedKeysChip provider={c.provider} secretHints={c.secretHints} />
                     <SourceHostChips connection={c} />
                   </Stack>
                 </ListingTable.Cell>
@@ -248,6 +254,20 @@ export function ConnectionsTab({ orgName, canManage, onAdd, onEdit }: Connection
                 <ListingTable.Cell align="right">
                   {canManage && (
                     <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                      {!SOURCE_HOSTS.includes(c.provider) && (
+                        <Tooltip title={scanActive ? "A scan is running" : "Scan this platform"}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              aria-label={`Scan ${c.name}`}
+                              disabled={scanActive || scan.isPending}
+                              onClick={() => scan.mutate({ connectionIds: [c.id] })}
+                            >
+                              <Radar size={18} />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )}
                       <Tooltip title="Test connection">
                         <span>
                           <IconButton
@@ -292,7 +312,7 @@ export function ConnectionsTab({ orgName, canManage, onAdd, onEdit }: Connection
         <DialogContent>
           <Stack spacing={1.5}>
             <Typography variant="body2" color="text.secondary">
-              One read per capability. A failed check names the signals a scan will miss.
+              One read per agent listing. A failed check names the agents a scan will miss.
             </Typography>
             {testResult?.result.checks.map((ch) => (
               <Box
@@ -317,7 +337,7 @@ export function ConnectionsTab({ orgName, canManage, onAdd, onEdit }: Connection
                 )}
                 {ch.unlocks && ch.unlocks.length > 0 && (
                   <Typography variant="caption" color="text.secondary" component="p">
-                    Unlocks: {unlockLabels(ch.unlocks, signalNames).join(", ")}
+                    Lists: {unlockLabels(ch.unlocks, signalNames).join(", ")}
                   </Typography>
                 )}
               </Box>

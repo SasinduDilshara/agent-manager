@@ -28,7 +28,7 @@ type ShadowConnectionResponse struct {
 	Settings map[string]interface{} `json:"settings"`
 	// A redacted hint per stored secret field (e.g. \"sk-a…wxyz\"); values are never returned.
 	SecretHints map[string]string `json:"secretHints"`
-	// Endpoints whose host is not an official host of the provider.
+	// Endpoints whose host is not an official host of the platform.
 	EndpointWarnings []string              `json:"endpointWarnings"`
 	LastTestedAt     *time.Time            `json:"lastTestedAt,omitempty"`
 	LastTest         *ShadowConnectionTest `json:"lastTest,omitempty"`

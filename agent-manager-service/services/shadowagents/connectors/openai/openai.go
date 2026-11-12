@@ -15,10 +15,8 @@
 // under the License.
 
 // Package openai is the Shadow Agent Discovery connector for the OpenAI API
-// platform. The Admin key reads projects, project API keys, usage, costs
-// and audit logs (/v1/organization/*); optional project keys read the
-// project's agents (/v1/agents, beta) and, with deep inspection, its stored
-// chat completions and batch files.
+// platform. Each project key lists its project's agents (GET /v1/agents,
+// beta). No other endpoint is called.
 package openai
 
 import (
@@ -30,47 +28,20 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
 )
 
-// Call names, as stored in scan results and signal sources.
+// Call names, as stored in scan results and evidence sources.
 const (
-	callProjects         = "GET /v1/organization/projects"
-	callAPIKeys          = "GET /v1/organization/projects/{project_id}/api_keys"
-	callAPIKeysArchived  = "GET /v1/organization/projects/{project_id}/api_keys (archived projects)"
-	callAuditLogs        = "GET /v1/organization/audit_logs"
-	callUsage            = "GET /v1/organization/usage/completions"
-	callCosts            = "GET /v1/organization/costs"
-	callWebSearch        = "GET /v1/organization/usage/web_search_calls"
-	callFileSearch       = "GET /v1/organization/usage/file_search_calls"
-	callCodeInterpreter  = "GET /v1/organization/usage/code_interpreter_sessions"
-	callAgents           = "GET /v1/agents"
-	callSessions         = "GET /v1/agents/sessions"
-	callChatCompletions  = "GET /v1/chat/completions"
-	callBatches          = "GET /v1/batches"
-	callFileContent      = "GET /v1/files/{file_id}/content"
-	callProjectKeysMiss  = "Project key calls (projects without a project key)"
-	suffixPageLimit      = " (page limit)"
-	suffixNotAttributed  = " (not attributed)"
-	suffixOnProject      = " (on the project finding)"
-	reasonDeepOff        = "deep inspection is off"
-	reasonNoProjectKey   = "no project key"
-	reasonNoAdminKey     = "the connection has no Admin API key"
-	reasonNeedsAdminKey  = "needs the Admin API key, which this connection does not have"
-	reasonAdminRejected  = "not checked: the Admin key was rejected"
-	apiSourceAgents      = "agents_api"
-	headerBeta           = "OpenAI-Beta"
-	headerBetaAgents     = "agents=v1"
-	relationUsedByAgent  = "used_by_agent"
-	stateActive          = "active"
-	stateArchived        = "archived"
-	stateExpired         = "expired"
-	ownerTypeUser        = "user"
-	ownerTypeServiceAcct = "service_account"
+	callAgents         = "GET /v1/agents"
+	suffixPageLimit    = " (page limit)"
+	reasonNoProjectKey = "no project key"
+	headerBeta         = "OpenAI-Beta"
+	headerBetaAgents   = "agents=v1"
+	stateActive        = "active"
 )
 
 // Bounds.
@@ -79,22 +50,6 @@ const (
 	listPageSize = 100
 	// maxListPages bounds one cursor listing (10,000 items).
 	maxListPages = 100
-	// maxAuditPages bounds the api_key.created audit events read (5,000).
-	maxAuditPages = 50
-	// usageDailyLimit is the most 1d buckets a usage page holds.
-	usageDailyLimit = 31
-	// costsDailyLimit is the most 1d buckets a costs page holds (1-180).
-	costsDailyLimit = 180
-	// maxUsagePages bounds one usage or costs read.
-	maxUsagePages = 100
-	// Sessions: the most recent sessions per project, in pages of 50.
-	sessionsPageSize      = 50
-	maxSessionsPerProject = 100
-	// Deep inspection bounds, per project.
-	maxStoredCompletions = 200
-	maxBatchesPerProject = 20
-	maxBatchListPages    = 5
-	maxFileBytes         = 5 << 20
 )
 
 // Connector scans one OpenAI organization.
@@ -183,53 +138,10 @@ func listAll[T any](ctx context.Context, api *sa.API, u string, q url.Values, hd
 	return true, nil
 }
 
-// readBuckets follows a usage or costs listing (page/next_page), calling
-// fn for every result with the UTC day of its bucket. It returns the number
-// of results and true when maxUsagePages was reached with more pages left.
-func readBuckets[T any](ctx context.Context, api *sa.API, u string, q url.Values, limit int,
-	fn func(day time.Time, r T),
-) (int, bool, error) {
-	rows := 0
-	page := ""
-	for i := 0; i < maxUsagePages; i++ {
-		pq := cloneValues(q)
-		pq.Set("limit", strconv.Itoa(limit))
-		if page != "" {
-			pq.Set("page", page)
-		}
-		var p usagePage[T]
-		if err := api.DoJSON(ctx, sa.Request{Method: http.MethodGet, URL: u, Query: pq}, &p); err != nil {
-			return rows, false, err
-		}
-		if p.Data == nil {
-			return rows, false, sa.Unsupported("the response has no data list")
-		}
-		for _, b := range *p.Data {
-			day := sa.DayOf(time.Unix(b.StartTime, 0))
-			for _, r := range b.Results {
-				rows++
-				fn(day, r)
-			}
-		}
-		if !p.HasMore {
-			return rows, false, nil
-		}
-		next := ""
-		if p.NextPage != nil {
-			next = *p.NextPage
-		}
-		if next == "" || next == page {
-			return rows, false, sa.Unsupported("has_more is true but next_page does not advance")
-		}
-		page = next
-	}
-	return rows, true, nil
-}
-
 func cloneValues(q url.Values) url.Values {
 	out := url.Values{}
-	for k, vs := range q {
-		out[k] = append([]string(nil), vs...)
+	for k, v := range q {
+		out[k] = append([]string(nil), v...)
 	}
 	return out
 }
@@ -249,47 +161,6 @@ func unixTime(sec int64) *time.Time {
 	}
 	t := time.Unix(sec, 0).UTC()
 	return &t
-}
-
-func unixPtr(sec *int64) *time.Time {
-	if sec == nil {
-		return nil
-	}
-	return unixTime(*sec)
-}
-
-// widenLast moves a finding's LastUsedAt forward to t (FirstUsedAt comes
-// only from usage in the window).
-func widenLast(f *sa.Finding, t time.Time) {
-	t = t.UTC()
-	if f.LastUsedAt == nil || t.After(*f.LastUsedAt) {
-		f.LastUsedAt = &t
-	}
-}
-
-// addAttrValue adds v to the string list attribute key of f.
-func addAttrValue(f *sa.Finding, key, v string) {
-	if v == "" {
-		return
-	}
-	list, _ := f.Attributes[key].([]string)
-	for _, s := range list {
-		if s == v {
-			return
-		}
-	}
-	f.Attributes[key] = append(list, v)
-}
-
-// redactedHint keeps OpenAI's redacted_value ("sk-abc...def"). A value that
-// does not look redacted is reduced to a hint, in case a full key ever
-// appears there.
-func redactedHint(v string) string {
-	v = strings.TrimSpace(v)
-	if strings.Contains(v, "...") || strings.Contains(v, "…") || strings.Contains(v, "*") {
-		return sa.Truncate(v, 64)
-	}
-	return sa.SecretHint(v)
 }
 
 func sortedKeys[V any](m map[string]V) []string {

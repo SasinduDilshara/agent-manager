@@ -95,7 +95,7 @@ export interface CapabilityStatus {
   missing: string[];
 }
 
-/** What the scan can analyze with the form as it is now. */
+/** What the scan can list with the form as it is now. */
 export function evaluateCapabilities(
   spec: ShadowProviderSpec,
   draft: CredentialDraft,
@@ -109,7 +109,7 @@ export function evaluateCapabilities(
   });
 }
 
-/** The provider's "one of these credentials" message when none is set. */
+/** The platform's "one of these" message when none is set. */
 export function credentialChoiceError(
   spec: ShadowProviderSpec,
   draft: CredentialDraft,
@@ -121,13 +121,13 @@ export function credentialChoiceError(
 }
 
 /**
- * The credential mode of an OpenAI or Anthropic connection, for the
- * connections list: whether it has the (recommended) Admin API key.
+ * How many project (OpenAI) or workspace (Anthropic) keys a connection has,
+ * for the platforms list; undefined for the other platforms.
  */
-export function credentialMode(
+export function scopedKeyCount(
   provider: string,
   secretHints: Record<string, string> | undefined,
-): "admin" | "scoped" | undefined {
+): number | undefined {
   if (provider !== "openai" && provider !== "anthropic") return undefined;
-  return secretHints?.apiKey ? "admin" : "scoped";
+  return Object.keys(secretHints ?? {}).filter((k) => k.startsWith("scopedKeys.")).length;
 }

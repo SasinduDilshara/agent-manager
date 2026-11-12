@@ -22,8 +22,7 @@ import { ShadowAgentDiscovery } from "./ShadowAgentDiscovery/ShadowAgentDiscover
 
 export const metaData: PageMetadata = {
   title: "Shadow Agent Discovery",
-  description:
-    "Find agents and LLM workloads that bypass Agent Manager and bring them under governance",
+  description: "Find the agents your organization runs on AI platforms outside Agent Manager",
   icon: ScanSearch,
   path: "/shadow-agent-discovery",
   component: ShadowAgentDiscovery,

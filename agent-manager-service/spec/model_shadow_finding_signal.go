@@ -18,15 +18,10 @@ import (
 // checks if the ShadowFindingSignal type satisfies the MappedNullable interface at compile time
 var _ MappedNullable = &ShadowFindingSignal{}
 
-// ShadowFindingSignal struct for ShadowFindingSignal
+// ShadowFindingSignal Evidence that a platform lists the agent.
 type ShadowFindingSignal struct {
-	Code   string `json:"code"`
-	Name   string `json:"name"`
-	Group  string `json:"group"`
-	Tier   string `json:"tier"`
-	Weight int32  `json:"weight"`
-	// Whether this signal's weight counts in the score (one per group).
-	Counted    *bool                  `json:"counted,omitempty"`
+	Code       string                 `json:"code"`
+	Name       string                 `json:"name"`
 	Source     string                 `json:"source"`
 	Condition  string                 `json:"condition"`
 	Observed   map[string]interface{} `json:"observed"`
@@ -37,13 +32,10 @@ type ShadowFindingSignal struct {
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewShadowFindingSignal(code string, name string, group string, tier string, weight int32, source string, condition string, observed map[string]interface{}, detectedAt time.Time) *ShadowFindingSignal {
+func NewShadowFindingSignal(code string, name string, source string, condition string, observed map[string]interface{}, detectedAt time.Time) *ShadowFindingSignal {
 	this := ShadowFindingSignal{}
 	this.Code = code
 	this.Name = name
-	this.Group = group
-	this.Tier = tier
-	this.Weight = weight
 	this.Source = source
 	this.Condition = condition
 	this.Observed = observed
@@ -105,110 +97,6 @@ func (o *ShadowFindingSignal) GetNameOk() (*string, bool) {
 // SetName sets field value
 func (o *ShadowFindingSignal) SetName(v string) {
 	o.Name = v
-}
-
-// GetGroup returns the Group field value
-func (o *ShadowFindingSignal) GetGroup() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.Group
-}
-
-// GetGroupOk returns a tuple with the Group field value
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingSignal) GetGroupOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Group, true
-}
-
-// SetGroup sets field value
-func (o *ShadowFindingSignal) SetGroup(v string) {
-	o.Group = v
-}
-
-// GetTier returns the Tier field value
-func (o *ShadowFindingSignal) GetTier() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.Tier
-}
-
-// GetTierOk returns a tuple with the Tier field value
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingSignal) GetTierOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Tier, true
-}
-
-// SetTier sets field value
-func (o *ShadowFindingSignal) SetTier(v string) {
-	o.Tier = v
-}
-
-// GetWeight returns the Weight field value
-func (o *ShadowFindingSignal) GetWeight() int32 {
-	if o == nil {
-		var ret int32
-		return ret
-	}
-
-	return o.Weight
-}
-
-// GetWeightOk returns a tuple with the Weight field value
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingSignal) GetWeightOk() (*int32, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.Weight, true
-}
-
-// SetWeight sets field value
-func (o *ShadowFindingSignal) SetWeight(v int32) {
-	o.Weight = v
-}
-
-// GetCounted returns the Counted field value if set, zero value otherwise.
-func (o *ShadowFindingSignal) GetCounted() bool {
-	if o == nil || IsNil(o.Counted) {
-		var ret bool
-		return ret
-	}
-	return *o.Counted
-}
-
-// GetCountedOk returns a tuple with the Counted field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *ShadowFindingSignal) GetCountedOk() (*bool, bool) {
-	if o == nil || IsNil(o.Counted) {
-		return nil, false
-	}
-	return o.Counted, true
-}
-
-// HasCounted returns a boolean if a field has been set.
-func (o *ShadowFindingSignal) HasCounted() bool {
-	if o != nil && !IsNil(o.Counted) {
-		return true
-	}
-
-	return false
-}
-
-// SetCounted gets a reference to the given bool and assigns it to the Counted field.
-func (o *ShadowFindingSignal) SetCounted(v bool) {
-	o.Counted = &v
 }
 
 // GetSource returns the Source field value
@@ -319,12 +207,6 @@ func (o ShadowFindingSignal) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["code"] = o.Code
 	toSerialize["name"] = o.Name
-	toSerialize["group"] = o.Group
-	toSerialize["tier"] = o.Tier
-	toSerialize["weight"] = o.Weight
-	if !IsNil(o.Counted) {
-		toSerialize["counted"] = o.Counted
-	}
 	toSerialize["source"] = o.Source
 	toSerialize["condition"] = o.Condition
 	toSerialize["observed"] = o.Observed

@@ -17,23 +17,20 @@
  */
 
 import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
   Box,
   Button,
   Card,
   CardContent,
+  Chip,
   Grid,
-  ListingTable,
   Skeleton,
   Stack,
   Typography,
 } from "@wso2/oxygen-ui";
-import { ChevronDown, ChevronRight, CircleCheck, PlugZap } from "@wso2/oxygen-ui-icons-react";
+import { ChevronRight, CircleCheck, PlugZap } from "@wso2/oxygen-ui-icons-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { returnToState, StateNotice } from "@agent-management-platform/views";
-import { useShadowProviders, useShadowSummary } from "@agent-management-platform/api-client";
+import { useShadowSummary } from "@agent-management-platform/api-client";
 import { formatRelativeTime } from "@agent-management-platform/shared-component";
 import { formatCount, providerLabel, ScanStatusChip } from "../shadowUi";
 import { RunScanButton } from "./RunScanButton";
@@ -44,7 +41,9 @@ interface OverviewPanelProps {
   canManage: boolean;
   onConnect: () => void;
   onOpenScans: () => void;
-  onOpenConnections: () => void;
+  onOpenPlatforms: () => void;
+  /** Opens Unregistered Agents, filtered to one platform when given. */
+  onOpenAgents: (provider?: string) => void;
 }
 
 interface Step {
@@ -54,12 +53,12 @@ interface Step {
   action?: React.ReactNode;
 }
 
-/** The order to work in: connect, test, scan, review, onboard. */
+/** The order to work in: add a platform, test it, scan, review the agents. */
 function GettingStarted({ steps }: { steps: Step[] }) {
   return (
     <Box>
       <Typography variant="subtitle1" sx={{ mb: 1.5 }}>
-        How to find and onboard shadow agents
+        How to find unregistered agents
       </Typography>
       <Stack
         direction={{ xs: "column", lg: "row" }}
@@ -129,72 +128,70 @@ function StatTile({ label, value, hint }: { label: string; value: string; hint: 
   );
 }
 
-/** Counts by verdict, the latest scan and how a score is made. */
+/** The unregistered agents found, by platform, and the latest scan. */
 export function OverviewPanel({
   orgName,
   canManage,
   onConnect,
   onOpenScans,
-  onOpenConnections,
+  onOpenPlatforms,
+  onOpenAgents,
 }: OverviewPanelProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const summary = useShadowSummary(orgName);
-  const providers = useShadowProviders(orgName);
-  const connected = (summary.data?.connections ?? 0) > 0;
-  const scanned = !!summary.data?.latestScan;
+  const s = summary.data;
+  const connected = (s?.connections ?? 0) > 0;
+  const scanned = !!s?.latestScan;
+  const total = s?.totalFindings ?? 0;
+  const toReview = s?.byStatus?.new ?? 0;
   const steps: Step[] = [
     {
-      title: "Add a connection",
+      title: "Add a platform",
       description:
-        "Connect a model provider, a cloud agent platform or a source repository host with a read-only credential.",
+        "Connect an AI platform (OpenAI, Anthropic, Amazon Bedrock, Google Agent Platform, Microsoft Foundry) or a source repository host with a read-only credential.",
       done: connected,
       action: canManage ? (
         <Button size="small" variant="outlined" onClick={onConnect}>
-          Add connection
+          Add platform
         </Button>
       ) : undefined,
     },
     {
       title: "Test the connection",
-      description: "Test connection makes one read-only call per capability and shows what works.",
+      description: "Test connection lists one agent per listing and shows what works.",
       done: false,
       action: connected ? (
-        <Button size="small" variant="outlined" onClick={onOpenConnections}>
-          Open connections
+        <Button size="small" variant="outlined" onClick={onOpenPlatforms}>
+          Open platforms
         </Button>
       ) : undefined,
     },
     {
       title: "Run a scan",
-      description: "A scan reads the chosen history from every connection, in the background.",
+      description:
+        "Run scan at the top of the page scans all platforms or the ones you choose; Scan on a row in Platforms scans one.",
       done: scanned,
       action: canManage && connected ? <RunScanButton orgName={orgName} /> : undefined,
     },
     {
-      title: "Review the findings",
+      title: "Review the unregistered agents",
       description:
-        "In Scans, choose View findings on a scan to see what it found, with the evidence.",
-      done: false,
+        "Unregistered Agents lists every agent the platforms list, once, with the evidence. Mark each one reviewed or dismissed.",
+      done: total > 0 && toReview === 0,
       action: scanned ? (
-        <Button size="small" variant="outlined" onClick={onOpenScans}>
-          Open scans
+        <Button size="small" variant="outlined" onClick={() => onOpenAgents()}>
+          View agents
         </Button>
       ) : undefined,
-    },
-    {
-      title: "Onboard and retire",
-      description:
-        "Onboard an agent from its finding, then revoke its direct credential once its direct usage stops.",
-      done: (summary.data?.byStatus?.onboarded ?? 0) > 0,
     },
   ];
 
   if (summary.isLoading) {
     return (
       <Grid container spacing={2}>
-        {[0, 1, 2, 3].map((i) => (
-          <Grid key={i} size={{ xs: 12, sm: 6, lg: 3 }}>
+        {[0, 1, 2].map((i) => (
+          <Grid key={i} size={{ xs: 12, sm: 6, lg: 4 }}>
             <Skeleton variant="rounded" height={112} />
           </Grid>
         ))}
@@ -208,18 +205,17 @@ export function OverviewPanel({
       </Typography>
     );
   }
-  const s = summary.data;
   if (s && s.connections === 0) {
     return (
       <Stack spacing={3}>
         <StateNotice
           icon={PlugZap}
-          title="Connect a provider to start"
-          description="Shadow Agent Discovery reads provider admin and cloud management APIs with a read-only credential to find agents and LLM workloads that call providers directly."
+          title="Add a platform to start"
+          description="Shadow Agent Discovery reads the agent listings of your AI platforms with a read-only credential and shows the agents that run outside Agent Manager."
           actions={
             canManage ? (
               <Button variant="contained" onClick={onConnect}>
-                Connect provider
+                Add platform
               </Button>
             ) : undefined
           }
@@ -229,37 +225,29 @@ export function OverviewPanel({
     );
   }
 
-  const v = s?.byVerdict ?? {};
-  const scoring = providers.data?.scoring;
+  const byPlatform = Object.entries(s?.byProvider ?? {}).filter(([, n]) => n > 0);
   return (
     <Stack spacing={3}>
       <Grid container spacing={2}>
-        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
           <StatTile
-            label="Agents"
-            value={formatCount(v.agent)}
-            hint="Confidence score at or above the agent threshold"
+            label="Unregistered agents"
+            value={formatCount(total)}
+            hint="Agents the platforms list, each counted once"
           />
         </Grid>
-        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
           <StatTile
-            label="Possible agents"
-            value={formatCount(v.possible_agent)}
-            hint="Tool use seen, more evidence needed"
+            label="To review"
+            value={formatCount(toReview)}
+            hint="Agents not reviewed yet"
           />
         </Grid>
-        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+        <Grid size={{ xs: 12, sm: 6, lg: 4 }}>
           <StatTile
-            label="LLM consumers"
-            value={formatCount(v.llm_consumer)}
-            hint="Direct model usage without agent signals"
-          />
-        </Grid>
-        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-          <StatTile
-            label="Tool infrastructure"
-            value={formatCount(v.tool_infrastructure)}
-            hint="MCP servers and gateways agents use"
+            label="Platforms connected"
+            value={formatCount(s?.connections)}
+            hint="Connections to AI platforms and source repository hosts"
           />
         </Grid>
       </Grid>
@@ -274,8 +262,8 @@ export function OverviewPanel({
                   <ScanStatusChip status={s.latestScan.status} />
                   <Typography variant="body2" color="text.secondary">
                     {formatRelativeTime(s.latestScan.startedAt ?? s.latestScan.createdAt)} ·{" "}
-                    {s.latestScan.findingsCount} findings · {s.connections} connected{" "}
-                    {s.connections === 1 ? "provider" : "providers"}
+                    {s.latestScan.connectionIds.length}{" "}
+                    {s.latestScan.connectionIds.length === 1 ? "platform" : "platforms"} scanned
                   </Typography>
                 </Stack>
               ) : (
@@ -294,7 +282,7 @@ export function OverviewPanel({
                     })
                   }
                 >
-                  View findings
+                  View agents
                 </Button>
                 <Button variant="text" onClick={onOpenScans}>
                   All scans
@@ -302,80 +290,27 @@ export function OverviewPanel({
               </Stack>
             )}
           </Stack>
-          {s && Object.keys(s.byProvider).length > 0 && (
-            <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 1.5 }}>
-              Findings by provider:{" "}
-              {Object.entries(s.byProvider)
-                .map(([p, n]) => `${providerLabel(p)} ${n}`)
-                .join(" · ")}
-            </Typography>
-          )}
         </CardContent>
       </Card>
 
-      {scoring && providers.data && (
-        <Accordion variant="outlined" disableGutters>
-          <AccordionSummary expandIcon={<ChevronDown size={18} />}>
-            <Typography variant="subtitle1">How the confidence score works</Typography>
-          </AccordionSummary>
-          <AccordionDetails>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              A finding&apos;s confidence score adds the weight of the signals the provider APIs
-              show, once per kind of evidence, up to {scoring.maxScore}. An agent object the
-              provider itself lists is definitive and scores {scoring.maxScore} on its own. An agent
-              scores {scoring.agentThreshold} or more with at least one definitive or high signal; a
-              possible agent scores {scoring.possibleAgentThreshold} to {scoring.agentThreshold - 1}{" "}
-              with a high signal; anything else is an LLM consumer. Prompts, completions and tool
-              payloads are never stored. Open a connection type to see its signals.
+      {byPlatform.length > 0 && (
+        <Card variant="outlined">
+          <CardContent>
+            <Typography variant="subtitle1" sx={{ mb: 1 }}>
+              Unregistered agents by platform
             </Typography>
-            <Stack spacing={1}>
-              {providers.data.providers
-                .map((p) => ({
-                  p,
-                  signals: providers.data?.signals.filter((d) => d.provider === p.provider) ?? [],
-                }))
-                .filter((x) => x.signals.length > 0)
-                .map(({ p, signals }) => (
-                  <Accordion key={p.provider} variant="outlined" disableGutters>
-                    <AccordionSummary expandIcon={<ChevronDown size={16} />}>
-                      <Typography variant="body2" fontWeight={500}>
-                        {p.displayName}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>
-                        · {signals.length} {signals.length === 1 ? "signal" : "signals"}
-                      </Typography>
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Box sx={{ overflowX: "auto" }}>
-                        <ListingTable>
-                          <ListingTable.Head>
-                            <ListingTable.Row>
-                              <ListingTable.Cell>Signal</ListingTable.Cell>
-                              <ListingTable.Cell>Weight</ListingTable.Cell>
-                              <ListingTable.Cell>Exact condition</ListingTable.Cell>
-                            </ListingTable.Row>
-                          </ListingTable.Head>
-                          <ListingTable.Body>
-                            {signals.map((d) => (
-                              <ListingTable.Row key={d.code}>
-                                <ListingTable.Cell>{d.name}</ListingTable.Cell>
-                                <ListingTable.Cell>{d.weight}</ListingTable.Cell>
-                                <ListingTable.Cell>
-                                  <Typography variant="caption" color="text.secondary">
-                                    {d.condition}
-                                  </Typography>
-                                </ListingTable.Cell>
-                              </ListingTable.Row>
-                            ))}
-                          </ListingTable.Body>
-                        </ListingTable>
-                      </Box>
-                    </AccordionDetails>
-                  </Accordion>
-                ))}
+            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+              {byPlatform.map(([p, n]) => (
+                <Chip
+                  key={p}
+                  variant="outlined"
+                  label={`${providerLabel(p)} · ${formatCount(n)}`}
+                  onClick={() => onOpenAgents(p)}
+                />
+              ))}
             </Stack>
-          </AccordionDetails>
-        </Accordion>
+          </CardContent>
+        </Card>
       )}
 
       <GettingStarted steps={steps} />

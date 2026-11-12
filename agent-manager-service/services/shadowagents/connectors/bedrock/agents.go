@@ -109,9 +109,6 @@ func (s *scan) getClassicAgent(ctx context.Context, rc *regionClients, id string
 	}
 	if role := str(a.AgentResourceRoleArn); role != "" {
 		f.Attributes["roleArn"] = role
-		if key := roleKey(role); key != "" {
-			s.agentsByRole[key] = append(s.agentsByRole[key], f)
-		}
 	}
 	f.ProviderCreatedAt = timePtr(a.CreatedAt)
 }

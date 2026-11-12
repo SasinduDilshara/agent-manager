@@ -40,25 +40,13 @@ import (
 
 // Shadow Agent Discovery limits.
 const (
-	ShadowDefaultLookbackDays = 30
-	ShadowMaxLookbackDays     = 90
-	// ShadowRetirementObservationDays is how many complete days without
-	// direct provider usage an onboarded workload needs before its direct
-	// credential is ready to retire.
-	ShadowRetirementObservationDays = 7
-	maxShadowConnectionsPerOrg      = 50
-	maxShadowNameLength             = 100
-	shadowConnectionTestTimeout     = 2 * time.Minute
+	maxShadowConnectionsPerOrg  = 50
+	maxShadowNameLength         = 100
+	shadowConnectionTestTimeout = 2 * time.Minute
 )
 
-// ShadowConnectors are the connectors by provider.
+// ShadowConnectors are the connectors by platform.
 type ShadowConnectors map[string]sa.Connector
-
-// ShadowAgentLookup finds an agent, so onboarding links only to an agent
-// that exists in the caller's org.
-type ShadowAgentLookup interface {
-	GetAgent(ctx context.Context, ouID string, projectName string, agentName string) (*models.AgentResponse, error)
-}
 
 // ShadowConnectionInput creates or updates a connection.
 type ShadowConnectionInput struct {
@@ -68,7 +56,7 @@ type ShadowConnectionInput struct {
 	// Settings are field values by the provider's field keys.
 	Settings map[string]any
 	// RemoveSecrets, on update, names optional secret fields whose stored
-	// value is removed (for example the Admin API key).
+	// value is removed (for example the AWS session token).
 	RemoveSecrets []string
 }
 
@@ -79,15 +67,11 @@ type ShadowConnectionView struct {
 	EndpointWarnings []string
 }
 
-// ShadowFindingView is a finding with all its evidence.
+// ShadowFindingView is an agent with its evidence and possible duplicates.
 type ShadowFindingView struct {
-	Row        repositories.ShadowFindingRow
-	Signals    []models.ShadowFindingSignal
-	Counted    map[uuid.UUID]bool
-	Keys       []models.ShadowAPIKey
-	Usage      []models.ShadowUsageDaily
-	Related    []ShadowRelationView
-	Retirement ShadowRetirementView
+	Row     repositories.ShadowFindingRow
+	Signals []models.ShadowFindingSignal
+	Related []ShadowRelationView
 }
 
 // ShadowRelationView is a relation with the related finding's name.
@@ -97,8 +81,8 @@ type ShadowRelationView struct {
 	Provider    string
 }
 
-// ShadowAgentService is Shadow Agent Discovery (Method 1): provider
-// connections, scans, findings, onboarding and credential retirement. Every
+// ShadowAgentService is Shadow Agent Discovery: platform connections, scans
+// of the platforms' agent listings, and the agents they found. Every
 // credential change is recorded fail-closed in the audit trail before it
 // applies.
 type ShadowAgentService interface {
@@ -109,22 +93,29 @@ type ShadowAgentService interface {
 	DeleteConnection(ctx context.Context, ouID string, id uuid.UUID) error
 	TestConnection(ctx context.Context, ouID string, id uuid.UUID) (*models.ShadowConnectionTestInfo, error)
 
-	CreateScan(ctx context.Context, ouID string, connectionIDs []uuid.UUID, lookbackDays int) (*models.ShadowScan, error)
+	// CreateScan queues a scan of the given connections, or of every
+	// connection when none is given.
+	CreateScan(ctx context.Context, ouID string, connectionIDs []uuid.UUID) (*models.ShadowScan, error)
 	ListScans(ctx context.Context, ouID string, limit int) ([]models.ShadowScan, error)
 	GetScan(ctx context.Context, ouID string, id uuid.UUID) (*models.ShadowScan, error)
+	// ClearScans deletes the org's finished scans; a queued or running scan is
+	// kept. Agents are not changed.
+	ClearScans(ctx context.Context, ouID string) (int, error)
 	Summary(ctx context.Context, ouID string) (repositories.ShadowSummary, *models.ShadowScan, error)
 
 	ListFindings(ctx context.Context, ouID string, f repositories.ShadowFindingFilter) ([]repositories.ShadowFindingRow, int, error)
 	GetFinding(ctx context.Context, ouID string, id uuid.UUID) (*ShadowFindingView, error)
 	UpdateFindingStatus(ctx context.Context, ouID string, id uuid.UUID, status string) (*ShadowFindingView, error)
-	Onboard(ctx context.Context, ouID string, id uuid.UUID, projectName, agentName string) (*ShadowFindingView, error)
-	ConfirmRetirement(ctx context.Context, ouID string, id uuid.UUID) (*ShadowFindingView, error)
+	// DeleteFinding deletes an agent, on every connection that found it. A
+	// later scan lists it again if a platform still has it.
+	DeleteFinding(ctx context.Context, ouID string, id uuid.UUID) error
+	// DeleteFindings deletes every agent of the org and returns how many.
+	DeleteFindings(ctx context.Context, ouID string) (int, error)
 }
 
 type shadowAgentService struct {
 	repo          repositories.ShadowAgentRepository
 	connectors    ShadowConnectors
-	agents        ShadowAgentLookup
 	encryptionKey []byte
 	logger        *slog.Logger
 	now           func() time.Time
@@ -132,11 +123,10 @@ type shadowAgentService struct {
 
 // NewShadowAgentService creates a ShadowAgentService.
 func NewShadowAgentService(
-	repo repositories.ShadowAgentRepository, connectors ShadowConnectors, agents ShadowAgentLookup,
-	encryptionKey []byte, logger *slog.Logger,
+	repo repositories.ShadowAgentRepository, connectors ShadowConnectors, encryptionKey []byte, logger *slog.Logger,
 ) ShadowAgentService {
 	return &shadowAgentService{
-		repo: repo, connectors: connectors, agents: agents, encryptionKey: encryptionKey, logger: logger, now: time.Now,
+		repo: repo, connectors: connectors, encryptionKey: encryptionKey, logger: logger, now: time.Now,
 	}
 }
 
@@ -246,7 +236,7 @@ func (s *shadowAgentService) UpdateConnection(
 		in.Provider = c.Provider
 	}
 	if in.Provider != c.Provider {
-		return nil, fmt.Errorf("%w: the provider of a connection cannot be changed", utils.ErrInvalidInput)
+		return nil, fmt.Errorf("%w: the platform of a connection cannot be changed", utils.ErrInvalidInput)
 	}
 	spec, err := validateConnectionBasics(in)
 	if err != nil {
@@ -409,7 +399,7 @@ func validateConnectionBasics(in ShadowConnectionInput) (sa.ProviderSpec, error)
 	}
 	spec, ok := sa.Provider(in.Provider)
 	if !ok {
-		return sa.ProviderSpec{}, fmt.Errorf("%w: unknown provider %q", utils.ErrInvalidInput, in.Provider)
+		return sa.ProviderSpec{}, fmt.Errorf("%w: unknown platform %q", utils.ErrInvalidInput, in.Provider)
 	}
 	return spec, nil
 }
@@ -586,7 +576,6 @@ func secretHints(secret models.ShadowConnectionSecret) map[string]string {
 			out[k] = h
 		}
 	}
-	add("apiKey", secret.APIKey)
 	add("clientSecret", secret.ClientSecret)
 	add("secretAccessKey", secret.SecretAccessKey)
 	add("sessionToken", secret.SessionToken)
@@ -664,7 +653,7 @@ func checkCredentialChoice(spec sa.ProviderSpec, secret models.ShadowConnectionS
 
 // shadowSecretFields are the secret's members, by form field key.
 var shadowSecretFields = []string{
-	"apiKey", sa.FieldScopedKeys, "clientSecret", "secretAccessKey", "sessionToken", "serviceAccountJson",
+	sa.FieldScopedKeys, "clientSecret", "secretAccessKey", "sessionToken", "serviceAccountJson",
 	sa.FieldPersonalAccessToken,
 }
 
@@ -695,8 +684,6 @@ func shadowSecretHas(secret models.ShadowConnectionSecret, key string) bool {
 			}
 		}
 		return false
-	case "apiKey":
-		return strings.TrimSpace(secret.APIKey) != ""
 	case "clientSecret":
 		return strings.TrimSpace(secret.ClientSecret) != ""
 	case "secretAccessKey":
@@ -837,6 +824,14 @@ func applyShadowSettings(
 			}
 			secret.ScopedKeys = next
 			cfg.ScopedKeyIDs = sortedKeys(next)
+			if active && f.Required && len(next) == 0 {
+				return fmt.Errorf("%w: %s needs at least one ID and key", utils.ErrInvalidInput, f.Label)
+			}
+		}
+	}
+	for _, f := range spec.Fields {
+		if f.Kind == sa.FieldKeyMap && f.Required && sa.OptionActive(f.Option, options) && !shadowSecretHas(*secret, f.Key) {
+			return fmt.Errorf("%w: %s needs at least one ID and key", utils.ErrInvalidInput, f.Label)
 		}
 	}
 	return nil
@@ -929,8 +924,6 @@ func settingList(f sa.FieldSpec, raw any, given bool) ([]string, error) {
 
 func setShadowBool(cfg *models.ShadowConnectionConfig, key string, v bool) {
 	switch key {
-	case sa.OptDeepInspection:
-		cfg.DeepInspection = v
 	case sa.OptAllSubscriptions:
 		cfg.AllSubscriptions = v
 	case sa.OptClassicAgents:
@@ -998,8 +991,6 @@ func setShadowList(cfg *models.ShadowConnectionConfig, key string, v []string) {
 
 func setShadowSecret(secret *models.ShadowConnectionSecret, key, v string) {
 	switch key {
-	case "apiKey":
-		secret.APIKey = v
 	case "clientSecret":
 		secret.ClientSecret = v
 	case "secretAccessKey":
@@ -1031,8 +1022,8 @@ func shadowSettingsOf(provider string, cfg models.ShadowConnectionConfig) map[st
 		"repositories": cfg.Repositories, "projects": cfg.Projects,
 	}
 	bools := map[string]bool{
-		sa.OptDeepInspection: cfg.DeepInspection, sa.OptAllSubscriptions: cfg.AllSubscriptions,
-		sa.OptClassicAgents: cfg.IncludeClassicAgents, sa.OptGlobalMulti: cfg.IncludeGlobalAndMultiRegion,
+		sa.OptAllSubscriptions: cfg.AllSubscriptions,
+		sa.OptClassicAgents:    cfg.IncludeClassicAgents, sa.OptGlobalMulti: cfg.IncludeGlobalAndMultiRegion,
 		sa.OptAllRepositories: cfg.AllRepositories,
 		sa.OptAllProjects:     cfg.AllProjects, sa.OptUseEntra: cfg.UseEntra, sa.OptReadCIAndEnv: cfg.ReadCIAndEnvFiles,
 	}
@@ -1075,14 +1066,8 @@ func sortedKeys(m map[string]string) []string {
 // ---- scans ----
 
 func (s *shadowAgentService) CreateScan(
-	ctx context.Context, ouID string, connectionIDs []uuid.UUID, lookbackDays int,
+	ctx context.Context, ouID string, connectionIDs []uuid.UUID,
 ) (*models.ShadowScan, error) {
-	if lookbackDays == 0 {
-		lookbackDays = ShadowDefaultLookbackDays
-	}
-	if lookbackDays < 1 || lookbackDays > ShadowMaxLookbackDays {
-		return nil, fmt.Errorf("%w: lookbackDays must be between 1 and %d", utils.ErrInvalidInput, ShadowMaxLookbackDays)
-	}
 	all, err := s.repo.ListConnections(ctx, ouID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list connections: %w", err)
@@ -1115,7 +1100,6 @@ func (s *shadowAgentService) CreateScan(
 		ID:            uuid.New(),
 		OUID:          ouID,
 		Status:        models.ShadowScanQueued,
-		LookbackDays:  lookbackDays,
 		ConnectionIDs: ids,
 		Results:       []models.ShadowScanConnectionResult{},
 		RequestedBy:   audit.BuildEvent(ctx, audit.ActionShadowScanCreate).ActorID,
@@ -1140,6 +1124,14 @@ func (s *shadowAgentService) ListScans(ctx context.Context, ouID string, limit i
 	return list, nil
 }
 
+func (s *shadowAgentService) ClearScans(ctx context.Context, ouID string) (int, error) {
+	n, err := s.repo.DeleteFinishedScans(ctx, ouID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to clear scans: %w", err)
+	}
+	return int(n), nil
+}
+
 func (s *shadowAgentService) GetScan(ctx context.Context, ouID string, id uuid.UUID) (*models.ShadowScan, error) {
 	scan, err := s.repo.GetScan(ctx, ouID, id)
 	if err != nil {
@@ -1154,7 +1146,7 @@ func (s *shadowAgentService) GetScan(ctx context.Context, ouID string, id uuid.U
 func (s *shadowAgentService) Summary(ctx context.Context, ouID string) (repositories.ShadowSummary, *models.ShadowScan, error) {
 	sum, err := s.repo.Summary(ctx, ouID)
 	if err != nil {
-		return sum, nil, fmt.Errorf("failed to summarize findings: %w", err)
+		return sum, nil, fmt.Errorf("failed to summarize agents: %w", err)
 	}
 	latest, err := s.repo.LatestScan(ctx, ouID)
 	if err != nil {
@@ -1170,7 +1162,6 @@ func (s *shadowAgentService) Summary(ctx context.Context, ouID string) (reposito
 
 var shadowFindingStatuses = map[string]bool{
 	models.ShadowStatusNew: true, models.ShadowStatusReviewed: true, models.ShadowStatusDismissed: true,
-	models.ShadowStatusOnboarded: true, models.ShadowStatusRetired: true,
 }
 
 func (s *shadowAgentService) ListFindings(
@@ -1178,7 +1169,7 @@ func (s *shadowAgentService) ListFindings(
 ) ([]repositories.ShadowFindingRow, int, error) {
 	if f.Provider != "" {
 		if _, ok := sa.Provider(f.Provider); !ok {
-			return nil, 0, fmt.Errorf("%w: unknown provider %q", utils.ErrInvalidInput, f.Provider)
+			return nil, 0, fmt.Errorf("%w: unknown platform %q", utils.ErrInvalidInput, f.Provider)
 		}
 	}
 	if f.Status != "" && !shadowFindingStatuses[f.Status] {
@@ -1192,7 +1183,7 @@ func (s *shadowAgentService) ListFindings(
 	}
 	rows, total, err := s.repo.ListFindings(ctx, ouID, f)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to list findings: %w", err)
+		return nil, 0, fmt.Errorf("failed to list agents: %w", err)
 	}
 	return rows, total, nil
 }
@@ -1203,38 +1194,17 @@ func (s *shadowAgentService) GetFinding(ctx context.Context, ouID string, id uui
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, utils.ErrShadowFindingNotFound
 		}
-		return nil, fmt.Errorf("failed to get finding: %w", err)
+		return nil, fmt.Errorf("failed to get the agent: %w", err)
 	}
 	signals, err := s.repo.ListSignals(ctx, ouID, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list the finding's signals: %w", err)
-	}
-	keys, err := s.repo.ListFindingKeys(ctx, ouID, id)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list the finding's keys: %w", err)
-	}
-	usage, err := s.repo.ListUsage(ctx, ouID, id)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list the finding's usage: %w", err)
+		return nil, fmt.Errorf("failed to list the agent's evidence: %w", err)
 	}
 	related, err := s.relatedViews(ctx, ouID, row.Related)
 	if err != nil {
 		return nil, err
 	}
-	latest, err := s.repo.LatestScan(ctx, ouID)
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, fmt.Errorf("failed to get the latest scan: %w", err)
-	}
-	return &ShadowFindingView{
-		Row:     *row,
-		Signals: signals,
-		Counted: countedSignals(signals),
-		Keys:    keys,
-		Usage:   usage,
-		Related: related,
-		Retirement: EvaluateShadowRetirement(&row.ShadowFinding, usage, keys,
-			dataThrough(&row.ShadowFinding, latest, false), dataThrough(&row.ShadowFinding, latest, true)),
-	}, nil
+	return &ShadowFindingView{Row: *row, Signals: signals, Related: related}, nil
 }
 
 func (s *shadowAgentService) relatedViews(
@@ -1259,25 +1229,23 @@ func (s *shadowAgentService) relatedViews(
 	return out, nil
 }
 
-// countedSignals marks, per group, the signal whose weight counts in the
-// score (the highest weight; the first by code on a tie).
-func countedSignals(signals []models.ShadowFindingSignal) map[uuid.UUID]bool {
-	best := map[string]models.ShadowFindingSignal{}
-	for _, sig := range signals {
-		d, ok := sa.Def(sig.Code)
-		if !ok {
-			continue
-		}
-		cur, seen := best[d.Group]
-		if !seen || sig.Weight > cur.Weight || (sig.Weight == cur.Weight && sig.Code < cur.Code) {
-			best[d.Group] = sig
-		}
+func (s *shadowAgentService) DeleteFinding(ctx context.Context, ouID string, id uuid.UUID) error {
+	found, err := s.repo.DeleteFinding(ctx, ouID, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete the agent: %w", err)
 	}
-	out := map[uuid.UUID]bool{}
-	for _, sig := range best {
-		out[sig.ID] = true
+	if !found {
+		return utils.ErrShadowFindingNotFound
 	}
-	return out
+	return nil
+}
+
+func (s *shadowAgentService) DeleteFindings(ctx context.Context, ouID string) (int, error) {
+	n, err := s.repo.DeleteFindings(ctx, ouID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete the agents: %w", err)
+	}
+	return int(n), nil
 }
 
 func (s *shadowAgentService) UpdateFindingStatus(ctx context.Context, ouID string, id uuid.UUID, status string) (*ShadowFindingView, error) {
@@ -1286,73 +1254,11 @@ func (s *shadowAgentService) UpdateFindingStatus(ctx context.Context, ouID strin
 	default:
 		return nil, fmt.Errorf("%w: status must be new, reviewed or dismissed", utils.ErrInvalidInput)
 	}
-	current, err := s.GetFinding(ctx, ouID, id)
-	if err != nil {
-		return nil, err
-	}
-	if current.Row.LinkedAgent != "" {
-		return nil, fmt.Errorf("%w: an onboarded finding keeps its status", utils.ErrInvalidInput)
-	}
 	if err := s.repo.UpdateFindingStatus(ctx, ouID, id, status); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, utils.ErrShadowFindingNotFound
 		}
-		return nil, fmt.Errorf("failed to update the finding: %w", err)
-	}
-	return s.GetFinding(ctx, ouID, id)
-}
-
-func (s *shadowAgentService) Onboard(
-	ctx context.Context, ouID string, id uuid.UUID, projectName, agentName string,
-) (*ShadowFindingView, error) {
-	projectName, agentName = strings.TrimSpace(projectName), strings.TrimSpace(agentName)
-	if projectName == "" || agentName == "" {
-		return nil, fmt.Errorf("%w: projectName and agentName are required", utils.ErrInvalidInput)
-	}
-	current, err := s.GetFinding(ctx, ouID, id)
-	if err != nil {
-		return nil, err
-	}
-	if current.Row.Kind == models.ShadowKindToolInfra {
-		return nil, fmt.Errorf("%w: tool infrastructure is not an agent and cannot be onboarded", utils.ErrInvalidInput)
-	}
-	// The agent must exist in the caller's org (defense in depth: the org
-	// comes from the token, never from the request).
-	if _, err := s.agents.GetAgent(ctx, ouID, projectName, agentName); err != nil {
-		return nil, err
-	}
-	by := audit.BuildEvent(ctx, audit.ActionShadowFindingOnboard).ActorID
-	if err := s.repo.OnboardFinding(ctx, ouID, id, projectName, agentName, by, s.now().UTC()); err != nil {
-		switch {
-		case errors.Is(err, gorm.ErrRecordNotFound):
-			return nil, utils.ErrShadowFindingNotFound
-		case errors.Is(err, utils.ErrShadowAlreadyOnboarded):
-			return nil, err
-		default:
-			return nil, fmt.Errorf("failed to onboard the finding: %w", err)
-		}
-	}
-	return s.GetFinding(ctx, ouID, id)
-}
-
-func (s *shadowAgentService) ConfirmRetirement(ctx context.Context, ouID string, id uuid.UUID) (*ShadowFindingView, error) {
-	current, err := s.GetFinding(ctx, ouID, id)
-	if err != nil {
-		return nil, err
-	}
-	if current.Row.LinkedAgent == "" {
-		return nil, utils.ErrShadowNotOnboarded
-	}
-	if current.Retirement.State != models.ShadowRetirementReady {
-		return nil, fmt.Errorf("%w: the direct credential is not ready to retire (%s)", utils.ErrConflict, current.Retirement.State)
-	}
-	now := s.now().UTC()
-	by := audit.BuildEvent(ctx, audit.ActionShadowFindingConfirmRetire).ActorID
-	if err := s.repo.SetRetirement(ctx, ouID, id, models.ShadowRetirementPendingVerify, by, &now, nil); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, utils.ErrShadowFindingNotFound
-		}
-		return nil, fmt.Errorf("failed to record the retirement: %w", err)
+		return nil, fmt.Errorf("failed to update the agent: %w", err)
 	}
 	return s.GetFinding(ctx, ouID, id)
 }

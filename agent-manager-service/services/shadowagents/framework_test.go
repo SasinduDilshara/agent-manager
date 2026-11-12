@@ -22,6 +22,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -33,76 +34,90 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 )
 
-// ---- scoring ----
+// ---- evidence catalog ----
 
-func TestScoreVerdicts(t *testing.T) {
-	tests := []struct {
-		name    string
-		kind    string
-		codes   []string
-		score   int
-		verdict string
-	}{
-		{"agent object alone is an agent", models.ShadowKindPlatformAgent, []string{SigOpenAIAgentObject}, 60, models.ShadowVerdictAgent},
-		{"plain usage only", models.ShadowKindAPIKey, []string{SigOpenAIPlainUsage}, 5, models.ShadowVerdictLLMConsumer},
-		{"tool call + plain usage is a possible agent", models.ShadowKindAPIKey, []string{SigOpenAIToolCallBatch, SigOpenAIPlainUsage}, 40, models.ShadowVerdictPossibleAgent},
-		{"tool call + tool result + usage is an agent", models.ShadowKindAPIKey, []string{SigOpenAIToolCallBatch, SigOpenAIToolResultBatch, SigOpenAIPlainUsage}, 75, models.ShadowVerdictAgent},
-		{"mediums without a high stay LLM consumer", models.ShadowKindAPIKey, []string{SigOpenAIHostedSearch, SigOpenAICodeInterpreter, SigOpenAIPlainUsage}, 25, models.ShadowVerdictLLMConsumer},
-		{
-			"three mediums at 60 without high or definitive are not an agent", models.ShadowKindRuntime,
-			[]string{SigGoogleEngineInUse, SigFoundryUsesTools, SigOpenAIHostedSearch},
-			60, models.ShadowVerdictLLMConsumer,
-		},
-		{
-			"score is capped", models.ShadowKindPlatformAgent,
-			[]string{SigFoundryAgentObject, SigFoundryToolCallResp, SigOpenAIToolResultBatch, SigFoundryUsesTools, SigFoundryPlainUsage},
-			100, models.ShadowVerdictAgent,
-		},
-		{"info signals weigh nothing", models.ShadowKindPlatformAgent, []string{SigFoundryPossibleDupOf}, 0, models.ShadowVerdictLLMConsumer},
-		{"unknown codes count nothing", models.ShadowKindAPIKey, []string{"made.up"}, 0, models.ShadowVerdictLLMConsumer},
-		{"tool infrastructure is never an agent", models.ShadowKindToolInfra, []string{SigBedrockMCPGateway, SigBedrockRegistryTool}, 0, models.ShadowVerdictToolInfra},
+// TestEvidenceCatalog pins the evidence codes: one per agent listing, in
+// display order, each with its platform, a name and the exact condition.
+func TestEvidenceCatalog(t *testing.T) {
+	want := []string{
+		SigOpenAIAgentObject,
+		SigAnthropicManagedAgent,
+		SigBedrockAgentCoreRuntime, SigBedrockRegistryAgent, SigBedrockClassicAgent,
+		SigGoogleAgentEngine, SigGoogleRegistryAgent,
+		SigFoundryAgentObject, SigFoundryClassicAgent, SigFoundryPossibleDupOf,
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			score, verdict := Score(tt.kind, tt.codes)
-			assert.Equal(t, tt.score, score)
-			assert.Equal(t, tt.verdict, verdict)
-		})
+	providers := map[string]bool{}
+	for _, p := range models.ShadowProviders {
+		providers[p] = true
 	}
+	defs := Defs()
+	got := make([]string, 0, len(defs))
+	seen := map[string]bool{}
+	for _, d := range defs {
+		got = append(got, d.Code)
+		assert.False(t, seen[d.Code], "duplicate code %s", d.Code)
+		seen[d.Code] = true
+		assert.True(t, providers[d.Provider], d.Code)
+		assert.True(t, strings.HasPrefix(d.Code, d.Provider+"."), "code %s is prefixed by its provider", d.Code)
+		assert.NotEmpty(t, d.Name, d.Code)
+		assert.NotEmpty(t, d.Condition, d.Code)
+		looked, ok := Def(d.Code)
+		require.True(t, ok, d.Code)
+		assert.Equal(t, d, looked)
+	}
+	assert.Equal(t, want, got, "the catalog, in display order")
+	_, ok := Def("openai.plain_usage")
+	assert.False(t, ok, "usage evidence is gone")
+
+	// Defs returns a copy.
+	defs[0].Name = "changed"
+	d, _ := Def(defs[0].Code)
+	assert.NotEqual(t, "changed", d.Name)
 }
 
-// Related evidence counts once per group: tool calls seen in a batch and in
-// stored completions, or plain usage reported by two calls, are one kind of
-// evidence about the same workload.
-func TestScoreCountsEachGroupOnce(t *testing.T) {
-	one, _ := Score(models.ShadowKindAPIKey, []string{SigOpenAIToolCallBatch})
-	both, _ := Score(models.ShadowKindAPIKey, []string{SigOpenAIToolCallBatch, SigOpenAIToolCallCompletion})
-	assert.Equal(t, one, both)
-	dup, _ := Score(models.ShadowKindAPIKey, []string{SigOpenAIPlainUsage, SigOpenAIPlainUsage})
-	assert.Equal(t, WeightLow, dup)
-}
+// forbiddenText are the sources a scan no longer reads and the features that
+// are gone; no form, endpoint or permission text of an agent platform may
+// mention them ("retires 31 March 2027", a platform date, is fine).
+var forbiddenText = regexp.MustCompile(
+	`(?i)deep inspection|\busage\b|cloudtrail|cloudwatch|\blogs?\b|monitoring|\bscores?\b|verdict|\bretire(ment|d)?\b|onboard`)
 
 func TestCatalogIsConsistent(t *testing.T) {
 	providers := map[string]bool{}
 	for _, p := range models.ShadowProviders {
 		providers[p] = true
 	}
-	for _, d := range Defs() {
-		assert.True(t, providers[d.Provider], d.Code)
-		assert.True(t, strings.HasPrefix(d.Code, d.Provider+"."), "code %s is prefixed by its provider", d.Code)
-		assert.NotEmpty(t, d.Condition, d.Code)
-		assert.Equal(t, tierWeight(d.Tier), d.Weight, d.Code)
-		if d.Group == GroupInfo {
-			assert.Equal(t, WeightInfo, d.Weight, d.Code)
-		}
-	}
 	for _, p := range Providers() {
 		assert.True(t, providers[p.Provider], p.Provider)
 		assert.NotEmpty(t, p.Endpoints, p.Provider)
 		assert.NotEmpty(t, p.Permissions, p.Provider)
+		fields := map[string]FieldSpec{}
+		for _, f := range p.Fields {
+			assert.NotContains(t, fields, f.Key, "%s: duplicate field %s", p.Provider, f.Key)
+			fields[f.Key] = f
+		}
 		for _, e := range p.Endpoints {
 			require.NoError(t, ValidateEndpoint(e, e.Default), "%s %s", p.Provider, e.Key)
 			assert.True(t, IsOfficialHost(e, e.Default), "%s %s default is official", p.Provider, e.Key)
+			if e.Option != "" {
+				f, ok := fields[OptionKey(e.Option)]
+				if assert.True(t, ok, "%s %s: option %s is a field", p.Provider, e.Key, e.Option) && e.Option != "roleArn" {
+					assert.Equal(t, FieldCheckbox, f.Kind, "%s %s: option %s is a checkbox", p.Provider, e.Key, e.Option)
+				}
+			}
+			if e.FillFrom != "" {
+				f, ok := fields[e.FillFrom]
+				if assert.True(t, ok, "%s %s: fillFrom %s is a field", p.Provider, e.Key, e.FillFrom) {
+					assert.Equal(t, FieldList, f.Kind, "%s %s: fillFrom is a list", p.Provider, e.Key)
+				}
+			}
+		}
+		for _, f := range p.Fields {
+			if f.Option != "" {
+				o, ok := fields[OptionKey(f.Option)]
+				if assert.True(t, ok, "%s %s: option %s is a field", p.Provider, f.Key, f.Option) {
+					assert.Equal(t, FieldCheckbox, o.Kind, "%s %s: option is a checkbox", p.Provider, f.Key)
+				}
+			}
 		}
 		for _, perm := range p.Permissions {
 			if perm.Policy != "" {
@@ -120,16 +135,142 @@ func TestCatalogIsConsistent(t *testing.T) {
 				section = f.Section
 			}
 		}
+		if p.SourceHost {
+			continue
+		}
+		texts := []string{p.Description}
+		for _, f := range p.Fields {
+			texts = append(texts, f.Label, f.Help, f.Placeholder)
+		}
+		for _, e := range p.Endpoints {
+			texts = append(texts, e.Label)
+		}
+		for _, perm := range p.Permissions {
+			texts = append(texts, perm.Title, perm.Summary, perm.Note, perm.Policy)
+			texts = append(texts, perm.Reads...)
+			texts = append(texts, perm.Items...)
+		}
+		for _, s := range texts {
+			assert.False(t, forbiddenText.MatchString(s), "%s: %q mentions a source no longer read", p.Provider, s)
+		}
 	}
 }
 
-// ---- retention ----
+// TestAgentListingCredentials pins who lists the agents: a project or
+// workspace key, required, and nothing else (an Admin key cannot list agents).
+func TestAgentListingCredentials(t *testing.T) {
+	for _, provider := range []string{models.ShadowProviderOpenAI, models.ShadowProviderAnthropic} {
+		p, ok := Provider(provider)
+		require.True(t, ok)
+		scoped, ok := p.Field(FieldScopedKeys)
+		require.True(t, ok, provider)
+		assert.Equal(t, FieldKeyMap, scoped.Kind, provider)
+		assert.True(t, scoped.Required, "%s: the keys that list agents are required", provider)
+		require.Len(t, p.Fields, 1, "%s: the keys that list agents are the only field", provider)
+		_, admin := p.Field("apiKey")
+		assert.False(t, admin, "%s: no Admin key, it cannot list agents", provider)
+		for _, perm := range p.Permissions {
+			assert.NotContains(t, perm.Title, "Admin", provider)
+		}
+		for _, cp := range providerCapabilities[provider] {
+			assert.Equal(t, []string{FieldScopedKeys}, cp.Needs, "%s %s", provider, cp.Key)
+		}
+		_, hasChoice := CredentialChoiceOf(provider)
+		assert.False(t, hasChoice, provider)
+		_, deep := p.Field("deepInspection")
+		assert.False(t, deep, provider)
+	}
+}
 
-// TestCapabilitiesAreConsistent checks the "What can Agent Manager
-// analyze?" data against the catalog: every capability's signals exist and
-// belong to the provider, every need is a field or option of the provider,
-// every signal the provider can emit is covered by some capability, and the
-// credential choices name optional credential fields.
+func TestBedrockServicesAndPolicy(t *testing.T) {
+	p, ok := Provider(models.ShadowProviderBedrock)
+	require.True(t, ok)
+	var services []string
+	for _, f := range p.Fields {
+		if f.Section == SectionServices {
+			services = append(services, f.Key)
+			assert.True(t, IsServiceOption(f.Key), f.Key)
+			assert.True(t, f.DefaultBool, f.Key)
+		}
+	}
+	assert.Equal(t, []string{OptBedrockAgentCore, OptBedrockRegistry, OptBedrockClassicAgents}, services)
+	var endpoints []string
+	for _, e := range p.Endpoints {
+		endpoints = append(endpoints, e.Key)
+	}
+	assert.Equal(t, []string{EPBedrockSTS, EPBedrockAgentCore, EPBedrockRegistry, EPBedrockAgent}, endpoints)
+
+	var actions []string
+	for _, perm := range p.Permissions {
+		if perm.Policy == "" {
+			continue
+		}
+		var doc struct {
+			Statement []struct {
+				Action []string `json:"Action"`
+			} `json:"Statement"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(perm.Policy), &doc))
+		for _, st := range doc.Statement {
+			actions = append(actions, st.Action...)
+		}
+	}
+	assert.ElementsMatch(t, []string{
+		"bedrock-agentcore:ListAgentRuntimes", "bedrock-agentcore:GetAgentRuntime",
+		"agent-registry:ListRegistries", "agent-registry:ListRegistryRecords",
+		"bedrock:ListAgents", "bedrock:GetAgent", "bedrock:ListAgentActionGroups",
+	}, actions)
+	choice, ok := CredentialChoiceOf(models.ShadowProviderBedrock)
+	require.True(t, ok)
+	assert.Equal(t, services, choice.Fields)
+}
+
+func TestFoundryRoleListsAgentsOnly(t *testing.T) {
+	p, ok := Provider(models.ShadowProviderFoundry)
+	require.True(t, ok)
+	var role struct {
+		Actions     []string `json:"Actions"`
+		DataActions []string `json:"DataActions"`
+	}
+	for _, perm := range p.Permissions {
+		if perm.Policy != "" {
+			require.NoError(t, json.Unmarshal([]byte(perm.Policy), &role))
+		}
+	}
+	assert.ElementsMatch(t, []string{
+		"Microsoft.Resources/subscriptions/read",
+		"Microsoft.CognitiveServices/accounts/read",
+		"Microsoft.CognitiveServices/accounts/projects/read",
+	}, role.Actions)
+	assert.Equal(t, []string{"Microsoft.CognitiveServices/accounts/AIServices/agents/read"}, role.DataActions)
+	for _, a := range append(role.Actions, role.DataActions...) {
+		assert.NotContains(t, strings.ToLower(a), "metrics")
+		assert.NotContains(t, strings.ToLower(a), "deployments")
+		assert.NotContains(t, strings.ToLower(a), "responses")
+	}
+}
+
+func TestGoogleRegistryIsTheOnlyService(t *testing.T) {
+	p, ok := Provider(models.ShadowProviderGoogle)
+	require.True(t, ok)
+	var services []string
+	for _, f := range p.Fields {
+		if f.Section == SectionServices {
+			services = append(services, f.Key)
+		}
+	}
+	assert.Equal(t, []string{OptGoogleRegistry}, services)
+	assert.True(t, IsServiceOption(OptGoogleRegistry))
+	for _, e := range p.Endpoints {
+		assert.NotContains(t, []string{"monitoring", "logging"}, e.Key)
+	}
+}
+
+// TestCapabilitiesAreConsistent checks what a scan lists against the
+// catalog: every capability's evidence exists and belongs to the provider,
+// every need is a field or option of the provider, every evidence code the
+// provider can produce is covered by some capability, and credential
+// choices name optional service options.
 func TestCapabilitiesAreConsistent(t *testing.T) {
 	for _, p := range Providers() {
 		caps := Capabilities(p.Provider)
@@ -143,8 +284,8 @@ func TestCapabilitiesAreConsistent(t *testing.T) {
 			keys[c.Key] = true
 			for _, code := range c.Signals {
 				d, ok := Def(code)
-				if assert.True(t, ok, "%s: unknown signal %s", c.Key, code) {
-					assert.Equal(t, p.Provider, d.Provider, "%s: signal %s of another provider", c.Key, code)
+				if assert.True(t, ok, "%s: unknown evidence %s", c.Key, code) {
+					assert.Equal(t, p.Provider, d.Provider, "%s: evidence %s of another provider", c.Key, code)
 				}
 				covered[code] = true
 			}
@@ -152,10 +293,13 @@ func TestCapabilitiesAreConsistent(t *testing.T) {
 				_, ok := p.Field(need)
 				assert.True(t, ok, "%s: need %q is not a field of %s", c.Key, need, p.Provider)
 			}
+			if !p.SourceHost {
+				assert.False(t, forbiddenText.MatchString(c.Title+" "+c.Description), "%s mentions a source no longer read", c.Key)
+			}
 		}
 		for _, d := range Defs() {
 			if d.Provider == p.Provider {
-				assert.True(t, covered[d.Code], "%s: signal %s is in no capability", p.Provider, d.Code)
+				assert.True(t, covered[d.Code], "%s: evidence %s is in no capability", p.Provider, d.Code)
 			}
 		}
 		if choice, ok := CredentialChoiceOf(p.Provider); ok {
@@ -164,21 +308,11 @@ func TestCapabilitiesAreConsistent(t *testing.T) {
 				f, ok := p.Field(k)
 				if assert.True(t, ok, "%s: credential choice field %s", p.Provider, k) {
 					assert.False(t, f.Required, "%s: a credential choice field must be optional", k)
-					assert.Contains(t, []string{FieldSecret, FieldKeyMap, FieldCheckbox}, f.Kind, k)
-					if f.Kind == FieldCheckbox {
-						assert.True(t, IsServiceOption(k), "%s: a checkbox in a choice must be a service option", k)
-					}
+					assert.Equal(t, FieldCheckbox, f.Kind, k)
+					assert.True(t, IsServiceOption(k), "%s: a checkbox in a choice must be a service option", k)
 				}
 			}
 		}
-	}
-	for _, provider := range []string{models.ShadowProviderOpenAI, models.ShadowProviderAnthropic} {
-		p, _ := Provider(provider)
-		admin, _ := p.Field(FieldAPIKey)
-		assert.False(t, admin.Required, "%s Admin key is optional", provider)
-		assert.True(t, admin.Recommended, "%s Admin key is recommended", provider)
-		_, ok := CredentialChoiceOf(provider)
-		assert.True(t, ok, provider)
 	}
 }
 
@@ -194,6 +328,9 @@ func TestSanitizeAttributesAllowList(t *testing.T) {
 		"description":  strings.Repeat("x", 1000),
 		"unsupported":  struct{ A int }{1},
 		"toolCount":    3,
+		"models":       []string{"gpt-4.1"},
+		"sessionCount": 4,
+		"apiSources":   []string{"agents_api"},
 	}
 	out := SanitizeAttributes(in)
 	b, err := json.Marshal(out)
@@ -208,6 +345,19 @@ func TestSanitizeAttributesAllowList(t *testing.T) {
 	assert.Equal(t, []MCPServerRef{{Label: "github", Origin: "https://mcp.example.com"}}, out["mcpServers"])
 	assert.Len(t, out["description"], maxAttrString)
 	assert.Equal(t, 3, out["toolCount"])
+	for _, k := range []string{"models", "sessionCount", "apiSources"} {
+		assert.NotContains(t, out, k, "%s is no longer kept", k)
+	}
+}
+
+// TestAllowedAttributes filters stored attributes an earlier version kept.
+func TestAllowedAttributes(t *testing.T) {
+	out := AllowedAttributes(map[string]any{
+		"model": "gpt-4.1", "framework": "google-adk", "models": []any{"x"}, "sessionCount": 3.0,
+		"lastSessionAt": "2026-11-01", "invocationLogging": true, "deepInspection": true, "principalType": "IAMUser",
+	})
+	assert.Equal(t, map[string]any{"model": "gpt-4.1", "framework": "google-adk"}, out)
+	assert.Empty(t, AllowedAttributes(nil))
 }
 
 func TestOriginAndRepositoryURL(t *testing.T) {
@@ -368,7 +518,7 @@ func TestCallsMergeScopesWorstOutcome(t *testing.T) {
 	c.Record("GET /x", 2, nil)
 	c.Record("GET /x", 3, &CallError{Outcome: models.ShadowCallPermissionDenied, Status: 403, Message: "no"})
 	c.Record("GET /x", 1, nil)
-	c.Skip("GET /y", "deep inspection is off")
+	c.Skip("GET /y", ReasonServiceOff)
 	res := c.Results()
 	require.Len(t, res, 2)
 	assert.Equal(t, models.ShadowCallPermissionDenied, res[0].Outcome)
@@ -378,29 +528,43 @@ func TestCallsMergeScopesWorstOutcome(t *testing.T) {
 	assert.False(t, c.OK("GET /x"))
 }
 
-func TestFindingAggregation(t *testing.T) {
+func TestFindingsIndex(t *testing.T) {
 	fs := NewFindings()
-	f := fs.Get(models.ShadowKindAPIKey, "key_1")
-	day := time.Date(2026, 11, 1, 15, 0, 0, 0, time.UTC)
-	cost := 1.5
-	f.AddUsage(UsageDay{Day: day, KeyID: "key_1", Model: "m", Requests: 2, CostAmount: &cost, Currency: "usd"})
-	f.AddUsage(UsageDay{Day: day.Add(time.Hour), KeyID: "key_1", Model: "m", Requests: 3, CostAmount: &cost})
-	require.Len(t, f.Usage, 1, "same day, key and model are one row")
-	assert.Equal(t, int64(5), f.Usage[0].Requests)
-	assert.InDelta(t, 3.0, *f.Usage[0].CostAmount, 1e-9)
-	f.AddSignal(Signal{Code: SigOpenAIPlainUsage, Source: "s", Observed: map[string]any{"numModelRequests": int64(2)}})
-	f.AddSignal(Signal{Code: SigOpenAIPlainUsage, Source: "s", Observed: map[string]any{"numModelRequests": int64(3)}})
-	require.Len(t, f.Signals, 1)
-	assert.Equal(t, int64(5), f.Signals[0].Observed["numModelRequests"])
-	assert.Same(t, f, fs.Get(models.ShadowKindAPIKey, "key_1"))
-	fs.Remove(models.ShadowKindAPIKey, "key_1")
-	assert.Empty(t, fs.All())
+	a := fs.Get(models.ShadowKindRuntime, "arn:a")
+	b := fs.Get(models.ShadowKindPlatformAgent, "agent_b")
+	c := fs.Get(models.ShadowKindPlatformAgent, "agent_c")
+	assert.Same(t, a, fs.Get(models.ShadowKindRuntime, "arn:a"), "Get returns the same finding")
+	assert.NotSame(t, a, fs.Get(models.ShadowKindPlatformAgent, "arn:a"), "the kind is part of the key")
+	got, ok := fs.Lookup(models.ShadowKindPlatformAgent, "agent_b")
+	assert.True(t, ok)
+	assert.Same(t, b, got)
+	_, ok = fs.Lookup(models.ShadowKindPlatformAgent, "missing")
+	assert.False(t, ok)
+	assert.Equal(t, models.ShadowKindRuntime, a.Kind)
+	assert.Equal(t, "arn:a", a.ExternalID)
+	assert.NotNil(t, a.Attributes)
+
+	fs.Remove(models.ShadowKindPlatformAgent, "agent_b")
+	fs.Remove(models.ShadowKindPlatformAgent, "never-there")
+	all := fs.All()
+	require.Len(t, all, 3)
+	assert.Same(t, a, all[0])
+	assert.Same(t, c, all[1], "first-seen order is kept after a removal")
+	_, ok = fs.Lookup(models.ShadowKindPlatformAgent, "agent_b")
+	assert.False(t, ok)
+	all[0] = nil
+	assert.Same(t, a, fs.All()[0], "All returns a copy")
 }
 
-func TestNewWindow(t *testing.T) {
-	now := time.Date(2026, 11, 10, 13, 0, 0, 0, time.UTC)
-	w := NewWindow(now, 30)
-	assert.Equal(t, time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), w.Start)
-	assert.Equal(t, now, w.End)
-	assert.Equal(t, 31, w.Days())
+func TestAddSignalMergesSameCodeAndSource(t *testing.T) {
+	f := NewFindings().Get(models.ShadowKindRuntime, "arn:a")
+	f.AddSignal(Signal{Code: SigBedrockAgentCoreRuntime, Source: "ListAgentRuntimes", Observed: map[string]any{"status": "READY", "n": int64(1)}})
+	f.AddSignal(Signal{Code: SigBedrockAgentCoreRuntime, Source: "ListAgentRuntimes", Observed: map[string]any{"status": "UPDATING", "n": 2}})
+	f.AddSignal(Signal{Code: SigBedrockAgentCoreRuntime, Source: "another call"})
+	f.AddSignal(Signal{Code: SigBedrockRegistryAgent, Source: "ListRegistryRecords"})
+	require.Len(t, f.Signals, 3)
+	assert.Equal(t, "READY", f.Signals[0].Observed["status"], "a label keeps its first value")
+	assert.Equal(t, int64(3), f.Signals[0].Observed["n"], "counts are summed")
+	assert.NotNil(t, f.Signals[1].Observed, "observed is never nil")
+	assert.Equal(t, SigBedrockRegistryAgent, f.Signals[2].Code)
 }
