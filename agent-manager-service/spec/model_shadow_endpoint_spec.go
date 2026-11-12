@@ -26,6 +26,14 @@ type ShadowEndpointSpec struct {
 	Placeholders []string `json:"placeholders"`
 	// The checkbox that enables this endpoint, if any.
 	Option *string `json:"option,omitempty"`
+	// For an endpoint with one placeholder: the list field whose items fill it (e.g. regions). The URL of one value can be replaced; it is stored under the endpoint key \"<key>@<value>\".
+	FillFrom *string `json:"fillFrom,omitempty"`
+	// Items of fillFrom the endpoint is not used for.
+	FillExclude []string `json:"fillExclude,omitempty"`
+	// Fixed values that fill the placeholder, instead of fillFrom.
+	FillValues []string `json:"fillValues,omitempty"`
+	// An endpoint the console keeps behind the \"Advanced configuration\" button.
+	Advanced *bool `json:"advanced,omitempty"`
 }
 
 // NewShadowEndpointSpec instantiates a new ShadowEndpointSpec object
@@ -177,6 +185,134 @@ func (o *ShadowEndpointSpec) SetOption(v string) {
 	o.Option = &v
 }
 
+// GetFillFrom returns the FillFrom field value if set, zero value otherwise.
+func (o *ShadowEndpointSpec) GetFillFrom() string {
+	if o == nil || IsNil(o.FillFrom) {
+		var ret string
+		return ret
+	}
+	return *o.FillFrom
+}
+
+// GetFillFromOk returns a tuple with the FillFrom field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ShadowEndpointSpec) GetFillFromOk() (*string, bool) {
+	if o == nil || IsNil(o.FillFrom) {
+		return nil, false
+	}
+	return o.FillFrom, true
+}
+
+// HasFillFrom returns a boolean if a field has been set.
+func (o *ShadowEndpointSpec) HasFillFrom() bool {
+	if o != nil && !IsNil(o.FillFrom) {
+		return true
+	}
+
+	return false
+}
+
+// SetFillFrom gets a reference to the given string and assigns it to the FillFrom field.
+func (o *ShadowEndpointSpec) SetFillFrom(v string) {
+	o.FillFrom = &v
+}
+
+// GetFillExclude returns the FillExclude field value if set, zero value otherwise.
+func (o *ShadowEndpointSpec) GetFillExclude() []string {
+	if o == nil || IsNil(o.FillExclude) {
+		var ret []string
+		return ret
+	}
+	return o.FillExclude
+}
+
+// GetFillExcludeOk returns a tuple with the FillExclude field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ShadowEndpointSpec) GetFillExcludeOk() ([]string, bool) {
+	if o == nil || IsNil(o.FillExclude) {
+		return nil, false
+	}
+	return o.FillExclude, true
+}
+
+// HasFillExclude returns a boolean if a field has been set.
+func (o *ShadowEndpointSpec) HasFillExclude() bool {
+	if o != nil && !IsNil(o.FillExclude) {
+		return true
+	}
+
+	return false
+}
+
+// SetFillExclude gets a reference to the given []string and assigns it to the FillExclude field.
+func (o *ShadowEndpointSpec) SetFillExclude(v []string) {
+	o.FillExclude = v
+}
+
+// GetFillValues returns the FillValues field value if set, zero value otherwise.
+func (o *ShadowEndpointSpec) GetFillValues() []string {
+	if o == nil || IsNil(o.FillValues) {
+		var ret []string
+		return ret
+	}
+	return o.FillValues
+}
+
+// GetFillValuesOk returns a tuple with the FillValues field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ShadowEndpointSpec) GetFillValuesOk() ([]string, bool) {
+	if o == nil || IsNil(o.FillValues) {
+		return nil, false
+	}
+	return o.FillValues, true
+}
+
+// HasFillValues returns a boolean if a field has been set.
+func (o *ShadowEndpointSpec) HasFillValues() bool {
+	if o != nil && !IsNil(o.FillValues) {
+		return true
+	}
+
+	return false
+}
+
+// SetFillValues gets a reference to the given []string and assigns it to the FillValues field.
+func (o *ShadowEndpointSpec) SetFillValues(v []string) {
+	o.FillValues = v
+}
+
+// GetAdvanced returns the Advanced field value if set, zero value otherwise.
+func (o *ShadowEndpointSpec) GetAdvanced() bool {
+	if o == nil || IsNil(o.Advanced) {
+		var ret bool
+		return ret
+	}
+	return *o.Advanced
+}
+
+// GetAdvancedOk returns a tuple with the Advanced field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ShadowEndpointSpec) GetAdvancedOk() (*bool, bool) {
+	if o == nil || IsNil(o.Advanced) {
+		return nil, false
+	}
+	return o.Advanced, true
+}
+
+// HasAdvanced returns a boolean if a field has been set.
+func (o *ShadowEndpointSpec) HasAdvanced() bool {
+	if o != nil && !IsNil(o.Advanced) {
+		return true
+	}
+
+	return false
+}
+
+// SetAdvanced gets a reference to the given bool and assigns it to the Advanced field.
+func (o *ShadowEndpointSpec) SetAdvanced(v bool) {
+	o.Advanced = &v
+}
+
 func (o ShadowEndpointSpec) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -193,6 +329,18 @@ func (o ShadowEndpointSpec) ToMap() (map[string]interface{}, error) {
 	toSerialize["placeholders"] = o.Placeholders
 	if !IsNil(o.Option) {
 		toSerialize["option"] = o.Option
+	}
+	if !IsNil(o.FillFrom) {
+		toSerialize["fillFrom"] = o.FillFrom
+	}
+	if !IsNil(o.FillExclude) {
+		toSerialize["fillExclude"] = o.FillExclude
+	}
+	if !IsNil(o.FillValues) {
+		toSerialize["fillValues"] = o.FillValues
+	}
+	if !IsNil(o.Advanced) {
+		toSerialize["advanced"] = o.Advanced
 	}
 	return toSerialize, nil
 }

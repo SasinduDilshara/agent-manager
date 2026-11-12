@@ -22,7 +22,7 @@ Both are granted to the Agent Manager Admin role only: connections hold provider
 | Provider | Credential | What a scan reads |
 |---|---|---|
 | OpenAI | Admin API key (recommended) and/or read-only project keys | Projects, project API keys, completions usage (by key, model, `api_source`), costs, web/file search and code interpreter usage, `api_key.created` audit logs; with project keys: Agents API agents and sessions, and (deep inspection) stored chat completions and batches |
-| Anthropic | Admin API key (recommended) and/or workspace keys; optional Claude Platform on AWS and Claude Models on Google Cloud | Workspaces, API keys, users, usage and cost analytics (by key, model, product, agent); with workspace keys: Managed Agents, sessions and (deep inspection) session events and message batches |
+| Anthropic | Admin API key (recommended) and/or workspace keys (Claude Developer Platform) | Workspaces, API keys, users, usage and cost analytics (by key, model, product, agent); with workspace keys: Managed Agents, sessions and (deep inspection) session events and message batches |
 | Amazon Bedrock | Access key, optionally assuming a cross-account read-only role | AgentCore runtimes and gateways, Agent Registry records, classic Bedrock agents, CloudWatch AgentCore metrics, CloudTrail model calls, model invocation logging configuration and (deep inspection) invocation logs |
 | Google Agent Platform | Service account key | Agent Runtime engines, Agent Registry agents and MCP servers, engine request metrics, Admin Activity audit logs |
 | Microsoft Foundry | Entra app with the custom role shown in the console | Foundry projects and agents (and, optionally, classic agents), deployment metrics, and (deep inspection) stored responses |
@@ -42,7 +42,9 @@ The console shows, for each provider, the least privilege to grant (with ready-t
 
 **Endpoints.** Each connection stores the base URL of every endpoint it calls, prefilled with the official URL or URL pattern (`{region}`, `{location}`). An endpoint can be changed, for example to reach the provider through a proxy; the console warns when a host is not an official one, because the stored credential is sent to it. The HTTP client never follows a redirect to another host.
 
-**Coverage options** (checkboxes, all on by default): every Azure subscription the app can read; the Google `global` Agent Registry location and `us`/`eu` multi-regions; the Anthropic cloud-hosted variants; Foundry classic agents. **Deep inspection** is off by default (see Data retention).
+**Coverage options** (checkboxes, all on by default): every Azure subscription the app can read; the Google `global` Agent Registry location and `us`/`eu` multi-regions; Foundry classic agents. **Deep inspection** is off by default (see Data retention).
+
+**Amazon Bedrock form.** Session token, Role to assume and External ID are behind **Advanced configuration** (it opens by itself when one of them is set); the AWS STS endpoint is shown under Role to assume. Under **Services to scan**, each service's endpoint is shown right under its checkbox while it is ticked; Google's service checkboxes work the same way.
 
 **Services to scan (Amazon Bedrock, Google Agent Platform).** Each service the connector reads is a checkbox, on by default, stored as `config.disabledServices` (an absent key means the service is scanned). Bedrock: AgentCore runtimes and gateways, AWS Agent Registry, classic Bedrock agents, CloudWatch metrics, CloudTrail model calls, model invocation logging. Google: Agent Registry, Cloud Monitoring metrics, Admin Activity audit logs (the Agent Runtime engines are always read). An unticked service is never called: its endpoint field is hidden, its calls are listed as *skipped (not selected in this connection)*, **Test connection** does not probe it, and **What can Agent Manager analyze?** drops the capabilities that need it. A Bedrock connection needs at least one service. The AWS STS endpoint is shown only when a role to assume is entered, because STS is called only to assume it. Grant the least privilege of the selected services only; the permission notes say which action each service needs.
 
@@ -64,7 +66,7 @@ Each signal has a tier:
 
 | Tier | Weight | Examples |
 |---|---|---|
-| Definitive | 60 | An agent object at the provider (OpenAI agent, Anthropic Managed Agent, AgentCore runtime, classic Bedrock agent, Google engine or registry agent, Foundry agent) |
+| Definitive | 100 | An agent object at the provider (OpenAI agent, Anthropic Managed Agent, AgentCore runtime, classic Bedrock agent, Google engine or registry agent, Foundry agent) |
 | High | 35 | Agents API / Managed Agent usage; a tool call or a tool result seen in batches, stored completions or responses, session events or invocation logs |
 | Medium | 20 | Hosted tools (web or file search, code interpreter or execution); tools or MCP servers configured on an agent; a runtime or engine in use |
 | Low | 5 | Plain model usage |

@@ -171,7 +171,7 @@ export function ScoreBar({ score }: { score: number }) {
         <LinearProgress
           variant="determinate"
           value={Math.max(0, Math.min(100, score))}
-          aria-label={`Score ${score} of 100`}
+          aria-label={`Confidence score ${score} of 100`}
           sx={{ height: 6, borderRadius: 3 }}
         />
       </Box>

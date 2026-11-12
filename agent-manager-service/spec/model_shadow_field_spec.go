@@ -26,7 +26,9 @@ type ShadowFieldSpec struct {
 	// The field is optional but recommended.
 	Recommended *bool `json:"recommended,omitempty"`
 	// A heading the field is shown under, for example \"Services to scan\".
-	Section     *string `json:"section,omitempty"`
+	Section *string `json:"section,omitempty"`
+	// An optional setting the console keeps behind an \"Advanced configuration\" button.
+	Advanced    *bool   `json:"advanced,omitempty"`
 	Placeholder *string `json:"placeholder,omitempty"`
 	Help        *string `json:"help,omitempty"`
 	DefaultBool *bool   `json:"defaultBool,omitempty"`
@@ -215,6 +217,38 @@ func (o *ShadowFieldSpec) SetSection(v string) {
 	o.Section = &v
 }
 
+// GetAdvanced returns the Advanced field value if set, zero value otherwise.
+func (o *ShadowFieldSpec) GetAdvanced() bool {
+	if o == nil || IsNil(o.Advanced) {
+		var ret bool
+		return ret
+	}
+	return *o.Advanced
+}
+
+// GetAdvancedOk returns a tuple with the Advanced field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ShadowFieldSpec) GetAdvancedOk() (*bool, bool) {
+	if o == nil || IsNil(o.Advanced) {
+		return nil, false
+	}
+	return o.Advanced, true
+}
+
+// HasAdvanced returns a boolean if a field has been set.
+func (o *ShadowFieldSpec) HasAdvanced() bool {
+	if o != nil && !IsNil(o.Advanced) {
+		return true
+	}
+
+	return false
+}
+
+// SetAdvanced gets a reference to the given bool and assigns it to the Advanced field.
+func (o *ShadowFieldSpec) SetAdvanced(v bool) {
+	o.Advanced = &v
+}
+
 // GetPlaceholder returns the Placeholder field value if set, zero value otherwise.
 func (o *ShadowFieldSpec) GetPlaceholder() string {
 	if o == nil || IsNil(o.Placeholder) {
@@ -362,6 +396,9 @@ func (o ShadowFieldSpec) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Section) {
 		toSerialize["section"] = o.Section
+	}
+	if !IsNil(o.Advanced) {
+		toSerialize["advanced"] = o.Advanced
 	}
 	if !IsNil(o.Placeholder) {
 		toSerialize["placeholder"] = o.Placeholder

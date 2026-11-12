@@ -45,12 +45,11 @@ type regionClients struct {
 }
 
 // newRegionClients builds the clients for region from the connection's
-// endpoint templates. An endpoint that cannot be expanded is an error.
+// endpoints: the URL set for the region, else the template filled in. An endpoint that cannot be expanded is an error.
 // retryer, when set, replaces the SDK's standard retryer (the connector's
 // retry policy); nil keeps the one sa.AWSConfig configures.
 func newRegionClients(conn sa.Connection, httpClient *http.Client, region string, retryer func() aws.Retryer) (*regionClients, error) {
-	vars := map[string]string{"region": region}
-	ep := func(key string) (string, error) { return sa.Expand(sa.EndpointOf(conn, key), vars) }
+	ep := func(key string) (string, error) { return sa.RegionEndpoint(conn, key, region) }
 	stsEP, err := ep(sa.EPBedrockSTS)
 	if err != nil {
 		return nil, err

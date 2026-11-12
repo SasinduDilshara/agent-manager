@@ -38,9 +38,10 @@ const (
 	GroupInfo            = "info"
 )
 
-// Tier weights (approved for Method 1).
+// Tier weights. A definitive signal (the provider itself lists the agent)
+// is the whole confidence score on its own.
 const (
-	WeightDefinitive = 60
+	WeightDefinitive = 100
 	WeightHigh       = 35
 	WeightMedium     = 20
 	WeightLow        = 5
@@ -167,15 +168,15 @@ var catalog = func() map[string]SignalDef {
 		def(SigAnthropicManagedAgentUsage, models.ShadowProviderAnthropic, "Managed Agent usage", GroupAgentAPIUsage, models.ShadowTierHigh,
 			`analytics usage grouped by agent_id: a row with group.agent_id != null and usage.requests > 0`),
 		def(SigAnthropicServerWebSearch, models.ShadowProviderAnthropic, "Server web search", GroupHostedTools, models.ShadowTierMedium,
-			`analytics usage grouped by api_key_id (by actor on the cloud-hosted variants): usage.server_tool_use.web_search_requests > 0; rows with an agent_id count for the agent`),
+			`analytics usage grouped by api_key_id: usage.server_tool_use.web_search_requests > 0; rows with an agent_id count for the agent`),
 		def(SigAnthropicServerCodeExec, models.ShadowProviderAnthropic, "Server code execution", GroupHostedTools, models.ShadowTierMedium,
-			`analytics cost grouped by api_key_id (by actor on the cloud-hosted variants) and cost_type: a row with group.cost_type == "code_execution" and cost.amount > 0`),
+			`analytics cost grouped by api_key_id and cost_type: a row with group.cost_type == "code_execution" and cost.amount > 0`),
 		def(SigAnthropicToolCallBatch, models.ShadowProviderAnthropic, "Tool call in a batch result", GroupToolCall, models.ShadowTierHigh,
 			`GET /v1/messages/batches -> results_url: result.type == "succeeded" and result.message.stop_reason == "tool_use", or a content[] block with type == "tool_use"`),
 		def(SigAnthropicSessionToolUse, models.ShadowProviderAnthropic, "Tool use inside a session", GroupToolCall, models.ShadowTierHigh,
 			`GET /v1/sessions/{session_id}/events: events of type agent.tool_use, agent.custom_tool_use or agent.mcp_tool_use`),
 		def(SigAnthropicPlainUsage, models.ShadowProviderAnthropic, "Plain usage", GroupPlainUsage, models.ShadowTierLow,
-			`analytics usage grouped by api_key_id (by actor on the cloud-hosted variants): usage.requests > 0 in rows without an agent_id`),
+			`analytics usage grouped by api_key_id: usage.requests > 0 in rows without an agent_id`),
 
 		// Amazon Bedrock / AgentCore
 		def(SigBedrockAgentCoreRuntime, models.ShadowProviderBedrock, "AgentCore runtime", GroupAgentObject, models.ShadowTierDefinitive,

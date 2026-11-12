@@ -152,31 +152,9 @@ func (s *scan) attribute(p *platform, g *analyticGroup) (f *sa.Finding, isAgent 
 		return f, true
 	case keyID != "":
 		return s.keyFinding(p, keyID), false
-	case g.Actor != nil && g.Actor.Type == "federated_actor" && strings.TrimSpace(g.Actor.Subject) != "":
-		return s.principalFinding(p, g.Actor), false
 	default:
 		return nil, false
 	}
-}
-
-// principalFinding returns the finding of a federated cloud principal (an
-// AWS IAM principal ARN or a Google principal) seen in the analytics of a
-// cloud variant, where calls are made with cloud credentials, not API keys.
-func (s *scan) principalFinding(p *platform, a *analyticActor) *sa.Finding {
-	subject := strings.TrimSpace(a.Subject)
-	f := s.findings.Get(models.ShadowKindPrincipal, p.kind+":"+subject)
-	if f.DisplayName != "" {
-		return f
-	}
-	f.DisplayName = subject
-	f.Scope = p.orgScope()
-	p.attrs(f)
-	f.Attributes["principalType"] = "federated_actor"
-	if a.Provider != nil && a.Provider.AccountID != "" {
-		f.Attributes["accountId"] = a.Provider.AccountID
-	}
-	f.OwnerHint = models.ShadowOwnerHint{Username: subject, Type: "federated_actor", Source: p.call(callUsage) + " (group.actor)"}
-	return f
 }
 
 // usageRow applies one usage row.

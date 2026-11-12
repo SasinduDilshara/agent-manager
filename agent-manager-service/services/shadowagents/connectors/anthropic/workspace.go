@@ -144,7 +144,6 @@ func (s *scan) addAgent(p *platform, ws string, a *agent, source string) *sa.Fin
 		f.ProviderCreatedAt = &t
 	}
 	attrs := f.Attributes
-	p.attrs(f)
 	attrs["workspace"] = ws
 	attrs["archived"] = archived
 	attrs["state"] = f.State
@@ -348,7 +347,7 @@ func (s *scan) batches(ctx context.Context, p *platform, api *sa.API, ws string)
 	}
 	hasAdmin := strings.TrimSpace(s.conn.Secret.APIKey) != ""
 	candidates := s.keysUsedIn(ws)
-	if p.kind == platformFirstParty && hasAdmin && len(candidates) == 1 {
+	if hasAdmin && len(candidates) == 1 {
 		s.keyFinding(p, candidates[0]).AddSignal(sig)
 		return
 	}
@@ -358,8 +357,6 @@ func (s *scan) batches(ctx context.Context, p *platform, api *sa.API, ws string)
 	f.AddSignal(sig)
 	reason := fmt.Sprintf("%d keys that can act in the workspace had usage in the window", len(candidates))
 	switch {
-	case p.kind != platformFirstParty:
-		reason = "this platform has no API key list"
 	case !hasAdmin:
 		reason = "the connection has no Admin API key, so the workspace's keys are not known"
 	default:
@@ -385,7 +382,6 @@ func (s *scan) workspaceFinding(p *platform, ws string) *sa.Finding {
 	f.DisplayName = "Workspace " + ws
 	f.Scope = id
 	f.State = "active"
-	p.attrs(f)
 	f.Attributes["workspace"] = ws
 	for _, agentID := range s.wsAgents[id] {
 		f.Related = append(f.Related, sa.Relation{

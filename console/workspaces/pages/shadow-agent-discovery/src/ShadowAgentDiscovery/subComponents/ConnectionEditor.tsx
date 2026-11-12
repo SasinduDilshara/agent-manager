@@ -34,7 +34,7 @@ import {
   Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
-import { Copy, Plus, Trash2 } from "@wso2/oxygen-ui-icons-react";
+import { ChevronDown, ChevronRight, Plus, Trash2 } from "@wso2/oxygen-ui-icons-react";
 import { generatePath, useNavigate, useParams } from "react-router-dom";
 import { PageLayout, TextInput, useReturnTo } from "@agent-management-platform/views";
 import {
@@ -48,6 +48,7 @@ import {
   absoluteRouteMap,
   INPUT_LIMITS,
   type ShadowConnectionResponse,
+  type ShadowEndpointSpec,
   type ShadowFieldSpec,
   type ShadowProvider,
   type ShadowProviderSpec,
@@ -61,6 +62,7 @@ import {
   optionActive,
 } from "../capabilities";
 import { AnalyzeSection } from "./AnalyzeSection";
+import { PermissionsPanel } from "./PermissionsPanel";
 
 type KeyMapRow = { id: string; key: string };
 
@@ -90,6 +92,11 @@ export function initialDraft(
   if (!spec) return draft;
   for (const e of spec.endpoints) {
     draft.endpoints[e.key] = existing?.endpoints?.[e.key] ?? e.default;
+  }
+  // URLs set for one region ("<endpoint>@<region>").
+  for (const [k, v] of Object.entries(existing?.endpoints ?? {})) {
+    const base = k.split("@")[0];
+    if (k.includes("@") && spec.endpoints.some((e) => e.key === base)) draft.endpoints[k] = v;
   }
   for (const f of spec.fields) {
     const stored = existing?.settings?.[f.key];
@@ -157,6 +164,44 @@ export function toSettings(
 }
 
 /**
+ * The field an endpoint is shown under: a service checkbox (a field in a
+ * section) or a text field such as the role to assume. Other endpoints are
+ * shown in the Endpoints section.
+ */
+export function endpointHost(
+  spec: ShadowProviderSpec,
+  e: ShadowEndpointSpec,
+): ShadowFieldSpec | undefined {
+  if (!e.option || e.option.startsWith("!")) return undefined;
+  const f = spec.fields.find((x) => x.key === e.option);
+  if (!f) return undefined;
+  return f.kind !== "checkbox" || f.section || f.advanced ? f : undefined;
+}
+
+/** Whether any advanced field holds a value (typed, or a stored secret). */
+export function advancedInUse(
+  spec: ShadowProviderSpec,
+  draft: ConnectionDraft,
+  existing: ShadowConnectionResponse | undefined,
+): boolean {
+  const fieldSet = spec.fields
+    .filter((f) => f.advanced && f.kind !== "checkbox")
+    .some(
+      (f) =>
+        String(draft.values[f.key] ?? "").trim() !== "" ||
+        (f.kind === "secret" && !!existing?.secretHints?.[f.key]),
+    );
+  const checkboxChanged = spec.fields.some(
+    (f) =>
+      f.advanced && f.kind === "checkbox" && (draft.values[f.key] === true) !== !!f.defaultBool,
+  );
+  const endpointChanged = spec.endpoints.some(
+    (e) => e.advanced && (draft.endpoints[e.key] ?? e.default).trim() !== e.default,
+  );
+  return fieldSet || checkboxChanged || endpointChanged;
+}
+
+/**
  * Whether an endpoint is shown: one tied to an option shows only when the
  * option holds something (a ticked service, or a role to assume for STS).
  */
@@ -211,94 +256,154 @@ export function validateDraft(
   }
   const choice = credentialChoiceError(spec, draft, existing);
   if (choice) errors.credentialChoice = choice;
+  const checkURL = (key: string, v: string) => {
+    if (!/^https?:\/\/[^\s/?#]+/.test(v)) errors[key] = "Enter an http(s) URL";
+    else if (/[?#]/.test(v)) errors[key] = "Remove the query or fragment";
+    else if (/[{}]/.test(v) && key.includes("@")) errors[key] = "Enter the URL for this region";
+  };
   for (const e of spec.endpoints) {
-    const v = (draft.endpoints[e.key] ?? "").trim();
     if (!endpointVisible(spec, draft, existing, e.option)) continue;
-    if (!/^https?:\/\/[^\s/?#]+/.test(v)) errors[`endpoint:${e.key}`] = "Enter an http(s) URL";
-    else if (/[?#]/.test(v)) errors[`endpoint:${e.key}`] = "Remove the query or fragment";
+    const regions = endpointRegions(spec, e, draft);
+    if (regions) {
+      for (const r of regions)
+        checkURL(`endpoint:${e.key}@${r}`, regionURL(e, draft, r).value.trim());
+      continue;
+    }
+    checkURL(`endpoint:${e.key}`, (draft.endpoints[e.key] ?? "").trim());
   }
   return errors;
 }
 
-function CopyBlock({ text }: { text: string }) {
-  const pretty = useMemo(() => {
-    try {
-      return JSON.stringify(JSON.parse(text), null, 2);
-    } catch {
-      return text;
+/** The items of a list field's draft value (one per line). */
+export function listItems(value: string | boolean | undefined): string[] {
+  return String(value ?? "")
+    .split(/[\n,]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+/**
+ * A list as chips: type a value and press Enter (or a comma) to add it, and
+ * remove one with its cross. The value is kept one item per line.
+ */
+function ChipListInput({
+  label,
+  placeholder,
+  help,
+  error,
+  value,
+  onChange,
+}: {
+  label: string;
+  placeholder?: string;
+  help?: string;
+  error?: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const items = listItems(value);
+  const add = (raw: string) => {
+    const next = [...items];
+    for (const part of raw.split(/[\n,]/)) {
+      const t = part.trim();
+      if (t && !next.includes(t)) next.push(t);
     }
-  }, [text]);
+    onChange(next.join("\n"));
+    setText("");
+  };
   return (
-    <Box
-      sx={{
-        position: "relative",
-        border: 1,
-        borderColor: "divider",
-        borderRadius: 1,
-        bgcolor: "action.hover",
-      }}
-    >
-      <Box
-        component="pre"
-        sx={{ m: 0, p: 1.5, pr: 5, overflowX: "auto", fontSize: 12, maxHeight: 240 }}
-      >
-        {pretty}
-      </Box>
-      <Tooltip title="Copy">
-        <IconButton
-          size="small"
-          aria-label="Copy policy"
-          sx={{ position: "absolute", top: 4, right: 4 }}
-          onClick={() => void navigator.clipboard?.writeText(pretty)}
-        >
-          <Copy size={16} />
-        </IconButton>
-      </Tooltip>
+    <Box>
+      <TextInput
+        label={label}
+        placeholder={
+          placeholder ? `${placeholder}, then press Enter` : "Type a value, then press Enter"
+        }
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e: React.KeyboardEvent) => {
+          if ((e.key === "Enter" || e.key === ",") && text.trim()) {
+            e.preventDefault();
+            add(text);
+          } else if (e.key === "Backspace" && !text && items.length > 0) {
+            onChange(items.slice(0, -1).join("\n"));
+          }
+        }}
+        onBlur={() => {
+          if (text.trim()) add(text);
+        }}
+        error={!!error}
+        helperText={error ?? help}
+      />
+      {items.length > 0 && (
+        <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
+          {items.map((it) => (
+            <Chip
+              key={it}
+              label={it}
+              size="small"
+              onDelete={() => onChange(items.filter((x) => x !== it).join("\n"))}
+              aria-label={it}
+            />
+          ))}
+        </Stack>
+      )}
     </Box>
   );
 }
 
-/** The provider's least-privilege setup, shown next to the form. */
-export function PermissionsPanel({ spec }: { spec: ShadowProviderSpec }) {
-  return (
-    <Card variant="outlined">
-      <CardContent>
-        <Typography variant="subtitle1" gutterBottom>
-          Required permissions
-        </Typography>
-        <Stack spacing={2}>
-          {spec.permissions.map((p) => (
-            <Box key={p.title}>
-              <Typography variant="body2" fontWeight={500}>
-                {p.title}
-              </Typography>
-              <Box component="ul" sx={{ pl: 2.5, my: 0.5 }}>
-                {p.items.map((it) => (
-                  <Typography key={it} component="li" variant="body2" color="text.secondary">
-                    {it}
-                  </Typography>
-                ))}
-              </Box>
-              {p.policy && <CopyBlock text={p.policy} />}
-            </Box>
-          ))}
-          {spec.docs.length > 0 && (
-            <Typography variant="caption" color="text.secondary">
-              Official documentation:{" "}
-              {spec.docs.map((d, i) => (
-                <span key={d}>
-                  {i > 0 && ", "}
-                  <a href={d} target="_blank" rel="noreferrer noopener">
-                    {new URL(d).hostname}
-                  </a>
-                </span>
-              ))}
-            </Typography>
-          )}
-        </Stack>
-      </CardContent>
-    </Card>
-  );
+/**
+ * The values an endpoint is used for (one URL each): fixed values, or the
+ * items of the list field that fills its placeholder (Regions, Locations).
+ * undefined for an endpoint with a single URL.
+ */
+export function endpointRegions(
+  spec: ShadowProviderSpec,
+  e: ShadowEndpointSpec,
+  draft: ConnectionDraft,
+): string[] | undefined {
+  if (e.placeholders.length !== 1) return undefined;
+  if (e.fillValues && e.fillValues.length > 0) return e.fillValues;
+  if (!e.fillFrom || !spec.fields.some((f) => f.key === e.fillFrom)) return undefined;
+  const exclude = e.fillExclude ?? [];
+  return listItems(draft.values[e.fillFrom]).filter((v) => !exclude.includes(v));
+}
+
+/**
+ * The endpoints sent on save: every template, and the URL of each region the
+ * form still lists (the service drops those equal to the official URL).
+ */
+export function endpointsToSave(
+  spec: ShadowProviderSpec,
+  draft: ConnectionDraft,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(draft.endpoints)) {
+    if (!k.includes("@")) out[k] = v.trim();
+  }
+  for (const e of spec.endpoints) {
+    for (const r of endpointRegions(spec, e, draft) ?? []) {
+      const set = draft.endpoints[`${e.key}@${r}`];
+      if (set !== undefined) out[`${e.key}@${r}`] = set.trim();
+    }
+  }
+  return out;
+}
+
+/** An endpoint template with its placeholder filled in. */
+export function fillRegion(template: string, region: string, placeholder = "region"): string {
+  return template.split(`{${placeholder}}`).join(region).replace(/\/+$/, "");
+}
+
+/** The URL of one region: the one the user set, or the template filled in. */
+export function regionURL(
+  e: ShadowEndpointSpec,
+  draft: ConnectionDraft,
+  region: string,
+): { value: string; official: string } {
+  const official = fillRegion(draft.endpoints[e.key] || e.default, region, e.placeholders[0]);
+  const set = draft.endpoints[`${e.key}@${region}`];
+  return { value: set ?? official, official };
 }
 
 function FieldInput({
@@ -417,8 +522,20 @@ function FieldInput({
       </Box>
     );
   }
+  if (field.kind === "list") {
+    return (
+      <ChipListInput
+        label={`${field.label}${optional}`}
+        placeholder={field.placeholder}
+        help={field.help}
+        error={error}
+        value={String(draft.values[field.key] ?? "")}
+        onChange={setValue}
+      />
+    );
+  }
   const isSecret = field.kind === "secret";
-  const multiline = field.kind === "list" || field.key === "serviceAccountJson";
+  const multiline = field.key === "serviceAccountJson";
   // A stored optional secret can be removed (for example the Admin API key,
   // to scan with project keys only).
   const canRemove = isSecret && !!storedHint && !field.required;
@@ -439,9 +556,7 @@ function FieldInput({
           ? "Removed when you save"
           : isSecret && storedHint
             ? `Stored (${storedHint}). Leave empty to keep it.`
-            : field.kind === "list"
-              ? `${field.placeholder ?? ""} (one per line)`
-              : field.placeholder
+            : field.placeholder
       }
       type={isSecret && !multiline ? "password" : "text"}
       autoComplete="off"
@@ -483,6 +598,93 @@ function FieldInput({
   );
 }
 
+/**
+ * One endpoint's base URL, prefilled with the official one; a changed value
+ * says it is not the official endpoint (the credential is sent to it).
+ */
+function EndpointInput({
+  endpoint: e,
+  draft,
+  setDraft,
+  error,
+  regions,
+  errors,
+  spec,
+}: {
+  endpoint: ShadowEndpointSpec;
+  draft: ConnectionDraft;
+  setDraft: (d: ConnectionDraft) => void;
+  error: string | undefined;
+  /** Set for a per-value endpoint: one URL per region or location. */
+  regions?: string[];
+  errors?: Record<string, string>;
+  spec?: ShadowProviderSpec;
+}) {
+  if (regions && regions.length > 0) {
+    return (
+      <Box>
+        <Typography variant="body2" fontWeight={500} sx={{ mb: 1 }}>
+          {e.label}
+        </Typography>
+        <Stack spacing={1}>
+          {regions.map((r) => {
+            const { value, official } = regionURL(e, draft, r);
+            const err = errors?.[`endpoint:${e.key}@${r}`];
+            return (
+              <Stack key={r} direction="row" spacing={1} alignItems="flex-start">
+                <Chip label={r} size="small" sx={{ mt: 1, minWidth: 96 }} />
+                <Box sx={{ flex: 1 }}>
+                  <TextInput
+                    size="small"
+                    slotProps={{ htmlInput: { "aria-label": `${e.label} (${r})` } }}
+                    value={value}
+                    onChange={(ev) =>
+                      setDraft({
+                        ...draft,
+                        endpoints: { ...draft.endpoints, [`${e.key}@${r}`]: ev.target.value },
+                      })
+                    }
+                    error={!!err}
+                    helperText={
+                      err ??
+                      (value.trim().replace(/\/+$/, "") !== official
+                        ? `Not the official endpoint (${official}).`
+                        : undefined)
+                    }
+                  />
+                </Box>
+              </Stack>
+            );
+          })}
+        </Stack>
+      </Box>
+    );
+  }
+  const value = draft.endpoints[e.key] ?? "";
+  const custom = value.trim() !== e.default;
+  return (
+    <TextInput
+      label={e.label}
+      placeholder={e.default}
+      value={value}
+      onChange={(ev) =>
+        setDraft({ ...draft, endpoints: { ...draft.endpoints, [e.key]: ev.target.value } })
+      }
+      error={!!error}
+      helperText={
+        error ??
+        (custom
+          ? `Not the official endpoint (${e.default}).`
+          : regions
+            ? `{${e.placeholders[0]}} is filled in for each ${
+                spec?.fields.find((f) => f.key === e.fillFrom)?.label.toLowerCase() ?? "value"
+              } you add; then you can change the URL of each one.`
+            : undefined)
+      }
+    />
+  );
+}
+
 /** Create (connections/new) or edit (connections/:connectionId/edit) a provider connection. */
 export function ConnectionEditor({
   orgName,
@@ -503,6 +705,8 @@ export function ConnectionEditor({
   const [initial, setInitial] = useState<string>("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [serverError, setServerError] = useState<string | null>(null);
+  // null until the user toggles Advanced configuration.
+  const [advancedOpen, setAdvancedOpen] = useState<boolean | null>(null);
 
   const spec = useMemo(
     () =>
@@ -529,6 +733,15 @@ export function ConnectionEditor({
     setInitial(JSON.stringify(d));
   }, [draft, providers.data, existing.data, isEdit]);
 
+  // Advanced configuration opens by itself while one of its fields holds a
+  // value or has an error, until the user toggles it.
+  const showAdvanced =
+    advancedOpen ??
+    (!!spec &&
+      !!draft &&
+      (advancedInUse(spec, draft, existing.data) ||
+        spec.fields.some((f) => f.advanced && !!errors[f.key])));
+
   const isDirty = !!draft && JSON.stringify(draft) !== initial;
   const { allowNavigation } = useUnsavedChangesGuard(isDirty);
 
@@ -548,7 +761,7 @@ export function ConnectionEditor({
     const body = {
       name: draft.name.trim(),
       provider: spec.provider,
-      endpoints: Object.fromEntries(Object.entries(draft.endpoints).map(([k, v]) => [k, v.trim()])),
+      endpoints: endpointsToSave(spec, draft),
       settings: toSettings(spec, draft),
       ...(isEdit && draft.removed.length > 0 ? { removeSecrets: draft.removed } : {}),
     };
@@ -657,62 +870,144 @@ export function ConnectionEditor({
                 error={!!errors.name}
                 helperText={errors.name}
               />
-              {spec.fields
-                .filter((f) => fieldVisible(f, draft))
-                .map((f, i, shown) => (
-                  <Box key={f.key}>
-                    {f.section && f.section !== shown[i - 1]?.section && (
-                      <Typography variant="subtitle1" sx={{ mb: 1 }}>
-                        {f.section}
-                      </Typography>
+              {(() => {
+                const visible = spec.fields.filter((f) => fieldVisible(f, draft));
+                const endpointsUnder = (f: ShadowFieldSpec) =>
+                  spec.endpoints.filter(
+                    (e) =>
+                      endpointHost(spec, e)?.key === f.key &&
+                      endpointVisible(spec, draft, existing.data, e.option),
+                  );
+                const renderField = (f: ShadowFieldSpec) => {
+                  const under = endpointsUnder(f);
+                  return (
+                    <Box key={f.key}>
+                      <FieldInput
+                        field={f}
+                        draft={draft}
+                        setDraft={setDraft}
+                        error={errors[f.key]}
+                        storedHint={existing.data?.secretHints?.[f.key]}
+                        inChoice={spec.credentialChoice?.fields.includes(f.key)}
+                      />
+                      {under.length > 0 && (
+                        <Stack spacing={2} sx={{ pl: f.kind === "checkbox" ? 4 : 0, mt: 1.5 }}>
+                          {under.map((e) => (
+                            <EndpointInput
+                              key={e.key}
+                              endpoint={e}
+                              draft={draft}
+                              setDraft={setDraft}
+                              error={errors[`endpoint:${e.key}`]}
+                              regions={endpointRegions(spec, e, draft)}
+                              errors={errors}
+                              spec={spec}
+                            />
+                          ))}
+                        </Stack>
+                      )}
+                    </Box>
+                  );
+                };
+                const advanced = visible.filter((f) => f.advanced);
+                const advancedEndpoints = spec.endpoints.filter(
+                  (e) =>
+                    e.advanced &&
+                    !endpointHost(spec, e) &&
+                    endpointVisible(spec, draft, existing.data, e.option),
+                );
+                const advancedBlock = (
+                  <Box key="advanced" sx={{ border: 1, borderColor: "divider", borderRadius: 1 }}>
+                    <Button
+                      variant="text"
+                      onClick={() => setAdvancedOpen(!showAdvanced)}
+                      startIcon={
+                        showAdvanced ? <ChevronDown size={16} /> : <ChevronRight size={16} />
+                      }
+                      aria-expanded={showAdvanced}
+                      sx={{ m: 0.5 }}
+                    >
+                      Advanced configuration
+                    </Button>
+                    {showAdvanced && (
+                      <Stack spacing={2.5} sx={{ px: 2, pb: 2 }}>
+                        {advanced.map(renderField)}
+                        {advancedEndpoints.map((e) => (
+                          <EndpointInput
+                            key={e.key}
+                            endpoint={e}
+                            draft={draft}
+                            setDraft={setDraft}
+                            error={errors[`endpoint:${e.key}`]}
+                            regions={endpointRegions(spec, e, draft)}
+                            errors={errors}
+                            spec={spec}
+                          />
+                        ))}
+                      </Stack>
                     )}
-                    <FieldInput
-                      field={f}
-                      draft={draft}
-                      setDraft={setDraft}
-                      error={errors[f.key]}
-                      storedHint={existing.data?.secretHints?.[f.key]}
-                      inChoice={spec.credentialChoice?.fields.includes(f.key)}
-                    />
                   </Box>
-                ))}
+                );
+                const out: React.ReactNode[] = [];
+                let lastSection: string | undefined;
+                let placed = false;
+                for (const f of visible) {
+                  if (f.advanced) {
+                    if (!placed) out.push(advancedBlock);
+                    placed = true;
+                    continue;
+                  }
+                  if (f.section && f.section !== lastSection) {
+                    out.push(
+                      <Typography key={`section:${f.section}`} variant="subtitle1">
+                        {f.section}
+                      </Typography>,
+                    );
+                  }
+                  lastSection = f.section;
+                  out.push(renderField(f));
+                }
+                if (!placed && advancedEndpoints.length > 0) out.push(advancedBlock);
+                return out;
+              })()}
               {errors.credentialChoice && <Alert severity="error">{errors.credentialChoice}</Alert>}
 
-              <Box>
-                <Typography variant="subtitle1">Endpoints</Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                  The official endpoints are filled in. Change one only to reach the provider
-                  through a host you trust: the credential is sent to it. Placeholders such as{" "}
-                  {"{region}"} are filled in for each region or location you scan.
-                </Typography>
-                <Stack spacing={2}>
-                  {spec.endpoints
-                    .filter((e) => endpointVisible(spec, draft, existing.data, e.option))
-                    .map((e) => {
-                      const value = draft.endpoints[e.key] ?? "";
-                      const custom = value.trim() !== e.default;
-                      return (
-                        <TextInput
+              {spec.endpoints.some(
+                (e) =>
+                  !endpointHost(spec, e) &&
+                  !e.advanced &&
+                  endpointVisible(spec, draft, existing.data, e.option),
+              ) && (
+                <Box>
+                  <Typography variant="subtitle1">Endpoints</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                    The official endpoints are filled in. Change one only to reach the provider
+                    through a host you trust: the credential is sent to it. Placeholders such as{" "}
+                    {"{region}"} are filled in for each region or location you scan.
+                  </Typography>
+                  <Stack spacing={2}>
+                    {spec.endpoints
+                      .filter(
+                        (e) =>
+                          !endpointHost(spec, e) &&
+                          !e.advanced &&
+                          endpointVisible(spec, draft, existing.data, e.option),
+                      )
+                      .map((e) => (
+                        <EndpointInput
                           key={e.key}
-                          label={e.label}
-                          placeholder={e.default}
-                          value={value}
-                          onChange={(ev) =>
-                            setDraft({
-                              ...draft,
-                              endpoints: { ...draft.endpoints, [e.key]: ev.target.value },
-                            })
-                          }
-                          error={!!errors[`endpoint:${e.key}`]}
-                          helperText={
-                            errors[`endpoint:${e.key}`] ??
-                            (custom ? `Not the official endpoint (${e.default}).` : undefined)
-                          }
+                          endpoint={e}
+                          draft={draft}
+                          setDraft={setDraft}
+                          error={errors[`endpoint:${e.key}`]}
+                          regions={endpointRegions(spec, e, draft)}
+                          errors={errors}
+                          spec={spec}
                         />
-                      );
-                    })}
-                </Stack>
-              </Box>
+                      ))}
+                  </Stack>
+                </Box>
+              )}
 
               {serverError && <Alert severity="error">{serverError}</Alert>}
               <Stack direction="row" spacing={1.5} justifyContent="flex-start">

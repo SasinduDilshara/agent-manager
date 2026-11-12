@@ -186,7 +186,7 @@ export function FindingsTab({ orgName, scanId, emptyText, emptyAction }: Finding
           <ListingTable.Row>
             <ListingTable.Cell>Finding</ListingTable.Cell>
             <ListingTable.Cell>Provider</ListingTable.Cell>
-            <ListingTable.Cell>Score</ListingTable.Cell>
+            <ListingTable.Cell>Confidence score</ListingTable.Cell>
             <ListingTable.Cell>Verdict</ListingTable.Cell>
             <ListingTable.Cell>Owner hint</ListingTable.Cell>
             <ListingTable.Cell>Last used</ListingTable.Cell>

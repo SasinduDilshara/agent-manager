@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -193,6 +194,7 @@ func (s *shadowAgentService) CreateConnection(ctx context.Context, ouID string, 
 	if err := validateSourceHostSettings(spec, &cfg); err != nil {
 		return nil, err
 	}
+	pruneValueEndpoints(spec, &cfg)
 	if err := checkCredentialChoice(spec, secret, cfg); err != nil {
 		return nil, err
 	}
@@ -269,9 +271,11 @@ func (s *shadowAgentService) UpdateConnection(
 	if err := applyShadowSettings(spec, in.Settings, &cfg, &secret, false); err != nil {
 		return nil, err
 	}
+	pruneShadowSecret(spec, &secret)
 	if err := validateSourceHostSettings(spec, &cfg); err != nil {
 		return nil, err
 	}
+	pruneValueEndpoints(spec, &cfg)
 	if err := checkCredentialChoice(spec, secret, cfg); err != nil {
 		return nil, err
 	}
@@ -418,6 +422,16 @@ func resolveEndpoints(spec sa.ProviderSpec, current, given map[string]string) (m
 		known[e.Key] = e
 	}
 	for k := range given {
+		if base, value, ok := sa.SplitValueKey(k); ok {
+			e, found := known[base]
+			if !found || !e.PerValue() {
+				return nil, fmt.Errorf("%w: unknown endpoint %q for %s", utils.ErrInvalidInput, k, spec.DisplayName)
+			}
+			if !sa.ValidPlaceValue(value) {
+				return nil, fmt.Errorf("%w: %s: %q is not a valid %s", utils.ErrInvalidInput, e.Label, value, e.Placeholders[0])
+			}
+			continue
+		}
 		if _, ok := known[k]; !ok {
 			return nil, fmt.Errorf("%w: unknown endpoint %q for %s", utils.ErrInvalidInput, k, spec.DisplayName)
 		}
@@ -436,7 +450,72 @@ func resolveEndpoints(spec sa.ProviderSpec, current, given map[string]string) (m
 		}
 		out[e.Key] = strings.TrimRight(v, "/")
 	}
+	// One region's URL: kept from the stored connection unless given again;
+	// a concrete URL, so no placeholder is allowed.
+	regional := map[string]string{}
+	for k, v := range current {
+		if _, _, ok := sa.SplitValueKey(k); ok {
+			regional[k] = v
+		}
+	}
+	for k, v := range given {
+		if _, _, ok := sa.SplitValueKey(k); ok {
+			regional[k] = strings.TrimSpace(v)
+		}
+	}
+	for k, v := range regional {
+		base, value, _ := sa.SplitValueKey(k)
+		e, found := known[base]
+		if !found || v == "" {
+			continue
+		}
+		concrete := e
+		concrete.Placeholders = nil
+		concrete.Label = e.Label + " (" + value + ")"
+		if err := sa.ValidateEndpoint(concrete, v); err != nil {
+			return nil, fmt.Errorf("%w: %s", utils.ErrInvalidInput, err.Error())
+		}
+		out[k] = strings.TrimRight(v, "/")
+	}
 	return out, nil
+}
+
+// pruneValueEndpoints drops the per-value URLs of values the connection no
+// longer uses, and those equal to the template filled in (the official URL
+// needs no override).
+func pruneValueEndpoints(spec sa.ProviderSpec, cfg *models.ShadowConnectionConfig) {
+	lists := shadowSettingsOf(spec.Provider, *cfg)
+	for k, v := range cfg.Endpoints {
+		base, value, ok := sa.SplitValueKey(k)
+		if !ok {
+			continue
+		}
+		var e *sa.EndpointSpec
+		for i := range spec.Endpoints {
+			if spec.Endpoints[i].Key == base {
+				e = &spec.Endpoints[i]
+			}
+		}
+		used := false
+		if e != nil && e.PerValue() {
+			candidates := e.FillValues
+			if e.FillFrom != "" {
+				candidates, _ = lists[e.FillFrom].([]string)
+			}
+			for _, c := range candidates {
+				if strings.TrimSpace(c) == value && !slices.Contains(e.FillExclude, value) {
+					used = true
+				}
+			}
+		}
+		filled := ""
+		if e != nil {
+			filled, _ = sa.Expand(cfg.Endpoints[base], map[string]string{e.Placeholders[0]: value})
+		}
+		if !used || filled == strings.TrimRight(v, "/") {
+			delete(cfg.Endpoints, k)
+		}
+	}
 }
 
 // endpointWarnings lists endpoints whose host is not an official host of
@@ -450,6 +529,22 @@ func endpointWarnings(provider string, endpoints map[string]string) []string {
 	for _, e := range spec.Endpoints {
 		if v, ok := endpoints[e.Key]; ok && !sa.IsOfficialHost(e, v) {
 			out = append(out, fmt.Sprintf("%s (%s) is not an official %s host", e.Label, sa.Origin(strings.NewReplacer("{", "", "}", "").Replace(v)), spec.DisplayName))
+		}
+	}
+	keys := make([]string, 0, len(endpoints))
+	for k := range endpoints {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		base, value, ok := sa.SplitValueKey(k)
+		if !ok {
+			continue
+		}
+		for _, e := range spec.Endpoints {
+			if e.Key == base && !sa.IsOfficialHost(e, endpoints[k]) {
+				out = append(out, fmt.Sprintf("%s for %s (%s) is not an official %s host", e.Label, value, sa.Origin(endpoints[k]), spec.DisplayName))
+			}
 		}
 	}
 	return out
@@ -565,6 +660,28 @@ func checkCredentialChoice(spec sa.ProviderSpec, secret models.ShadowConnectionS
 		}
 	}
 	return fmt.Errorf("%w: %s", utils.ErrInvalidInput, choice.Message)
+}
+
+// shadowSecretFields are the secret's members, by form field key.
+var shadowSecretFields = []string{
+	"apiKey", sa.FieldScopedKeys, "clientSecret", "secretAccessKey", "sessionToken", "serviceAccountJson",
+	sa.FieldPersonalAccessToken,
+}
+
+// pruneShadowSecret clears every secret member the provider's form has no
+// field for, so a credential an earlier version of the form collected (e.g.
+// the AWS key of the removed Anthropic cloud variants) is not kept.
+func pruneShadowSecret(spec sa.ProviderSpec, secret *models.ShadowConnectionSecret) {
+	for _, k := range shadowSecretFields {
+		if _, ok := spec.Field(k); ok {
+			continue
+		}
+		if k == sa.FieldScopedKeys {
+			secret.ScopedKeys = nil
+			continue
+		}
+		setShadowSecret(secret, k, "")
+	}
 }
 
 // shadowSecretHas reports whether a secret field holds a credential; a key
@@ -733,11 +850,18 @@ var (
 	githubRepoPattern  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
 )
 
-// validateSourceHostSettings checks the names a GitHub or Azure DevOps
-// connection puts in API paths. A GitHub repository may be given as
-// owner/name for the connection's owner; it is stored as the name.
+// validateSourceHostSettings checks the names a connection puts in API
+// paths and hosts: Bedrock region codes, and GitHub and Azure DevOps names.
+// A GitHub repository may be given as owner/name for the connection's
+// owner; it is stored as the name.
 func validateSourceHostSettings(spec sa.ProviderSpec, cfg *models.ShadowConnectionConfig) error {
 	switch spec.Provider {
+	case models.ShadowProviderBedrock:
+		for _, r := range cfg.Regions {
+			if !sa.ValidRegion(r) {
+				return fmt.Errorf("%w: %q is not an AWS region code, such as us-east-1", utils.ErrInvalidInput, r)
+			}
+		}
 	case models.ShadowProviderGitHub:
 		if !githubOwnerPattern.MatchString(cfg.Organization) {
 			return fmt.Errorf("%w: Organization or user account must be a GitHub account name, such as my-org", utils.ErrInvalidInput)
@@ -813,8 +937,6 @@ func setShadowBool(cfg *models.ShadowConnectionConfig, key string, v bool) {
 		cfg.IncludeClassicAgents = v
 	case sa.OptGlobalMulti:
 		cfg.IncludeGlobalAndMultiRegion = v
-	case sa.OptCloudVariants:
-		cfg.IncludeCloudVariants = v
 	case sa.OptAllRepositories:
 		cfg.AllRepositories = v
 	case sa.OptAllProjects:
@@ -852,8 +974,6 @@ func setShadowText(cfg *models.ShadowConnectionConfig, key, v string) {
 		cfg.ExternalID = v
 	case "accessKeyId":
 		cfg.AccessKeyID = v
-	case "gcpProjectId":
-		cfg.GCPProjectID = v
 	case "organization":
 		cfg.Organization = v
 	}
@@ -869,10 +989,6 @@ func setShadowList(cfg *models.ShadowConnectionConfig, key string, v []string) {
 		cfg.ProjectIDs = v
 	case "locations":
 		cfg.Locations = v
-	case "awsWorkspaceIds":
-		cfg.AWSWorkspaceIDs = v
-	case "gcpWorkspaceIds":
-		cfg.GCPWorkspaceIDs = v
 	case "repositories":
 		cfg.Repositories = v
 	case "projects":
@@ -907,18 +1023,18 @@ func shadowSettingsOf(provider string, cfg models.ShadowConnectionConfig) map[st
 	}
 	text := map[string]string{
 		"tenantId": cfg.TenantID, "clientId": cfg.ClientID, "roleArn": cfg.RoleARN, "externalId": cfg.ExternalID,
-		"accessKeyId": cfg.AccessKeyID, "gcpProjectId": cfg.GCPProjectID, "organization": cfg.Organization,
+		"accessKeyId": cfg.AccessKeyID, "organization": cfg.Organization,
 	}
 	lists := map[string][]string{
 		"subscriptionIds": cfg.SubscriptionIDs, "regions": cfg.Regions, "projectIds": cfg.ProjectIDs,
-		"locations": cfg.Locations, "awsWorkspaceIds": cfg.AWSWorkspaceIDs, "gcpWorkspaceIds": cfg.GCPWorkspaceIDs,
+		"locations":    cfg.Locations,
 		"repositories": cfg.Repositories, "projects": cfg.Projects,
 	}
 	bools := map[string]bool{
 		sa.OptDeepInspection: cfg.DeepInspection, sa.OptAllSubscriptions: cfg.AllSubscriptions,
 		sa.OptClassicAgents: cfg.IncludeClassicAgents, sa.OptGlobalMulti: cfg.IncludeGlobalAndMultiRegion,
-		sa.OptCloudVariants: cfg.IncludeCloudVariants, sa.OptAllRepositories: cfg.AllRepositories,
-		sa.OptAllProjects: cfg.AllProjects, sa.OptUseEntra: cfg.UseEntra, sa.OptReadCIAndEnv: cfg.ReadCIAndEnvFiles,
+		sa.OptAllRepositories: cfg.AllRepositories,
+		sa.OptAllProjects:     cfg.AllProjects, sa.OptUseEntra: cfg.UseEntra, sa.OptReadCIAndEnv: cfg.ReadCIAndEnvFiles,
 	}
 	for _, f := range spec.Fields {
 		switch f.Kind {

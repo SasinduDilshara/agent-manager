@@ -108,10 +108,22 @@ func (c *shadowAgentController) ListProviders(w http.ResponseWriter, _ *http.Req
 			})
 		}
 		for _, e := range p.Endpoints {
-			ps.Endpoints = append(ps.Endpoints, spec.ShadowEndpointSpec{
+			es := spec.ShadowEndpointSpec{
 				Key: e.Key, Label: e.Label, Default: e.Default,
 				Placeholders: append([]string{}, e.Placeholders...), Option: optionalString(e.Option),
-			})
+				FillFrom: optionalString(e.FillFrom),
+			}
+			if len(e.FillExclude) > 0 {
+				es.FillExclude = append([]string{}, e.FillExclude...)
+			}
+			if len(e.FillValues) > 0 {
+				es.FillValues = append([]string{}, e.FillValues...)
+			}
+			if e.Advanced {
+				adv := true
+				es.Advanced = &adv
+			}
+			ps.Endpoints = append(ps.Endpoints, es)
 		}
 		for _, f := range p.Fields {
 			fs := spec.ShadowFieldSpec{
@@ -123,6 +135,10 @@ func (c *shadowAgentController) ListProviders(w http.ResponseWriter, _ *http.Req
 				fs.Recommended = &rec
 			}
 			fs.Section = optionalString(f.Section)
+			if f.Advanced {
+				adv := true
+				fs.Advanced = &adv
+			}
 			if f.Kind == sa.FieldCheckbox {
 				b := f.DefaultBool
 				fs.DefaultBool = &b
@@ -130,17 +146,22 @@ func (c *shadowAgentController) ListProviders(w http.ResponseWriter, _ *http.Req
 			ps.Fields = append(ps.Fields, fs)
 		}
 		for _, perm := range p.Permissions {
-			ps.Permissions = append(ps.Permissions, spec.ShadowPermissionSpec{
+			pp := spec.ShadowPermissionSpec{
 				Title: perm.Title, Items: append([]string{}, perm.Items...),
 				Policy: optionalString(perm.Policy), Note: optionalString(perm.Note),
-			})
+				Summary: optionalString(perm.Summary),
+			}
+			if len(perm.Reads) > 0 {
+				pp.Reads = append([]string{}, perm.Reads...)
+			}
+			ps.Permissions = append(ps.Permissions, pp)
 		}
 		resp.Providers = append(resp.Providers, ps)
 	}
 	for _, d := range sa.Defs() {
 		resp.Signals = append(resp.Signals, spec.ShadowSignalDefinition{
 			Code: d.Code, Provider: d.Provider, Name: d.Name, Group: d.Group, Tier: d.Tier,
-			Weight: int32(d.Weight), Condition: d.Condition, //nolint:gosec // weights are 0..60
+			Weight: int32(d.Weight), Condition: d.Condition, //nolint:gosec // weights are 0..100
 		})
 	}
 	utils.WriteSuccessResponse(w, http.StatusOK, resp)
@@ -622,7 +643,7 @@ func toShadowFindingDetail(v *services.ShadowFindingView) spec.ShadowFindingDeta
 			observed = map[string]any{}
 		}
 		out.Signals = append(out.Signals, spec.ShadowFindingSignal{
-			Code: sig.Code, Name: d.Name, Group: d.Group, Tier: sig.Tier, Weight: int32(sig.Weight), //nolint:gosec // 0..60
+			Code: sig.Code, Name: d.Name, Group: d.Group, Tier: sig.Tier, Weight: int32(sig.Weight), //nolint:gosec // 0..100
 			Counted: &counted, Source: sig.Source, Condition: sig.Condition, Observed: observed, DetectedAt: sig.DetectedAt,
 		})
 	}

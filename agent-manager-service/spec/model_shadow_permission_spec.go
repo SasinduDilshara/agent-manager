@@ -19,7 +19,12 @@ var _ MappedNullable = &ShadowPermissionSpec{}
 
 // ShadowPermissionSpec struct for ShadowPermissionSpec
 type ShadowPermissionSpec struct {
-	Title string   `json:"title"`
+	Title string `json:"title"`
+	// In one or two plain sentences, what Agent Manager does with this credential or source.
+	Summary *string `json:"summary,omitempty"`
+	// What Agent Manager reads with it.
+	Reads []string `json:"reads,omitempty"`
+	// How to create it and the permissions it needs.
 	Items []string `json:"items"`
 	// A ready-to-use role or policy document.
 	Policy *string `json:"policy,omitempty"`
@@ -67,6 +72,70 @@ func (o *ShadowPermissionSpec) GetTitleOk() (*string, bool) {
 // SetTitle sets field value
 func (o *ShadowPermissionSpec) SetTitle(v string) {
 	o.Title = v
+}
+
+// GetSummary returns the Summary field value if set, zero value otherwise.
+func (o *ShadowPermissionSpec) GetSummary() string {
+	if o == nil || IsNil(o.Summary) {
+		var ret string
+		return ret
+	}
+	return *o.Summary
+}
+
+// GetSummaryOk returns a tuple with the Summary field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ShadowPermissionSpec) GetSummaryOk() (*string, bool) {
+	if o == nil || IsNil(o.Summary) {
+		return nil, false
+	}
+	return o.Summary, true
+}
+
+// HasSummary returns a boolean if a field has been set.
+func (o *ShadowPermissionSpec) HasSummary() bool {
+	if o != nil && !IsNil(o.Summary) {
+		return true
+	}
+
+	return false
+}
+
+// SetSummary gets a reference to the given string and assigns it to the Summary field.
+func (o *ShadowPermissionSpec) SetSummary(v string) {
+	o.Summary = &v
+}
+
+// GetReads returns the Reads field value if set, zero value otherwise.
+func (o *ShadowPermissionSpec) GetReads() []string {
+	if o == nil || IsNil(o.Reads) {
+		var ret []string
+		return ret
+	}
+	return o.Reads
+}
+
+// GetReadsOk returns a tuple with the Reads field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ShadowPermissionSpec) GetReadsOk() ([]string, bool) {
+	if o == nil || IsNil(o.Reads) {
+		return nil, false
+	}
+	return o.Reads, true
+}
+
+// HasReads returns a boolean if a field has been set.
+func (o *ShadowPermissionSpec) HasReads() bool {
+	if o != nil && !IsNil(o.Reads) {
+		return true
+	}
+
+	return false
+}
+
+// SetReads gets a reference to the given []string and assigns it to the Reads field.
+func (o *ShadowPermissionSpec) SetReads(v []string) {
+	o.Reads = v
 }
 
 // GetItems returns the Items field value
@@ -168,6 +237,12 @@ func (o ShadowPermissionSpec) MarshalJSON() ([]byte, error) {
 func (o ShadowPermissionSpec) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["title"] = o.Title
+	if !IsNil(o.Summary) {
+		toSerialize["summary"] = o.Summary
+	}
+	if !IsNil(o.Reads) {
+		toSerialize["reads"] = o.Reads
+	}
 	toSerialize["items"] = o.Items
 	if !IsNil(o.Policy) {
 		toSerialize["policy"] = o.Policy

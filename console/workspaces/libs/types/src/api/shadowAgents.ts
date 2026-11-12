@@ -71,6 +71,14 @@ export interface ShadowEndpointSpec {
   default: string;
   placeholders: string[];
   option?: string;
+  /** For an endpoint with one placeholder: the list field whose items fill it (e.g. "regions"). */
+  fillFrom?: string;
+  /** Items of fillFrom the endpoint is not used for. */
+  fillExclude?: string[];
+  /** Fixed values that fill the placeholder, instead of fillFrom. */
+  fillValues?: string[];
+  /** Kept behind the "Advanced configuration" button. */
+  advanced?: boolean;
 }
 
 export interface ShadowFieldSpec {
@@ -86,6 +94,8 @@ export interface ShadowFieldSpec {
   recommended?: boolean;
   /** A heading the field is shown under, for example "Services to scan". */
   section?: string;
+  /** An optional setting kept behind the "Advanced configuration" button. */
+  advanced?: boolean;
 }
 
 /** At least one of these fields must hold a credential. */
@@ -105,6 +115,11 @@ export interface ShadowCapabilitySpec {
 
 export interface ShadowPermissionSpec {
   title: string;
+  /** In one or two plain sentences, what Agent Manager does with this credential or source. */
+  summary?: string;
+  /** What Agent Manager reads with it. */
+  reads?: string[];
+  /** How to create it and the permissions it needs. */
   items: string[];
   policy?: string;
   note?: string;

@@ -148,20 +148,6 @@ var providerCapabilities = map[string][]CapabilitySpec{
 			Description: "After you revoke a direct key, the next scan checks that the key is inactive, archived or expired.",
 			Needs:       []string{FieldAPIKey},
 		},
-		{
-			Key: "anthropic.aws", Title: "Claude Platform on AWS",
-			Description: "Workspaces, usage and cost, Managed Agents, sessions and (with deep inspection) batches in each " +
-				"AWS region you list.",
-			Signals: []string{SigAnthropicPlainUsage, SigAnthropicManagedAgent, SigAnthropicManagedAgentUsage},
-			Needs:   []string{OptCloudVariants, "regions", "accessKeyId", "secretAccessKey"},
-		},
-		{
-			Key: "anthropic.gcp", Title: "Claude Models on Google Cloud",
-			Description: "Usage and cost analytics for the Google Cloud project, and Managed Agents, sessions and batches " +
-				"in the workspaces you list.",
-			Signals: []string{SigAnthropicPlainUsage, SigAnthropicManagedAgent},
-			Needs:   []string{OptCloudVariants, "gcpProjectId", "serviceAccountJson"},
-		},
 	},
 	models.ShadowProviderFoundry: {
 		{

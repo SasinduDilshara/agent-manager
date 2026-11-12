@@ -221,7 +221,7 @@ func runtimeBase(conn sa.Connection, location string) (string, error) {
 	if isMultiRegion(location) {
 		key = sa.EPGoogleAIPlatformRep
 	}
-	return sa.Expand(sa.EndpointOf(conn, key), map[string]string{"location": location})
+	return sa.ValueEndpoint(conn, key, "location", location)
 }
 
 func baseURL(conn sa.Connection, key string) (string, error) {

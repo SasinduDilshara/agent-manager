@@ -64,9 +64,6 @@ const (
 	callEvents       = "GET /v1/sessions/{session_id}/events"
 	callBatches      = "GET /v1/messages/batches"
 	callBatchResults = "GET /v1/messages/batches/{id}/results"
-
-	prefixAWS = "Claude Platform on AWS: "
-	prefixGCP = "Claude Models on Google Cloud: "
 )
 
 // Bounds.
@@ -168,10 +165,6 @@ type scan struct {
 func (c *Connector) Scan(ctx context.Context, conn sa.Connection, w sa.Window) *sa.Result {
 	s := c.newScan(conn, w)
 	s.firstParty(ctx)
-	if conn.Config.IncludeCloudVariants {
-		s.aws(ctx)
-		s.gcp(ctx)
-	}
 	res := s.result()
 	c.logger.Info("Anthropic shadow agent scan finished",
 		"connectionId", conn.ID.String(), "findings", len(res.Findings), "keys", len(res.Keys),
@@ -202,7 +195,7 @@ func (s *scan) firstPartyPlatform() (*platform, error) {
 		return nil, err
 	}
 	p := &platform{
-		kind: platformFirstParty, base: base, wsHeader: true,
+		base:             base,
 		analyticsGroupBy: []string{"api_key_id", "model", "product", "agent_id"},
 	}
 	adminKey := strings.TrimSpace(s.conn.Secret.APIKey)
@@ -350,7 +343,6 @@ func (s *scan) keyFinding(p *platform, id string) *sa.Finding {
 	if f.DisplayName == "" {
 		f.DisplayName = id
 		f.Scope = p.orgScope()
-		p.attrs(f)
 		f.AddKeyID(id)
 	}
 	return f
@@ -363,7 +355,6 @@ func (s *scan) agentFinding(p *platform, id string) *sa.Finding {
 	if f.DisplayName == "" {
 		f.DisplayName = id
 		f.Scope = p.orgScope()
-		p.attrs(f)
 	}
 	return f
 }

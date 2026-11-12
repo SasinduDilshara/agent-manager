@@ -194,14 +194,6 @@ type ShadowConnectionConfig struct {
 	// and the us/eu multi-region Agent Runtime locations.
 	IncludeGlobalAndMultiRegion bool `json:"includeGlobalAndMultiRegion,omitempty"`
 
-	// Anthropic: also scan Claude Platform on AWS and Claude Models on Google
-	// Cloud (Anthropic managed). The AWS variant uses Regions, AccessKeyID,
-	// RoleARN and ExternalID above; the Google variant uses GCPProjectID and
-	// the service account key in the secret.
-	IncludeCloudVariants bool     `json:"includeCloudVariants,omitempty"`
-	AWSWorkspaceIDs      []string `json:"awsWorkspaceIds,omitempty"`
-	GCPProjectID         string   `json:"gcpProjectId,omitempty"`
-	GCPWorkspaceIDs      []string `json:"gcpWorkspaceIds,omitempty"`
 	// OpenAI project IDs / Anthropic workspace IDs that have a scoped key in
 	// the secret (the keys themselves are in the secret).
 	ScopedKeyIDs []string `json:"scopedKeyIds,omitempty"`

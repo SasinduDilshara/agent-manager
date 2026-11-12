@@ -238,7 +238,7 @@ export function OverviewPanel({
           <StatTile
             label="Agents"
             value={formatCount(v.agent)}
-            hint="Score at or above the agent threshold"
+            hint="Confidence score at or above the agent threshold"
           />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
@@ -316,43 +316,64 @@ export function OverviewPanel({
       {scoring && providers.data && (
         <Accordion variant="outlined" disableGutters>
           <AccordionSummary expandIcon={<ChevronDown size={18} />}>
-            <Typography variant="subtitle1">How the score works</Typography>
+            <Typography variant="subtitle1">How the confidence score works</Typography>
           </AccordionSummary>
           <AccordionDetails>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Each finding adds the weight of the signals the provider APIs show, once per kind of
-              evidence, up to {scoring.maxScore}. An agent scores {scoring.agentThreshold} or more
-              with at least one definitive or high signal; a possible agent scores{" "}
-              {scoring.possibleAgentThreshold} to {scoring.agentThreshold - 1} with a high signal;
-              anything else is an LLM consumer. Prompts, completions and tool payloads are never
-              stored.
+              A finding&apos;s confidence score adds the weight of the signals the provider APIs
+              show, once per kind of evidence, up to {scoring.maxScore}. An agent object the
+              provider itself lists is definitive and scores {scoring.maxScore} on its own. An agent
+              scores {scoring.agentThreshold} or more with at least one definitive or high signal; a
+              possible agent scores {scoring.possibleAgentThreshold} to {scoring.agentThreshold - 1}{" "}
+              with a high signal; anything else is an LLM consumer. Prompts, completions and tool
+              payloads are never stored. Open a connection type to see its signals.
             </Typography>
-            <Box sx={{ overflowX: "auto" }}>
-              <ListingTable>
-                <ListingTable.Head>
-                  <ListingTable.Row>
-                    <ListingTable.Cell>Provider</ListingTable.Cell>
-                    <ListingTable.Cell>Signal</ListingTable.Cell>
-                    <ListingTable.Cell>Weight</ListingTable.Cell>
-                    <ListingTable.Cell>Exact condition</ListingTable.Cell>
-                  </ListingTable.Row>
-                </ListingTable.Head>
-                <ListingTable.Body>
-                  {providers.data.signals.map((d) => (
-                    <ListingTable.Row key={d.code}>
-                      <ListingTable.Cell>{providerLabel(d.provider)}</ListingTable.Cell>
-                      <ListingTable.Cell>{d.name}</ListingTable.Cell>
-                      <ListingTable.Cell>{d.weight}</ListingTable.Cell>
-                      <ListingTable.Cell>
-                        <Typography variant="caption" color="text.secondary">
-                          {d.condition}
-                        </Typography>
-                      </ListingTable.Cell>
-                    </ListingTable.Row>
-                  ))}
-                </ListingTable.Body>
-              </ListingTable>
-            </Box>
+            <Stack spacing={1}>
+              {providers.data.providers
+                .map((p) => ({
+                  p,
+                  signals: providers.data?.signals.filter((d) => d.provider === p.provider) ?? [],
+                }))
+                .filter((x) => x.signals.length > 0)
+                .map(({ p, signals }) => (
+                  <Accordion key={p.provider} variant="outlined" disableGutters>
+                    <AccordionSummary expandIcon={<ChevronDown size={16} />}>
+                      <Typography variant="body2" fontWeight={500}>
+                        {p.displayName}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>
+                        · {signals.length} {signals.length === 1 ? "signal" : "signals"}
+                      </Typography>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      <Box sx={{ overflowX: "auto" }}>
+                        <ListingTable>
+                          <ListingTable.Head>
+                            <ListingTable.Row>
+                              <ListingTable.Cell>Signal</ListingTable.Cell>
+                              <ListingTable.Cell>Weight</ListingTable.Cell>
+                              <ListingTable.Cell>Exact condition</ListingTable.Cell>
+                            </ListingTable.Row>
+                          </ListingTable.Head>
+                          <ListingTable.Body>
+                            {signals.map((d) => (
+                              <ListingTable.Row key={d.code}>
+                                <ListingTable.Cell>{d.name}</ListingTable.Cell>
+                                <ListingTable.Cell>{d.weight}</ListingTable.Cell>
+                                <ListingTable.Cell>
+                                  <Typography variant="caption" color="text.secondary">
+                                    {d.condition}
+                                  </Typography>
+                                </ListingTable.Cell>
+                              </ListingTable.Row>
+                            ))}
+                          </ListingTable.Body>
+                        </ListingTable>
+                      </Box>
+                    </AccordionDetails>
+                  </Accordion>
+                ))}
+            </Stack>
           </AccordionDetails>
         </Accordion>
       )}

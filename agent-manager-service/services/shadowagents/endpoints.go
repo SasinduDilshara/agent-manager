@@ -108,6 +108,52 @@ func EndpointOf(conn Connection, key string) string {
 	return DefaultEndpoints(conn.Provider)[key]
 }
 
+// Per-value endpoints. An endpoint with one placeholder ({region},
+// {location}) is used once per value the connection scans; the user can
+// replace the URL of one value, stored as "<endpoint key>@<value>".
+const valueSep = "@"
+
+// placeValueRE bounds a placeholder value (a region or location code).
+var placeValueRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
+// awsRegionRE matches an AWS region code such as us-east-1 or us-gov-west-1.
+var awsRegionRE = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
+
+// ValueOverrideKey is the endpoints-map key of one value's URL.
+func ValueOverrideKey(key, value string) string { return key + valueSep + value }
+
+// SplitValueKey splits an endpoints-map key "<key>@<value>"; ok is false for
+// a plain endpoint key.
+func SplitValueKey(k string) (key, value string, ok bool) {
+	key, value, ok = strings.Cut(k, valueSep)
+	return key, value, ok && key != "" && value != ""
+}
+
+// ValidRegion reports whether s is an AWS region code.
+func ValidRegion(s string) bool { return awsRegionRE.MatchString(s) }
+
+// ValidPlaceValue reports whether s can fill an endpoint placeholder.
+func ValidPlaceValue(s string) bool { return placeValueRE.MatchString(s) }
+
+// PerValue reports whether the endpoint is used once per value.
+func (e EndpointSpec) PerValue() bool {
+	return len(e.Placeholders) == 1 && (e.FillFrom != "" || len(e.FillValues) > 0)
+}
+
+// ValueEndpoint returns an endpoint's URL for one value of its placeholder:
+// the URL the user set for that value, or the template filled in.
+func ValueEndpoint(conn Connection, key, placeholder, value string) (string, error) {
+	if v := strings.TrimSpace(conn.Config.Endpoints[ValueOverrideKey(key, value)]); v != "" {
+		return strings.TrimRight(v, "/"), nil
+	}
+	return Expand(EndpointOf(conn, key), map[string]string{placeholder: value})
+}
+
+// RegionEndpoint is ValueEndpoint for a {region} endpoint.
+func RegionEndpoint(conn Connection, key, region string) (string, error) {
+	return ValueEndpoint(conn, key, "region", region)
+}
+
 // MustExpand is Expand for templates without placeholders, or with every
 // placeholder given; it returns "" when the template cannot be expanded.
 func MustExpand(tmpl string, vars map[string]string) string {

@@ -113,24 +113,11 @@ type costRow struct {
 
 // analyticGroup holds the grouping dimensions the connector asks for.
 type analyticGroup struct {
-	APIKeyID *string        `json:"api_key_id"`
-	AgentID  *string        `json:"agent_id"`
-	Model    *string        `json:"model"`
-	Product  *string        `json:"product"`
-	CostType *string        `json:"cost_type"`
-	Actor    *analyticActor `json:"actor"`
-}
-
-// analyticActor is the actor union; only federated actors (cloud
-// principals on the AWS and Google variants) are used, as owner hints.
-type analyticActor struct {
-	Type     string `json:"type"`
-	Subject  string `json:"subject"`
-	Provider *struct {
-		Type          string `json:"type"`
-		AccountID     string `json:"account_id"`
-		ProjectNumber string `json:"project_number"`
-	} `json:"provider"`
+	APIKeyID *string `json:"api_key_id"`
+	AgentID  *string `json:"agent_id"`
+	Model    *string `json:"model"`
+	Product  *string `json:"product"`
+	CostType *string `json:"cost_type"`
 }
 
 // agent is a BetaManagedAgentsAgent, without system and the custom tools'

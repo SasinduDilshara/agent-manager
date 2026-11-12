@@ -24354,6 +24354,24 @@ components:
         option:
           type: string
           description: The checkbox that enables this endpoint, if any.
+        fillFrom:
+          type: string
+          description: >-
+            For an endpoint with one placeholder: the list field whose items fill it (e.g. regions). The URL of one
+            value can be replaced; it is stored under the endpoint key "<key>@<value>".
+        fillExclude:
+          type: array
+          items:
+            type: string
+          description: Items of fillFrom the endpoint is not used for.
+        fillValues:
+          type: array
+          items:
+            type: string
+          description: Fixed values that fill the placeholder, instead of fillFrom.
+        advanced:
+          type: boolean
+          description: An endpoint the console keeps behind the "Advanced configuration" button.
 
     ShadowFieldSpec:
       type: object
@@ -24374,6 +24392,9 @@ components:
         section:
           type: string
           description: A heading the field is shown under, for example "Services to scan".
+        advanced:
+          type: boolean
+          description: An optional setting the console keeps behind an "Advanced configuration" button.
         placeholder:
           type: string
         help:
@@ -24392,8 +24413,17 @@ components:
       properties:
         title:
           type: string
+        summary:
+          type: string
+          description: In one or two plain sentences, what Agent Manager does with this credential or source.
+        reads:
+          type: array
+          description: What Agent Manager reads with it.
+          items:
+            type: string
         items:
           type: array
+          description: How to create it and the permissions it needs.
           items:
             type: string
         policy:

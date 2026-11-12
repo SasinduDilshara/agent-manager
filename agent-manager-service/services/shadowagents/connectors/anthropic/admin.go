@@ -126,7 +126,6 @@ func (s *scan) addKey(p *platform, k apiKey) {
 	if ws != "" {
 		created.Attributes["workspace"] = ws
 	}
-	p.attrs(created)
 }
 
 // keyOwner names the key's creator (created_by) or, when the creator is not

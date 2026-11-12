@@ -54,7 +54,7 @@ func (c *Connector) Test(ctx context.Context, conn sa.Connection) models.ShadowC
 		if keys.Outcome == models.ShadowCallAuthFailed {
 			break
 		}
-		checks = append(checks, s.analyticsProbes(ctx, p, "")...)
+		checks = append(checks, s.analyticsProbes(ctx, p)...)
 	}
 	wsChecks, wsChecksOK := 0, 0
 	if p != nil {
@@ -72,15 +72,11 @@ func (c *Connector) Test(ctx context.Context, conn sa.Connection) models.ShadowC
 	if strings.TrimSpace(conn.Secret.APIKey) == "" && err == nil {
 		ok = wsChecks > 0 && wsChecksOK == wsChecks
 	}
-	if conn.Config.IncludeCloudVariants {
-		checks = append(checks, s.awsProbes(ctx)...)
-		checks = append(checks, s.gcpProbes(ctx)...)
-	}
 	return models.ShadowConnectionTestInfo{OK: ok, Checks: checks}
 }
 
 // analyticsProbes checks the usage and cost analytics over the last full day.
-func (s *scan) analyticsProbes(ctx context.Context, p *platform, label string) []models.ShadowConnectionCheck {
+func (s *scan) analyticsProbes(ctx context.Context, p *platform) []models.ShadowConnectionCheck {
 	day := sa.DayOf(s.now)
 	spans, _, _ := analyticsSpans(sa.Window{Start: day.AddDate(0, 0, -1), End: s.now}, s.now)
 	if len(spans) == 0 {
@@ -89,14 +85,14 @@ func (s *scan) analyticsProbes(ctx context.Context, p *platform, label string) [
 	hdr := http.Header{headerBeta: {betaAnalytics}}
 	q := analyticsQuery(spans[0], []string{p.analyticsGroupBy[0]})
 	q.Set("limit", "1")
-	usage := s.probe(ctx, p.orgAPI, label+"Usage analytics", p.orgURL("/v1/organizations/analytics/usage"), q, hdr,
+	usage := s.probe(ctx, p.orgAPI, "Usage analytics", p.orgURL("/v1/organizations/analytics/usage"), q, hdr,
 		signalNames(sa.SigAnthropicPlainUsage, sa.SigAnthropicManagedAgentUsage, sa.SigAnthropicServerWebSearch))
 	if usage.Outcome == models.ShadowCallAuthFailed {
 		return []models.ShadowConnectionCheck{usage}
 	}
 	cq := analyticsQuery(spans[0], []string{"cost_type"})
 	cq.Set("limit", "1")
-	cost := s.probe(ctx, p.orgAPI, label+"Cost analytics", p.orgURL("/v1/organizations/analytics/cost"), cq, hdr,
+	cost := s.probe(ctx, p.orgAPI, "Cost analytics", p.orgURL("/v1/organizations/analytics/cost"), cq, hdr,
 		signalNames(sa.SigAnthropicServerCodeExec))
 	return []models.ShadowConnectionCheck{usage, cost}
 }
@@ -121,55 +117,6 @@ func (s *scan) workspaceProbes(ctx context.Context, p *platform, api *sa.API, ws
 	default:
 		out = append(out, s.probe(ctx, api, batchName, p.wsURL(ws, "/v1/messages/batches"), url.Values{"limit": {"1"}},
 			p.wsHeaders(ws, ""), batchUnlocks))
-	}
-	return out
-}
-
-func (s *scan) awsProbes(ctx context.Context) []models.ShadowConnectionCheck {
-	cfg := s.conn.Config
-	regions := cleanList(cfg.Regions)
-	if len(regions) == 0 || strings.TrimSpace(cfg.AccessKeyID) == "" || strings.TrimSpace(s.conn.Secret.SecretAccessKey) == "" {
-		return []models.ShadowConnectionCheck{{Name: "Claude Platform on AWS", Outcome: models.ShadowCallSkipped, Message: "not configured"}}
-	}
-	configured := cleanList(cfg.AWSWorkspaceIDs)
-	var out []models.ShadowConnectionCheck
-	for _, region := range regions {
-		label := "Claude Platform on AWS (" + region + "): "
-		p, err := s.awsPlatform(region)
-		if err != nil {
-			out = append(out, failedCheck(label+"workspaces", err, nil))
-			continue
-		}
-		if len(configured) == 0 {
-			wsCheck := s.probe(ctx, p.orgAPI, label+"List workspaces", p.orgURL("/v1/organizations/workspaces"),
-				url.Values{"limit": {"1"}}, nil, signalNames(sa.SigAnthropicManagedAgent))
-			out = append(out, wsCheck)
-			if wsCheck.Outcome == models.ShadowCallAuthFailed {
-				continue
-			}
-		}
-		out = append(out, s.analyticsProbes(ctx, p, label)...)
-		if len(configured) > 0 {
-			out = append(out, s.workspaceProbes(ctx, p, p.orgAPI, configured[0], label+"Workspace "+configured[0]+": ")...)
-		}
-	}
-	return out
-}
-
-func (s *scan) gcpProbes(ctx context.Context) []models.ShadowConnectionCheck {
-	cfg := s.conn.Config
-	project := strings.TrimSpace(cfg.GCPProjectID)
-	if project == "" || strings.TrimSpace(s.conn.Secret.ServiceAccountJSON) == "" {
-		return []models.ShadowConnectionCheck{{Name: "Claude Models on Google Cloud", Outcome: models.ShadowCallSkipped, Message: "not configured"}}
-	}
-	label := "Claude Models on Google Cloud (" + project + "): "
-	p, err := s.gcpPlatform(ctx, project)
-	if err != nil {
-		return []models.ShadowConnectionCheck{failedCheck(label+"Usage analytics", err, nil)}
-	}
-	out := s.analyticsProbes(ctx, p, label)
-	for _, ws := range cleanList(cfg.GCPWorkspaceIDs) {
-		out = append(out, s.workspaceProbes(ctx, p, p.orgAPI, ws, label+"Workspace "+ws+": ")...)
 	}
 	return out
 }

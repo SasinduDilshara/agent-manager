@@ -401,7 +401,7 @@ export function OnboardFinding({
   return (
     <PageLayout
       title={`Onboard ${f.displayName}`}
-      description={`${providerLabel(f.provider)} · ${kindLabel(f.kind, f.provider)} · score ${f.score}`}
+      description={`${providerLabel(f.provider)} · ${kindLabel(f.kind, f.provider)} · confidence score ${f.score}`}
       disableIcon
       {...back}
     >

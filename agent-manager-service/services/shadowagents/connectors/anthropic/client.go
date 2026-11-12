@@ -27,109 +27,56 @@ import (
 	sa "github.com/wso2/agent-manager/agent-manager-service/services/shadowagents"
 )
 
-// Platforms the connector scans: the first-party Claude API and the two
-// Anthropic-operated cloud variants (anthropic_cloud_variants.md §0).
-const (
-	platformFirstParty = "first_party"
-	platformAWS        = "aws"
-	platformGCP        = "gcp"
-)
-
-// platform is one Anthropic organization reachable through one base URL and
-// one credential: the first-party API, one AWS region of Claude Platform on
-// AWS, or one Google Cloud project of Claude Models on Google Cloud.
+// platform is the Anthropic organization the connection reaches: the
+// first-party Claude API with the Admin API key for the organization routes
+// and a workspace key for each workspace's routes.
 type platform struct {
-	kind string
-	// prefix is put before every call name, so the calls of a variant are
-	// told apart from the first-party ones ("" for first party).
-	prefix string
-	// region (AWS) or project (Google) the platform is.
-	region  string
-	project string
-	// orgAPI calls the organization-level routes (/v1/organizations/*); on
-	// the variants it also calls the workspace routes.
+	// orgAPI calls the organization-level routes (/v1/organizations/*).
 	orgAPI *sa.API
 	// base is the expanded base URL.
 	base string
 	// wsAPI returns the client for a workspace's routes, or false when the
 	// connection has no credential for it.
 	wsAPI func(ws string) (*sa.API, bool)
-	// wsHeader says whether workspace routes carry anthropic-workspace-id
-	// (first party and AWS: yes; Google: the workspace is in the URL and the
-	// header is forbidden).
-	wsHeader bool
 	// analyticsGroupBy are the group_by[] dimensions of the analytics calls.
 	analyticsGroupBy []string
 }
 
-// call returns the call name a result records, e.g. "GET /v1/agents" or
-// "Claude Platform on AWS: GET /v1/agents".
+// call returns the call name a result records, e.g. "GET /v1/agents".
 func (p *platform) call(name string) string {
-	return p.prefix + name
+	return name
 }
 
-// orgURL is the URL of an organization-level route. On Google it is
-// {base}/v1/projects/{project}/locations/global/claudeOrganization/invoke
-// + path (anthropic_cloud_variants.md §2.0.2).
+// orgURL is the URL of an organization-level route.
 func (p *platform) orgURL(path string) string {
-	if p.kind == platformGCP {
-		return fmt.Sprintf("%s/v1/projects/%s/locations/global/claudeOrganization/invoke%s",
-			p.base, url.PathEscape(p.project), path)
-	}
 	return p.base + path
 }
 
-// wsURL is the URL of a workspace route. On Google the workspace is part of
-// the URL: {base}/v1/projects/{project}/locations/global/workspaces/{ws}/invoke.
-func (p *platform) wsURL(ws, path string) string {
-	if p.kind == platformGCP {
-		return fmt.Sprintf("%s/v1/projects/%s/locations/global/workspaces/%s/invoke%s",
-			p.base, url.PathEscape(p.project), url.PathEscape(ws), path)
-	}
+// wsURL is the URL of a workspace route; the workspace is named in the
+// anthropic-workspace-id header (wsHeaders).
+func (p *platform) wsURL(_, path string) string {
 	return p.base + path
 }
 
 // wsHeaders returns the headers of a workspace route: the beta header (when
-// given) and anthropic-workspace-id where the platform takes it.
+// given) and anthropic-workspace-id.
 func (p *platform) wsHeaders(ws, beta string) http.Header {
 	h := http.Header{}
 	if beta != "" {
 		h.Set(headerBeta, beta)
 	}
-	if p.wsHeader {
-		h.Set(headerWorkspace, ws)
-	}
+	h.Set(headerWorkspace, ws)
 	return h
 }
 
 // orgScope is the Finding.Scope of an organization-level finding.
 func (p *platform) orgScope() string {
-	switch p.kind {
-	case platformAWS:
-		return "aws:" + p.region
-	case platformGCP:
-		return "gcp:" + p.project
-	default:
-		return "organization"
-	}
+	return "organization"
 }
 
 // wsScope is the Finding.Scope of a workspace's finding.
 func (p *platform) wsScope(ws string) string {
-	if p.kind == platformFirstParty {
-		return "workspace:" + ws
-	}
-	return p.orgScope() + ":workspace:" + ws
-}
-
-// attrs are the attributes that say which variant a finding comes from.
-func (p *platform) attrs(f *sa.Finding) {
-	switch p.kind {
-	case platformAWS:
-		f.Attributes["region"] = p.region
-	case platformGCP:
-		f.Attributes["project"] = p.project
-	}
+	return "workspace:" + ws
 }
 
 // pageFunc receives one page of items; returning false stops the listing.

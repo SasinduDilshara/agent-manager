@@ -333,7 +333,7 @@ export function FindingDetail({
             <Grid container spacing={2} alignItems="center">
               <Grid size={{ xs: 12, md: 4 }}>
                 <Typography variant="caption" color="text.secondary">
-                  Score
+                  Confidence score
                 </Typography>
                 <ScoreBar score={f.score} />
               </Grid>
