@@ -21,6 +21,9 @@ class Config:
     use_llm_provider: bool
     llm_provider_url: str
     llm_provider_key: str
+    llm_provider_api: str
+    bedrock_model_id: str
+    bedrock_region: str
     use_mcp: bool
     mcp_url: str
     mcp_api_key: str
@@ -52,6 +55,14 @@ class Config:
         use_llm_provider = _env("USE_LLM_PROVIDER", "false").lower() == "true"
         llm_provider_url = _env("LLM_PROVIDER_URL", "")
         llm_provider_key = _env("LLM_PROVIDER_KEY", "")
+
+        # Which API the attached LLM provider speaks: "openai" (Chat Completions)
+        # or "bedrock" (AWS Bedrock Converse).
+        llm_provider_api = _env("LLM_PROVIDER_API", "openai").lower()
+        if llm_provider_api not in ("openai", "bedrock"):
+            raise RuntimeError(
+                f"LLM_PROVIDER_API must be openai or bedrock, got: {llm_provider_api!r}"
+            )
 
         if use_llm_provider:
             if not llm_provider_url:
@@ -106,6 +117,9 @@ class Config:
             use_llm_provider=use_llm_provider,
             llm_provider_url=llm_provider_url,
             llm_provider_key=llm_provider_key,
+            llm_provider_api=llm_provider_api,
+            bedrock_model_id=_env("BEDROCK_MODEL_ID", "us.anthropic.claude-opus-5-5"),
+            bedrock_region=_env("AWS_REGION", "us-east-1"),
             use_mcp=use_mcp,
             mcp_url=mcp_url,
             mcp_api_key=mcp_api_key,

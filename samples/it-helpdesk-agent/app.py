@@ -83,8 +83,11 @@ async def chat(req: ChatRequest) -> ChatResponse:
         final = "(no response)"
     if isinstance(final, list):
         final = "\n".join(
-            part.get("text", "") if isinstance(part, dict) else str(part) for part in final
-        )
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in final
+            # Skip reasoning blocks (Bedrock/Claude); keep only the answer text.
+            if not isinstance(part, dict) or part.get("type", "text") == "text"
+        ).strip()
     return ChatResponse(
         response=str(final),
         session_id=session_id,

@@ -129,8 +129,45 @@ async def load_mcp_tools(cfg: Config) -> list[Any]:
     return list(await client.get_tools())
 
 
+def _bedrock_llm(cfg: Config) -> Any:
+    """Chat model for an AM LLM provider that fronts AWS Bedrock (Converse API).
+
+    The gateway holds the upstream Bedrock credential, so the request is sent
+    unsigned with only the platform-issued key in the ``API-Key`` header.
+    No sampling parameters are sent: newer Claude models reject them.
+    """
+    import boto3
+    from botocore import UNSIGNED
+    from botocore.config import Config as BotoConfig
+    from langchain_aws import ChatBedrockConverse
+
+    client = boto3.client(
+        "bedrock-runtime",
+        region_name=cfg.bedrock_region,
+        endpoint_url=cfg.llm_provider_url.rstrip("/"),
+        config=BotoConfig(
+            signature_version=UNSIGNED,
+            read_timeout=300,
+            retries={"max_attempts": 2, "mode": "standard"},
+        ),
+    )
+
+    def _add_api_key(request: Any, **_: Any) -> None:
+        request.headers["API-Key"] = cfg.llm_provider_key
+
+    client.meta.events.register("before-send.bedrock-runtime.*", _add_api_key)
+    return ChatBedrockConverse(
+        model=cfg.bedrock_model_id,
+        region_name=cfg.bedrock_region,
+        client=client,
+        max_tokens=4096,
+    )
+
+
 def build_agent(cfg: Config, mcp_tools: list[Any] | None = None) -> Any:
-    if cfg.use_llm_provider:
+    if cfg.use_llm_provider and cfg.llm_provider_api == "bedrock":
+        llm = _bedrock_llm(cfg)
+    elif cfg.use_llm_provider:
         llm = ChatOpenAI(
             model=MODEL,
             temperature=0,

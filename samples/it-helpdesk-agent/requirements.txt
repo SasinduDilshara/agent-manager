@@ -4,6 +4,9 @@ langchain-core>=1.7.3
 langchain-openai>=1.7.3
 langgraph>=1.2.19
 
+# Only needed when LLM_PROVIDER_API=bedrock (AM LLM provider fronting AWS Bedrock).
+langchain-aws>=1.9.3
+
 # Only needed when USE_MCP=true. Supplies MultiServerMCPClient, which turns the
 # tools an MCP server advertises into LangChain tools.
 langchain-mcp-adapters>=0.3.2
